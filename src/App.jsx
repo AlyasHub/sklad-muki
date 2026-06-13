@@ -55,6 +55,15 @@ function parseCoordsFromText(text) {
   return null;
 }
 
+async function resolveGisCoords(link) {
+  const res = await fetch(`/api/resolve-gis?url=${encodeURIComponent(link)}`);
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.error || "Не удалось определить координаты");
+  }
+  return res.json();
+}
+
 function distKm(a, b) {
   const R = 6371, dLat = (b.lat - a.lat) * Math.PI / 180, dLon = (b.lon - a.lon) * Math.PI / 180;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
@@ -244,7 +253,7 @@ function CalendarTab({ orders, drivers, clients }) {
         const points = dayOrders.map(o => {
           const client = clients.find(c => c.id === o.clientId);
           if (!client) return null;
-          const coords = parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
+          const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
           if (!coords) return null;
           return { ...coords, name: o.clientName, delivery_time: client.delivery_time };
         }).filter(Boolean);
@@ -510,11 +519,24 @@ function ClientsTab({ clients, reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [resolveErr, setResolveErr] = useState("");
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
 
-  const openEdit = c => { setEditId(c.id); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", prices: c.prices || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", gis_link: "", coords_manual: "", delivery_time: "", prices: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", prices: c.prices || [] }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", prices: [] }); setShowAdd(true); };
+
+  const handleResolve = async () => {
+    setResolving(true); setResolveErr("");
+    try {
+      // сперва пробуем вытащить прямо из ссылки, иначе спрашиваем сервер
+      const direct = parseCoordsFromGisLink(form.gis_link) || parseCoordsFromText(form.coords_manual);
+      const coords = direct || await resolveGisCoords(form.gis_link);
+      setForm(f => ({ ...f, coords }));
+    } catch (e) { setResolveErr(e.message); }
+    setResolving(false);
+  };
   const addPrice = () => {
     const p = { ...pf, bag_kg: Number(pf.bag_kg), price_per_kg: Number(pf.price_per_kg) };
     setForm({ ...form, prices: [...form.prices.filter(x => !(x.brand === p.brand && x.grade === p.grade && x.bag_kg === p.bag_kg)), p] });
@@ -543,13 +565,17 @@ function ClientsTab({ clients, reload }) {
               <Sel label="Бренд по умолчанию" value={form.default_brand} onChange={e => setForm({ ...form, default_brand: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...BRANDS.map(b => ({ value: b, label: b }))]} />
             </div>
             <Sel label="Предпочтительное время доставки" value={form.delivery_time} onChange={e => setForm({ ...form, delivery_time: e.target.value })} options={[{ value: "", label: "— не указано —" }, ...DELIVERY_TIMES.map(t => ({ value: t, label: t }))]} />
-            <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value })} placeholder="https://2gis.kz/astana/geo/..." />
-            {form.gis_link && !parseCoordsFromGisLink(form.gis_link) && (
-              <Inp label="Координаты вручную (широта, долгота)" value={form.coords_manual} onChange={e => setForm({ ...form, coords_manual: e.target.value })} placeholder="51.1234, 71.4567" />
-            )}
-            {(parseCoordsFromGisLink(form.gis_link) || parseCoordsFromText(form.coords_manual)) && (
-              <div className="text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2">✓ Координаты найдены — маршрут будет работать</div>
-            )}
+            <div>
+              <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value, coords: null })} placeholder="https://2gis.kz/astana/geo/..." />
+              <div className="flex items-center gap-2 mt-2">
+                <Btn size="sm" variant="secondary" onClick={handleResolve} disabled={resolving || !form.gis_link}>{resolving ? "Определяю..." : "📍 Определить координаты"}</Btn>
+                {form.coords && <span className="text-xs text-emerald-600">✓ {form.coords.lat.toFixed(5)}, {form.coords.lon.toFixed(5)}</span>}
+              </div>
+              {resolveErr && <p className="text-xs text-red-500 mt-1">{resolveErr}. Введи координаты вручную ниже.</p>}
+              {resolveErr && (
+                <Inp label="Координаты вручную (широта, долгота)" value={form.coords_manual} onChange={e => setForm({ ...form, coords_manual: e.target.value, coords: parseCoordsFromText(e.target.value) })} placeholder="51.1234, 71.4567" />
+              )}
+            </div>
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">Цены по сортам и фасовкам</p>
               <div className="grid grid-cols-2 gap-2 mb-2">
