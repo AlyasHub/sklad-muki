@@ -405,8 +405,8 @@ function ClientsTab({ clients, reload }) {
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
 
-  const openEdit = c => { setEditId(c.id); setForm({ name: c.name, address: c.address, contact: c.contact || "", prices: c.prices || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setForm({ name: "", address: "", contact: "", prices: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", prices: c.prices || [] }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", prices: [] }); setShowAdd(true); };
   const addPrice = () => {
     const p = { ...pf, bag_kg: Number(pf.bag_kg), price_per_kg: Number(pf.price_per_kg) };
     setForm({ ...form, prices: [...form.prices.filter(x => !(x.brand === p.brand && x.grade === p.grade && x.bag_kg === p.bag_kg)), p] });
@@ -425,9 +425,11 @@ function ClientsTab({ clients, reload }) {
       {showAdd && (
         <Modal title={editId ? "Редактировать" : "Новый клиент"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
-            <Inp label="Название" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="ТОО Мамыр" />
+            <Inp label="Название заведения" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Мамыр" />
+            <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
+            <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
             <Inp label="Адрес доставки" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-            <Inp label="Контакт (WhatsApp)" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
+            <Inp label="WhatsApp" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">Цены по сортам и фасовкам</p>
               <div className="grid grid-cols-2 gap-2 mb-2">
@@ -453,6 +455,8 @@ function ClientsTab({ clients, reload }) {
             <div className="flex items-start justify-between">
               <div>
                 <div className="font-bold text-gray-900">{c.name}</div>
+                {c.org_name && <div className="text-sm text-gray-500">🏢 {c.org_name}</div>}
+                {c.contact_name && <div className="text-sm text-gray-500">👤 {c.contact_name}</div>}
                 {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
                 {c.contact && <div className="text-sm text-gray-500">📱 {c.contact}</div>}
                 {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
