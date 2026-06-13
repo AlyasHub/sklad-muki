@@ -31,8 +31,7 @@ const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
 
-// Координаты склада Best Mill — обновить после получения точных данных
-const WAREHOUSE = { lat: 51.1801, lon: 71.4460 };
+const WAREHOUSE = { lat: 51.17833, lon: 71.460803 };
 
 function parseCoordsFromGisLink(link) {
   if (!link) return null;
