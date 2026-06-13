@@ -577,17 +577,18 @@ export default function App() {
     catch (e) { setError("Ошибка: " + e.message); }
   }, []);
 
-  const reloadAll = useCallback(async () => {
-    setLoading(true); setError("");
+  const reloadAll = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
+    setError("");
     try {
       const [clients, stock, orders, drivers] = await Promise.all(["clients", "stock", "orders", "drivers"].map(dbGetAll));
       setData({ clients, stock, orders, drivers }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) { setError("Нет связи с базой: " + e.message); }
-    setLoading(false);
+    if (showSpinner) setLoading(false);
   }, []);
 
-  useEffect(() => { reloadAll(); }, []);
-  useEffect(() => { const t = setInterval(reloadAll, 30000); return () => clearInterval(t); }, []);
+  useEffect(() => { reloadAll(true); }, []);
+  useEffect(() => { const t = setInterval(() => reloadAll(false), 30000); return () => clearInterval(t); }, []);
 
   const newOrders = data.orders.filter(o => o.status === "новая").length;
 
