@@ -91,26 +91,19 @@ function buildGisRouteUrl(points) {
 }
 
 async function parseOrderWithAI(text, clients) {
-  const clientInfo = clients.map(c =>
-    `- ${c.name}${c.org_name ? ` (${c.org_name})` : ""}: фасовка ${c.default_bag_kg || "не указана"} кг, бренд ${c.default_brand || "не указан"}`
-  ).join("\n");
-  const prompt = `Ты помощник на складе муки. Разбери заявку и верни ТОЛЬКО JSON без markdown.
-Клиенты и их настройки по умолчанию:
-${clientInfo}
-Бренды: ДАРАД, ДАЛА НАН. Сорта: Высший сорт, Первый сорт. Фасовки: 5,10,25,50 кг.
-Заявка: "${text}"
-Правила:
-- Если клиент упомянул только кг — используй его фасовку по умолчанию и раздели кг на фасовку чтобы получить количество мешков
-- Если у клиента есть бренд по умолчанию — используй его
-- Если дата не указана — завтра (${TOMORROW()})
-Верни JSON массив: [{"clientName":"...","brand":"...","grade":"...","bag_kg":25,"bags":40,"date":"YYYY-MM-DD"}]
-Только JSON.`;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
+  // Разбор идёт через нашу серверную функцию /api/parse-order — ключ Anthropic живёт там, не в браузере
+  const res = await fetch("/api/parse-order", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text,
+      tomorrow: TOMORROW(),
+      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand })),
+    }),
   });
-  const data = await res.json();
-  return JSON.parse(data.content.map(b => b.text || "").join("").replace(/```json|```/g, "").trim());
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Не удалось разобрать заявку");
+  return JSON.parse(data.raw);
 }
 
 function Badge({ color, children }) {
