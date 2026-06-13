@@ -29,6 +29,58 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
+const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
+
+// Координаты склада Best Mill — обновить после получения точных данных
+const WAREHOUSE = { lat: 51.1801, lon: 71.4460 };
+
+function parseCoordsFromGisLink(link) {
+  if (!link) return null;
+  // Формат: /geo/ID/lon,lat
+  const m1 = link.match(/\/geo\/[^/]+\/([\d.]+),([\d.]+)/);
+  if (m1) return { lon: parseFloat(m1[1]), lat: parseFloat(m1[2]) };
+  // Формат: ?m=lon,lat или ?m=lon%2Clat
+  const m2 = link.match(/[?&]m=([\d.]+)(?:%2C|,)([\d.]+)/);
+  if (m2) return { lon: parseFloat(m2[1]), lat: parseFloat(m2[2]) };
+  return null;
+}
+
+function parseCoordsFromText(text) {
+  if (!text) return null;
+  const m = text.match(/([\d.]+)[,\s]+([\d.]+)/);
+  if (!m) return null;
+  const a = parseFloat(m[1]), b = parseFloat(m[2]);
+  // lat обычно 40–60, lon обычно 60–90 для Казахстана
+  if (a > 40 && a < 60) return { lat: a, lon: b };
+  if (b > 40 && b < 60) return { lat: b, lon: a };
+  return null;
+}
+
+function distKm(a, b) {
+  const R = 6371, dLat = (b.lat - a.lat) * Math.PI / 180, dLon = (b.lon - a.lon) * Math.PI / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function optimizeRoute(points) {
+  const remaining = [...points];
+  const route = [];
+  let current = WAREHOUSE;
+  while (remaining.length > 0) {
+    let nearest = 0, minDist = Infinity;
+    remaining.forEach((p, i) => { const d = distKm(current, p); if (d < minDist) { minDist = d; nearest = i; } });
+    route.push(remaining[nearest]);
+    current = remaining[nearest];
+    remaining.splice(nearest, 1);
+  }
+  return route;
+}
+
+function buildGisRouteUrl(points) {
+  const all = [WAREHOUSE, ...points];
+  const coords = all.map(p => `${p.lon},${p.lat}`).join("|");
+  return `https://2gis.kz/astana/routeService?type=car&points=${coords}`;
+}
 
 async function parseOrderWithAI(text, clients) {
   const clientInfo = clients.map(c =>
@@ -91,7 +143,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
 
 const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "reports", label: "📊 Отчёты" }];
 
-function CalendarTab({ orders, drivers }) {
+function CalendarTab({ orders, drivers, clients }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
 
@@ -169,6 +221,7 @@ function CalendarTab({ orders, drivers }) {
           <div className="space-y-2">
             {dayOrders.map(o => {
               const driver = drivers.find(d => d.id === o.driverId);
+              const client = clients.find(c => c.id === o.clientId);
               return (
                 <div key={o.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm shadow-sm">
                   <div className="flex items-center justify-between flex-wrap gap-2">
@@ -176,13 +229,61 @@ function CalendarTab({ orders, drivers }) {
                     <Badge color={sc[o.status] || "gray"}>{o.status}</Badge>
                   </div>
                   <div className="text-gray-500 mt-1">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
-                  <div className="text-xs text-gray-400 mt-0.5">{driver ? `🚛 ${driver.name}` : "🚛 водитель не назначен"}</div>
+                  <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                    {driver ? `🚛 ${driver.name}` : "🚛 водитель не назначен"}
+                    {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
+                    {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
+                  </div>
                 </div>
               );
             })}
           </div>
         )}
       </div>
+
+      {dayOrders.length > 0 && (() => {
+        const points = dayOrders.map(o => {
+          const client = clients.find(c => c.id === o.clientId);
+          if (!client) return null;
+          const coords = parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
+          if (!coords) return null;
+          return { ...coords, name: o.clientName, delivery_time: client.delivery_time };
+        }).filter(Boolean);
+
+        if (points.length === 0) return (
+          <div className="bg-gray-50 border border-dashed border-gray-200 rounded-2xl p-4 text-sm text-gray-400 text-center">
+            Добавь координаты клиентам чтобы строить маршрут 🗺️
+          </div>
+        );
+
+        const optimized = optimizeRoute(points);
+        const routeUrl = buildGisRouteUrl(optimized);
+        const totalDist = [WAREHOUSE, ...optimized].reduce((acc, p, i, arr) => i === 0 ? 0 : acc + distKm(arr[i - 1], p), 0);
+
+        return (
+          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="font-bold text-gray-800">🗺️ Маршрут на {selected.split("-").reverse().join(".")}</div>
+                <div className="text-xs text-gray-500">{points.length} точек · ~{Math.round(totalDist)} км</div>
+              </div>
+              <a href={routeUrl} target="_blank" rel="noreferrer"
+                className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all">
+                Открыть в 2ГИС →
+              </a>
+            </div>
+            <div className="space-y-1">
+              {[{ name: "📦 Best Mill (склад)", delivery_time: "" }, ...optimized].map((p, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm">
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0">{i}</span>
+                  <span className="text-gray-700">{p.name}</span>
+                  {p.delivery_time && <span className="text-xs text-blue-600 ml-auto">⏰ {p.delivery_time}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -413,8 +514,8 @@ function ClientsTab({ clients, reload }) {
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
 
-  const openEdit = c => { setEditId(c.id); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", prices: c.prices || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", prices: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", prices: c.prices || [] }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", gis_link: "", coords_manual: "", delivery_time: "", prices: [] }); setShowAdd(true); };
   const addPrice = () => {
     const p = { ...pf, bag_kg: Number(pf.bag_kg), price_per_kg: Number(pf.price_per_kg) };
     setForm({ ...form, prices: [...form.prices.filter(x => !(x.brand === p.brand && x.grade === p.grade && x.bag_kg === p.bag_kg)), p] });
@@ -442,6 +543,14 @@ function ClientsTab({ clients, reload }) {
               <Sel label="Фасовка по умолчанию" value={form.default_bag_kg} onChange={e => setForm({ ...form, default_bag_kg: Number(e.target.value) })} options={[{ value: "", label: "— не указана —" }, ...WEIGHTS.map(w => ({ value: w, label: w + " кг" }))]} />
               <Sel label="Бренд по умолчанию" value={form.default_brand} onChange={e => setForm({ ...form, default_brand: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...BRANDS.map(b => ({ value: b, label: b }))]} />
             </div>
+            <Sel label="Предпочтительное время доставки" value={form.delivery_time} onChange={e => setForm({ ...form, delivery_time: e.target.value })} options={[{ value: "", label: "— не указано —" }, ...DELIVERY_TIMES.map(t => ({ value: t, label: t }))]} />
+            <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value })} placeholder="https://2gis.kz/astana/geo/..." />
+            {form.gis_link && !parseCoordsFromGisLink(form.gis_link) && (
+              <Inp label="Координаты вручную (широта, долгота)" value={form.coords_manual} onChange={e => setForm({ ...form, coords_manual: e.target.value })} placeholder="51.1234, 71.4567" />
+            )}
+            {(parseCoordsFromGisLink(form.gis_link) || parseCoordsFromText(form.coords_manual)) && (
+              <div className="text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2">✓ Координаты найдены — маршрут будет работать</div>
+            )}
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">Цены по сортам и фасовкам</p>
               <div className="grid grid-cols-2 gap-2 mb-2">
@@ -633,7 +742,7 @@ export default function App() {
         {loading ? <Spinner /> : (
           <>
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} />}
             {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
