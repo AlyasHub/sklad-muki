@@ -36,11 +36,12 @@ async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-const ROLES = { director: "Директор", accountant: "Бухгалтер" };
+const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
   director: ["orders", "calendar", "stock", "supply", "clients", "drivers", "reports", "access"],
   accountant: ["calendar", "reports"],
+  driver: ["calendar"],
 };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
@@ -163,9 +164,12 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
 
 const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "supply", label: "🚚 Поставки" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "reports", label: "📊 Отчёты" }, { id: "access", label: "⚙️ Доступ" }];
 
-function CalendarTab({ orders, drivers, clients, reload, canEdit = true }) {
+function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPrices = true, driverFilter = null }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
+
+  // Водитель видит только свои отгрузки
+  const vis = driverFilter != null ? orders.filter(o => o.driverId === driverFilter) : orders;
 
   // Изменение статуса. Если переключаем НА "отгружена" — списываем со склада;
   // если снимаем "отгружена" — возвращаем на склад, чтобы остатки не врали.
@@ -196,7 +200,7 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true }) {
 
   const kgByDate = {};
   const countByDate = {};
-  orders.forEach(o => {
+  vis.forEach(o => {
     const kg = o.bags * o.bag_kg;
     kgByDate[o.date] = (kgByDate[o.date] || 0) + kg;
     countByDate[o.date] = (countByDate[o.date] || 0) + 1;
@@ -210,7 +214,7 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true }) {
   }
 
   const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red" };
-  const dayOrders = orders.filter(o => o.date === selected).sort((a, b) => (a.clientName || "").localeCompare(b.clientName || ""));
+  const dayOrders = vis.filter(o => o.date === selected).sort((a, b) => (a.clientName || "").localeCompare(b.clientName || ""));
   const dayKg = dayOrders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
 
   const prevMonth = () => setCursor(new Date(year, month - 1, 1));
@@ -267,7 +271,7 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true }) {
                     <Badge color={sc[o.status] || "gray"}>{o.status}</Badge>
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
-                  <div className="text-gray-500 mt-1">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
+                  <div className="text-gray-500 mt-1">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{showPrices && o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
@@ -864,21 +868,35 @@ function TrucksTab({ trucks, reload }) {
   );
 }
 
-function UsersTab({ users, reload, currentUser }) {
+function UsersTab({ users, drivers, reload, currentUser }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
-  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant" });
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "" });
 
-  const openNew = () => { setForm({ name: "", username: "", password: "", role: "accountant" }); setErr(""); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: "accountant", driverId: "" }); setErr(""); setShowAdd(true); };
+  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "" }); setErr(""); setShowAdd(true); };
+
   const saveUser = async () => {
     setErr("");
-    if (!form.name.trim() || !form.username.trim() || !form.password) { setErr("Заполни все поля"); return; }
-    if (users.some(u => (u.username || "").toLowerCase() === form.username.trim().toLowerCase())) { setErr("Такой логин уже есть"); return; }
+    if (!form.name.trim() || !form.username.trim()) { setErr("Заполни имя и логин"); return; }
+    if (!editId && !form.password) { setErr("Задай пароль"); return; }
+    const uname = form.username.trim().toLowerCase();
+    if (users.some(u => u.id !== editId && (u.username || "").toLowerCase() === uname)) { setErr("Такой логин уже есть"); return; }
     setSaving(true);
     try {
-      const passhash = await sha256(form.password);
-      await dbUpsert("users", { id: uid(), name: form.name.trim(), username: form.username.trim(), passhash, role: form.role });
+      const existing = users.find(u => u.id === editId);
+      // Пароль меняем только если ввели новый; пустое поле при редактировании = оставить старый
+      const passhash = form.password ? await sha256(form.password) : existing?.passhash;
+      await dbUpsert("users", {
+        id: editId || uid(),
+        name: form.name.trim(),
+        username: form.username.trim(),
+        passhash,
+        role: form.role,
+        driverId: form.role === "driver" ? form.driverId : "",
+      });
       setShowAdd(false); await reload("users");
     } catch (e) { setErr("Ошибка: " + e.message); }
     setSaving(false);
@@ -888,14 +906,18 @@ function UsersTab({ users, reload, currentUser }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Пользователи</h3><Btn onClick={openNew}>+ Добавить</Btn></div>
-      <p className="text-sm text-gray-500">Директор — полный доступ. Бухгалтер — только просмотр календаря и отчётов (кг, сорт, фасовка, ТОО/ИП, цены для накладных).</p>
+      <p className="text-sm text-gray-500">Директор — всё. Бухгалтер — просмотр календаря и отчётов с ценами/реквизитами для накладных. Водитель — видит только свои отгрузки (день, что, куда, объём), без цен.</p>
       {showAdd && (
-        <Modal title="Новый пользователь" onClose={() => setShowAdd(false)}>
+        <Modal title={editId ? "Редактировать пользователя" : "Новый пользователь"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
             <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Асхат" />
             <Inp label="Логин" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="ashat" />
-            <Inp label="Пароль" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+            <Inp label={editId ? "Новый пароль (пусто = не менять)" : "Пароль"} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder={editId ? "оставь пустым чтобы не менять" : ""} />
             <Sel label="Роль" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} options={Object.entries(ROLES).map(([v, l]) => ({ value: v, label: l }))} />
+            {form.role === "driver" && (
+              <Sel label="Привязать к водителю" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— выбери водителя —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+            )}
+            {form.role === "driver" && drivers.length === 0 && <p className="text-xs text-amber-600">Сначала добавь водителя во вкладке «Водители».</p>}
             {err && <p className="text-red-500 text-sm">{err}</p>}
           </div>
           <div className="flex gap-2 mt-4">
@@ -905,12 +927,21 @@ function UsersTab({ users, reload, currentUser }) {
         </Modal>
       )}
       <div className="space-y-2">
-        {users.map(u => (
-          <div key={u.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
-            <div><div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span></div><div className="text-sm text-gray-500">{ROLES[u.role] || u.role}</div></div>
-            {u.id !== currentUser.id && <Btn size="sm" variant="danger" onClick={() => deleteUser(u.id)}>✕</Btn>}
-          </div>
-        ))}
+        {users.map(u => {
+          const linkedDriver = u.role === "driver" ? drivers.find(d => d.id === u.driverId) : null;
+          return (
+            <div key={u.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
+              <div>
+                <div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span></div>
+                <div className="text-sm text-gray-500">{ROLES[u.role] || u.role}{linkedDriver ? ` · 🚛 ${linkedDriver.name}` : ""}{u.id === currentUser.id ? " · это вы" : ""}</div>
+              </div>
+              <div className="flex gap-1">
+                <Btn size="sm" variant="secondary" onClick={() => openEdit(u)}>✏️</Btn>
+                {u.id !== currentUser.id && <Btn size="sm" variant="danger" onClick={() => deleteUser(u.id)}>✕</Btn>}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1048,13 +1079,13 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} />}
             {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} />}
-            {tab === "access" && <UsersTab users={data.users} reload={reload} currentUser={user} />}
+            {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
           </>
         )}
       </div>
