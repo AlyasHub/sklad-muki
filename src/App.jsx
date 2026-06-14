@@ -466,6 +466,7 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
+                    {(() => { const co = client && (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)); return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
                   {gPhotos.length > 0 && (
