@@ -10,9 +10,15 @@ export default async function handler(req, res) {
   if (!configured()) return res.status(500).json({ error: "Сервер не настроен: добавь SUPABASE_SERVICE_KEY и AUTH_SECRET в Vercel" });
 
   const { action, username, password, name } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: "Введи логин и пароль" });
 
   try {
+    // Проверка: нужен ли первый пользователь (для экрана входа). Без пароля.
+    if (action === "status") {
+      const users = await dbList("users");
+      return res.status(200).json({ bootstrap: users.length === 0 });
+    }
+
+    if (!username || !password) return res.status(400).json({ error: "Введи логин и пароль" });
     const users = await dbList("users");
     const hash = sha256(password);
 

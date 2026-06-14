@@ -1,26 +1,36 @@
 import { useState, useEffect, useCallback } from "react";
 
-const SUPA_URL = "https://lemcpwgmsvsvrrxpzjgx.supabase.co";
-const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxlbWNwd2dtc3ZzdnJyeHB6amd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyNTQ2NTksImV4cCI6MjA5NjgzMDY1OX0._kKF72KmwW89rg9kq54h3PQxyspGhnUZCbgbukEAHJw";
-const H = { "Content-Type": "application/json", "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}` };
+// Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
+// Прямого ключа к базе в браузере больше нет.
+let authToken = (typeof localStorage !== "undefined" && localStorage.getItem("sklad_token")) || null;
+function setAuthToken(t) {
+  authToken = t || null;
+  if (t) localStorage.setItem("sklad_token", t); else localStorage.removeItem("sklad_token");
+}
+function decodeToken(t) {
+  try {
+    let b = t.split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+    while (b.length % 4) b += "=";
+    return JSON.parse(decodeURIComponent(escape(atob(b))));
+  } catch { return null; }
+}
 
-async function dbGetAll(table) {
-  const res = await fetch(`${SUPA_URL}/rest/v1/${table}?select=*`, { headers: H });
-  if (!res.ok) throw new Error(await res.text());
-  return (await res.json()).map(r => r.data);
-}
-async function dbUpsert(table, item) {
-  const res = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
+async function apiData(op, table, extra = {}) {
+  const res = await fetch("/api/data", {
     method: "POST",
-    headers: { ...H, "Prefer": "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: item.id, data: item }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: authToken, op, table, ...extra }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401) setAuthToken(null);
+    throw new Error(data.error || "Ошибка сервера");
+  }
+  return data;
 }
-async function dbDelete(table, id) {
-  const res = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: H });
-  if (!res.ok) throw new Error(await res.text());
-}
+async function dbGetAll(table) { return (await apiData("list", table)).rows || []; }
+async function dbUpsert(table, item) { await apiData("upsert", table, { item }); }
+async function dbDelete(table, id) { await apiData("delete", table, { id }); }
 
 // Дата в местном времени (не UTC) — иначе в Астане вечером дата уезжала на день вперёд
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -88,17 +98,23 @@ async function compressImage(file, maxDim = 1280, quality = 0.6) {
     return blob || file;
   } catch { return file; }
 }
-// Загрузка фото в Supabase Storage (бакет "photos"), возвращает публичную ссылку
+// Загрузка фото через защищённый сервер /api/upload, возвращает публичную ссылку
 async function uploadPhoto(orderId, file) {
   const blob = await compressImage(file);
-  const path = `${orderId}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`;
-  const res = await fetch(`${SUPA_URL}/storage/v1/object/photos/${path}`, {
-    method: "POST",
-    headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true" },
-    body: blob,
+  const dataUrl = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(blob);
   });
-  if (!res.ok) throw new Error(await res.text());
-  return `${SUPA_URL}/storage/v1/object/public/photos/${path}`;
+  const r = await fetch("/api/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: authToken, orderId, dataUrl }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "Ошибка загрузки");
+  return data.url;
 }
 
 async function resolveGisCoords(link) {
@@ -1030,37 +1046,39 @@ function UsersTab({ users, drivers, reload, currentUser }) {
   );
 }
 
-function LoginScreen({ users, onLogin, reloadUsers }) {
-  const bootstrap = users.length === 0;
+function LoginScreen({ onLogin }) {
+  const [bootstrap, setBootstrap] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Узнаём у сервера, нужен ли первый пользователь
+  useEffect(() => {
+    fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status" }) })
+      .then(r => r.json()).then(d => setBootstrap(!!d.bootstrap)).catch(() => {});
+  }, []);
+
+  const callAuth = async payload => {
+    const r = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || "Ошибка входа");
+    setAuthToken(data.token);
+    onLogin(data.user);
+  };
   const doLogin = async () => {
     setErr(""); setBusy(true);
-    try {
-      const hash = await sha256(password);
-      const u = users.find(x => (x.username || "").toLowerCase() === username.trim().toLowerCase() && x.passhash === hash);
-      if (!u) { setErr("Неверный логин или пароль"); setBusy(false); return; }
-      localStorage.setItem("sklad_uid", u.id);
-      onLogin(u);
-    } catch (e) { setErr("Ошибка: " + e.message); }
+    try { await callAuth({ action: "login", username, password }); }
+    catch (e) { setErr(e.message); }
     setBusy(false);
   };
   const doBootstrap = async () => {
     setErr("");
     if (!name.trim() || !username.trim() || !password) { setErr("Заполни все поля"); return; }
     setBusy(true);
-    try {
-      const passhash = await sha256(password);
-      const u = { id: uid(), name: name.trim(), username: username.trim(), passhash, role: "director" };
-      await dbUpsert("users", u);
-      localStorage.setItem("sklad_uid", u.id);
-      await reloadUsers();
-      onLogin(u);
-    } catch (e) { setErr("Не удалось. Проверь, что таблица users создана в Supabase. " + e.message); }
+    try { await callAuth({ action: "bootstrap", name, username, password }); }
+    catch (e) { setErr(e.message); }
     setBusy(false);
   };
   const submit = () => (bootstrap ? doBootstrap() : doLogin());
@@ -1098,27 +1116,36 @@ export default function App() {
   }, []);
 
   const reloadAll = useCallback(async (showSpinner = false) => {
+    if (!authToken) { if (showSpinner) setLoading(false); return; }
     if (showSpinner) setLoading(true);
     setError("");
     try {
-      const [clients, stock, orders, drivers] = await Promise.all(["clients", "stock", "orders", "drivers"].map(dbGetAll));
-      // trucks/users — новые таблицы; если ещё не созданы, не роняем приложение
-      const trucks = await dbGetAll("trucks").catch(() => []);
-      const users = await dbGetAll("users").catch(() => []);
+      // Сервер сам отдаёт каждой роли только разрешённое (остальное — пустой список)
+      const [clients, stock, orders, drivers, trucks, users] = await Promise.all(
+        ["clients", "stock", "orders", "drivers", "trucks", "users"].map(t => dbGetAll(t).catch(() => []))
+      );
       setData({ clients, stock, orders, drivers, trucks, users }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) { setError("Нет связи с базой: " + e.message); }
     if (showSpinner) setLoading(false);
   }, []);
 
-  useEffect(() => { reloadAll(true); }, []);
-  useEffect(() => { const t = setInterval(() => reloadAll(false), 30000); return () => clearInterval(t); }, []);
-
-  // Восстановить сессию после загрузки пользователей
+  // На старте: восстановить сессию из токена (без обращения к базе)
   useEffect(() => {
-    if (loading || user) return;
-    const saved = localStorage.getItem("sklad_uid");
-    if (saved) { const u = data.users.find(x => x.id === saved); if (u) setUser(u); }
-  }, [loading, data.users, user]);
+    const t = localStorage.getItem("sklad_token");
+    const p = t ? decodeToken(t) : null;
+    if (p && (!p.exp || Date.now() < p.exp)) {
+      authToken = t;
+      setUser({ id: p.uid, name: p.name, role: p.role, driverId: p.driverId || "" });
+    } else { setAuthToken(null); setLoading(false); }
+  }, []);
+
+  // Когда вошли — грузим данные и обновляем раз в 30 сек
+  useEffect(() => { if (user) reloadAll(true); }, [user]);
+  useEffect(() => {
+    if (!user) return;
+    const t = setInterval(() => reloadAll(false), 30000);
+    return () => clearInterval(t);
+  }, [user]);
 
   // При входе переключить на первую доступную для роли вкладку
   useEffect(() => {
@@ -1127,10 +1154,10 @@ export default function App() {
     if (!allowed.includes(tab)) setTab(allowed[0] || "calendar");
   }, [user]);
 
-  const logout = () => { localStorage.removeItem("sklad_uid"); setUser(null); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
-  if (!user) return <LoginScreen users={data.users} onLogin={setUser} reloadUsers={() => reload("users")} />;
+  if (!user) return <LoginScreen onLogin={setUser} />;
 
   const isDirector = user.role === "director";
   const allowedTabs = TABS_BY_ROLE[user.role] || [];
