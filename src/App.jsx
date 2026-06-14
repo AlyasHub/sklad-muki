@@ -452,9 +452,14 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
                     <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
-                  <div className="mt-1 space-y-0.5">
+                  <div className="mt-1 space-y-1">
                     {g.orders.map(o => (
-                      <div key={o.id} className="text-gray-600">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{showPrices && o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
+                      <div key={o.id} className="text-gray-600 flex items-center gap-2 flex-wrap">
+                        <span>• {o.brand} {o.grade}</span>
+                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
+                        <span>= <b>{fmt(o.bags * o.bag_kg)} кг</b></span>
+                        {showPrices && o.price_per_kg ? <span className="text-gray-400">· {fmt(o.bags * o.bag_kg * o.price_per_kg)} тг</span> : null}
+                      </div>
                     ))}
                   </div>
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
