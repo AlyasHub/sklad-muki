@@ -1521,7 +1521,7 @@ function LoginScreen({ onLogin }) {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 font-sans">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
         <div className="text-center mb-5">
-          <h1 className="text-2xl font-black text-gray-900">🌾 Склад Муки</h1>
+          <h1 className="text-2xl font-black text-gray-900">🌾 Darad</h1>
           <p className="text-sm text-gray-400 mt-1">{bootstrap ? "Создай первого пользователя (директора)" : "Вход в систему"}</p>
         </div>
         <div className="space-y-3">
@@ -1662,7 +1662,7 @@ export default function App() {
       <div className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-40 shadow-sm">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-black text-gray-900">🌾 Склад Муки</h1>
+            <h1 className="text-xl font-black text-gray-900">🌾 Darad</h1>
             <p className="text-xs text-gray-400">{user.name} · {ROLES[user.role] || user.role}{lastSync ? ` · 🟢 ${lastSync}` : ""}</p>
           </div>
           <div className="flex items-center gap-2">
