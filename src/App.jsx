@@ -1026,6 +1026,18 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   const [view, setView] = useState("product");
   const [from, setFrom] = useState(TODAY());
   const [to, setTo] = useState(TODAY());
+  const [advice, setAdvice] = useState("");
+  const [adviceLoading, setAdviceLoading] = useState(false);
+  const getAdvice = async () => {
+    setAdviceLoading(true); setAdvice("");
+    try {
+      const r = await fetch("/api/advice", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Ошибка");
+      setAdvice(d.advice || "Нет рекомендации");
+    } catch (e) { setAdvice("⚠️ Не удалось получить совет: " + e.message); }
+    setAdviceLoading(false);
+  };
   const now = new Date();
   const filterFn = o => {
     const d = new Date(o.date);
@@ -1061,6 +1073,24 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   const expTotal = expInPeriod.reduce((s, x) => s + (x.amount || 0), 0);
   const expByCat = {};
   expInPeriod.forEach(x => { expByCat[x.category] = (expByCat[x.category] || 0) + (x.amount || 0); });
+
+  // 🔮 Прогноз: спрос по дням недели за последние 8 недель → ожидание на неделю vs остатки
+  const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+  const cutoffD = new Date(now); cutoffD.setDate(cutoffD.getDate() - 56);
+  const recentDel = orders.filter(o => o.status === "отгружена" && new Date(o.date) >= cutoffD);
+  const demandWD = {};
+  recentDel.forEach(o => { const wd = new Date(o.date).getDay(); const p = `${o.brand} ${o.grade}`; (demandWD[wd] = demandWD[wd] || {})[p] = (demandWD[wd][p] || 0) + o.bags * o.bag_kg; });
+  const expectedWk = {};
+  for (let i = 1; i <= 7; i++) { const d = new Date(now); d.setDate(d.getDate() + i); const m = demandWD[d.getDay()] || {}; Object.entries(m).forEach(([p, kg]) => { expectedWk[p] = (expectedWk[p] || 0) + kg / 8; }); }
+  const stockByProd = {};
+  stock.forEach(s => { const p = `${s.brand} ${s.grade}`; stockByProd[p] = (stockByProd[p] || 0) + s.weight_kg; });
+  const restock = Object.entries(expectedWk).map(([p, kg]) => ({ p, exp: Math.round(kg), st: Math.round(stockByProd[p] || 0) })).filter(x => x.exp > 0).sort((a, b) => (b.exp - b.st) - (a.exp - a.st));
+  const byClientWD = {};
+  recentDel.forEach(o => { const c = o.clientName || "?"; const wd = new Date(o.date).getDay(); const k = byClientWD[c] = byClientWD[c] || {}; const v = k[wd] = k[wd] || { kg: 0, days: new Set() }; v.kg += o.bags * o.bag_kg; v.days.add(o.date); });
+  const regulars = [];
+  Object.entries(byClientWD).forEach(([c, wds]) => { let best = null; Object.entries(wds).forEach(([wd, v]) => { if (!best || v.days.size > best.days.size) best = { wd: +wd, ...v }; }); if (best && best.days.size >= 2) regulars.push({ c, wd: best.wd, avg: Math.round(best.kg / best.days.size) }); });
+  regulars.sort((a, b) => b.avg - a.avg);
+
   const ds = {};
   delivered.forEach(o => { if (!o.driverId) return; const d = drivers.find(x => x.id === o.driverId); if (!d) return; if (!ds[o.driverId]) ds[o.driverId] = { name: d.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; ds[o.driverId].kg += kg; ds[o.driverId].pay += kg * d.rate_per_kg; });
   const totalPay = Object.values(ds).reduce((s, d) => s + d.pay, 0);
@@ -1190,6 +1220,41 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
           {totalRev > 0 && <div className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">Сумма отгрузок {fmt(totalRev)} − расходы {fmt(expTotal)} = <b className={totalRev - expTotal >= 0 ? "text-emerald-600" : "text-red-600"}>{fmt(totalRev - expTotal)} тг</b></div>}
         </div>
       )}
+
+      <div className="bg-gradient-to-br from-violet-50 to-indigo-50 border border-violet-100 rounded-2xl p-4">
+        <div className="font-bold text-gray-800 mb-2">🔮 Прогноз и рекомендации</div>
+        {recentDel.length < 3 ? (
+          <div className="text-sm text-gray-500">Пока мало отгрузок для прогноза — он появится, когда накопится статистика за 2–4 недели.</div>
+        ) : (
+          <>
+            {regulars.length > 0 && (
+              <div className="mb-3">
+                <div className="text-xs font-semibold text-gray-500 mb-1">Постоянные клиенты (по дням)</div>
+                <div className="space-y-0.5 text-sm">
+                  {regulars.slice(0, 6).map(r => <div key={r.c} className="flex items-center justify-between"><span>{r.c}</span><span className="text-gray-500">обычно {WD[r.wd]} · ~{fmt(r.avg)} кг</span></div>)}
+                </div>
+              </div>
+            )}
+            {restock.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold text-gray-500 mb-1">Ожидается на неделю vs склад</div>
+                <div className="space-y-0.5 text-sm">
+                  {restock.map(x => { const need = x.exp - x.st; return (
+                    <div key={x.p} className="flex items-center justify-between">
+                      <span>{x.p}</span>
+                      <span className={need > 0 ? "text-red-600 font-medium" : "text-gray-500"}>ожид. ~{fmt(x.exp)} · склад {fmt(x.st)}{need > 0 ? ` → докупить ~${fmt(need)} кг` : " ✓"}</span>
+                    </div>
+                  ); })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+        <div className="mt-3 pt-3 border-t border-violet-100">
+          <Btn size="sm" onClick={getAdvice} disabled={adviceLoading}>{adviceLoading ? "Думаю..." : "🤖 Совет на неделю"}</Btn>
+          {advice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{advice}</div>}
+        </div>
+      </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
         <div className="flex border-b border-gray-100 overflow-x-auto">
