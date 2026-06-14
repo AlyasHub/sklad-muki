@@ -268,6 +268,33 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
   const assignDriver = async (o, driverId) => { try { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
   const deleteOrder = async (id) => { try { await dbDelete("orders", id); await reload("orders"); } catch (e) { notifyErr(e); } };
 
+  // Действия на всю заявку клиента (несколько позиций сразу)
+  const assignDriverGroup = async (g, driverId) => { try { for (const o of g.orders) await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const deleteGroup = async g => { if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return; try { for (const o of g.orders) await dbDelete("orders", o.id); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const setGroupStatus = async (g, status) => {
+    try {
+      for (const o of g.orders) {
+        if (o.status === status) continue;
+        const kg = o.bags * o.bag_kg;
+        await dbUpsert("orders", { ...o, status });
+        if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+        else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+      }
+      await reload("stock"); await reload("orders");
+    } catch (e) { notifyErr(e); }
+  };
+  const confirmGroup = async g => {
+    try {
+      for (const o of g.orders) {
+        if (o.confirmed && o.status === "отгружена") continue;
+        await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
+        if (o.status !== "отгружена") { const kg = o.bags * o.bag_kg; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` }); }
+      }
+      await reload("stock"); await reload("orders");
+    } catch (e) { notifyErr(e); }
+  };
+  const driverMarkGroup = async (g, val) => { try { for (const o of g.orders) await dbUpsert("orders", { ...o, delivered_by_driver: val, delivered_at: val ? new Date().toISOString() : o.delivered_at }); await reload("orders"); } catch (e) { notifyErr(e); } };
+
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
   const monthNames = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
@@ -292,9 +319,21 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
     cells.push(ds);
   }
 
-  const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red" };
+  const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red", "частично": "gray" };
   const dayOrders = vis.filter(o => o.date === selected).sort((a, b) => (a.clientName || "").localeCompare(b.clientName || ""));
   const dayKg = dayOrders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+
+  // Группируем позиции одного клиента в одну заявку (карточку)
+  const dayGroups = (() => {
+    const m = {};
+    dayOrders.forEach(o => {
+      const key = o.clientId || ("nm:" + (o.clientName || ""));
+      if (!m[key]) m[key] = { key, clientId: o.clientId, clientName: o.clientName, isSample: false, orders: [] };
+      m[key].orders.push(o);
+      if (o.isSample) m[key].isSample = true;
+    });
+    return Object.values(m);
+  })();
 
   const prevMonth = () => setCursor(new Date(year, month - 1, 1));
   const nextMonth = () => setCursor(new Date(year, month + 1, 1));
@@ -340,52 +379,67 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
           <div className="text-center py-10 text-gray-400">На это число отгрузок нет</div>
         ) : (
           <div className="space-y-2">
-            {dayOrders.map(o => {
-              const driver = drivers.find(d => d.id === o.driverId);
-              const client = clients.find(c => c.id === o.clientId);
+            {dayGroups.map(g => {
+              const client = clients.find(c => c.id === g.clientId);
+              const driver = drivers.find(d => d.id === g.orders[0].driverId);
+              const statuses = [...new Set(g.orders.map(o => o.status))];
+              const gStatus = statuses.length === 1 ? statuses[0] : "частично";
+              const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+              const gSum = g.orders.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+              const gPhotos = g.orders.flatMap(o => o.photos || []);
+              const allDelivered = g.orders.every(o => o.delivered_by_driver);
+              const anyClaim = g.orders.some(o => o.delivered_by_driver);
+              const allConfirmed = g.orders.every(o => o.confirmed);
+              const allShipped = g.orders.every(o => o.status === "отгружена");
+              const firstId = g.orders[0].id;
               return (
-                <div key={o.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm shadow-sm">
+                <div key={g.key} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm shadow-sm">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900">{o.clientName || "Клиент"}{o.isSample && " 🧪"}</span>
-                    <Badge color={sc[o.status] || "gray"}>{o.status}</Badge>
+                    <span className="font-bold text-gray-900">{g.clientName || "Клиент"}{g.isSample && " 🧪"}</span>
+                    <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
-                  <div className="text-gray-500 mt-1">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{showPrices && o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
+                  <div className="mt-1 space-y-0.5">
+                    {g.orders.map(o => (
+                      <div key={o.id} className="text-gray-600">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{showPrices && o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
+                    ))}
+                  </div>
+                  {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
-                    {o.created_by_name && <span>✍️ {o.created_by_name}</span>}
+                    {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
-                  {(o.photos || []).length > 0 && (
+                  {gPhotos.length > 0 && (
                     <div className="flex gap-1 flex-wrap mt-2">
-                      {o.photos.map((url, i) => <img key={i} src={url} onClick={() => setPhotoView(url)} className="w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer" alt="фото" />)}
+                      {gPhotos.map((url, i) => <img key={i} src={url} onClick={() => setPhotoView(url)} className="w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer" alt="фото" />)}
                     </div>
                   )}
-                  {o.delivered_by_driver && !o.confirmed && <div className="text-xs text-amber-600 mt-1">🚚 Водитель отметил «доставил» — ждёт подтверждения</div>}
-                  {o.confirmed && <div className="text-xs text-emerald-600 mt-1">✓ Подтверждено</div>}
+                  {anyClaim && !allConfirmed && <div className="text-xs text-amber-600 mt-1">🚚 Водитель отметил «доставил» — ждёт подтверждения</div>}
+                  {allConfirmed && <div className="text-xs text-emerald-600 mt-1">✓ Подтверждено</div>}
 
                   {driverMode ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
-                      {o.delivered_by_driver
-                        ? <Btn size="sm" variant="secondary" onClick={() => driverUnmark(o)}>↩ Отменить «доставил»</Btn>
-                        : <Btn size="sm" onClick={() => driverMarkDelivered(o)}>✓ Доставил</Btn>}
-                      <label className={`cursor-pointer text-xs rounded-lg px-3 py-1.5 font-medium ${uploadingId === o.id ? "bg-gray-200 text-gray-400" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
-                        {uploadingId === o.id ? "Загрузка..." : "📷 Фото"}
-                        <input type="file" accept="image/*" capture="environment" hidden disabled={uploadingId === o.id} onChange={e => { addPhoto(o, e.target.files[0]); e.target.value = ""; }} />
+                      {allDelivered
+                        ? <Btn size="sm" variant="secondary" onClick={() => driverMarkGroup(g, false)}>↩ Отменить «доставил»</Btn>
+                        : <Btn size="sm" onClick={() => driverMarkGroup(g, true)}>✓ Доставил</Btn>}
+                      <label className={`cursor-pointer text-xs rounded-lg px-3 py-1.5 font-medium ${uploadingId === firstId ? "bg-gray-200 text-gray-400" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
+                        {uploadingId === firstId ? "Загрузка..." : "📷 Фото"}
+                        <input type="file" accept="image/*" capture="environment" hidden disabled={uploadingId === firstId} onChange={e => { addPhoto(g.orders[0], e.target.files[0]); e.target.value = ""; }} />
                       </label>
                     </div>
                   ) : canEdit ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
-                      <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={o.driverId || ""} onChange={e => assignDriver(o, e.target.value)}>
+                      <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}>
                         <option value="">🚛 Водитель</option>
                         {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                       </select>
-                      {o.delivered_by_driver && !o.confirmed
-                        ? <Btn size="sm" onClick={() => confirmDelivery(o)}>✓ Подтвердить</Btn>
-                        : (o.status !== "отгружена"
-                          ? <Btn size="sm" onClick={() => updateStatus(o, "отгружена")}>✓ Доставлено</Btn>
-                          : <Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>↩ Не доставлено</Btn>)}
-                      <Btn size="sm" variant="danger" onClick={() => deleteOrder(o.id)}>✕</Btn>
+                      {anyClaim && !allConfirmed
+                        ? <Btn size="sm" onClick={() => confirmGroup(g)}>✓ Подтвердить</Btn>
+                        : (!allShipped
+                          ? <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>
+                          : <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>)}
+                      <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
                     </div>
                   ) : (
                     <div className="text-xs text-gray-400 mt-1">{driver ? `🚛 ${driver.name}` : ""}</div>
@@ -398,13 +452,17 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
       </div>
 
       {dayOrders.length > 0 && (() => {
-        const points = dayOrders.map(o => {
+        // одна точка на клиента (без дублей, даже если у него несколько позиций)
+        const seen = new Set();
+        const points = [];
+        dayOrders.forEach(o => {
           const client = clients.find(c => c.id === o.clientId);
-          if (!client) return null;
+          if (!client || seen.has(client.id)) return;
           const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
-          if (!coords) return null;
-          return { ...coords, name: o.clientName, delivery_time: client.delivery_time };
-        }).filter(Boolean);
+          if (!coords) return;
+          seen.add(client.id);
+          points.push({ ...coords, name: o.clientName, delivery_time: client.delivery_time });
+        });
 
         if (points.length === 0) return (
           <div className="bg-gray-50 border border-dashed border-gray-200 rounded-2xl p-4 text-sm text-gray-400 text-center">
