@@ -1051,6 +1051,11 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) debtByClient[o.clientName || "?"] = (debtByClient[o.clientName || "?"] || 0) + sum; });
   const debtList = Object.entries(debtByClient).sort((a, b) => b[1] - a[1]);
   const totalDebt = debtList.reduce((s, [, v]) => s + v, 0);
+  // Поступления (оплаченные заявки) — всего и по способу нал/безнал
+  const paidOrders = orders.filter(o => o.paid && o.bags * o.bag_kg * (o.price_per_kg || 0) > 0);
+  const paidTotal = paidOrders.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+  const paidByMethod = {};
+  paidOrders.forEach(o => { const m = o.pay_method || "Не указано"; paidByMethod[m] = (paidByMethod[m] || 0) + o.bags * o.bag_kg * (o.price_per_kg || 0); });
   // Расходы за период
   const expInPeriod = expenses.filter(filterFn);
   const expTotal = expInPeriod.reduce((s, x) => s + (x.amount || 0), 0);
@@ -1127,6 +1132,23 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
               <div key={reason} className="flex items-center justify-between">
                 <span className="text-gray-600">{reason}</span>
                 <span className="font-medium">{fmt(kg)} кг ({Math.round(kg / writeoffKg * 100)}%)</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {paidTotal > 0 && (
+        <div className="bg-gradient-to-br from-emerald-50 to-green-50 border border-emerald-100 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold text-gray-800">💵 Оплачено (всего)</div>
+            <div className="text-lg font-bold text-emerald-700">{fmt(paidTotal)} тг</div>
+          </div>
+          <div className="space-y-1 text-sm">
+            {Object.entries(paidByMethod).sort((a, b) => b[1] - a[1]).map(([m, v]) => (
+              <div key={m} className="flex items-center justify-between">
+                <span className="text-gray-600">{m === "Нал" ? "💵 Нал" : m === "Безнал" ? "💳 Безнал" : m}</span>
+                <span className="font-medium">{fmt(v)} тг</span>
               </div>
             ))}
           </div>
