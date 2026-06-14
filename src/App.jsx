@@ -1557,7 +1557,8 @@ export default function App() {
   const isDirector = user.role === "director";
   const allowedTabs = TABS_BY_ROLE[user.role] || [];
   const visibleTabs = TABS.filter(t => allowedTabs.includes(t.id));
-  const newOrders = data.orders.filter(o => o.status === "новая").length;
+  // Считаем новые ЗАЯВКИ (по клиенту+дате), а не отдельные позиции
+  const newOrders = new Set(data.orders.filter(o => o.status === "новая").map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
