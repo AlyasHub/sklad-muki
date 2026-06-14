@@ -41,6 +41,16 @@ const TODAY_WEEKDAY = () => WEEKDAYS[new Date().getDay()];
 const fmt = n => Number(n).toLocaleString("ru-RU");
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+// Скачивание файла из браузера (отчёт .txt / таблица .csv для Excel)
+function downloadFile(name, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // Шифрование пароля (SHA-256) — пароли не хранятся в открытом виде
 async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
@@ -337,6 +347,40 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
     return Object.values(m);
   })();
 
+  // Письменный отчёт за выбранный день
+  const buildReport = () => {
+    const d = selected.split("-").reverse().join(".");
+    const totalKg = dayOrders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+    const totalSum = dayOrders.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+    const L = [`Отчёт за ${d}`, "=".repeat(30), `Заявок: ${dayGroups.length}  ·  Всего: ${fmt(totalKg)} кг${showPrices ? `  ·  Сумма: ${fmt(totalSum)} тг` : ""}`, ""];
+    L.push("ПО КЛИЕНТАМ:");
+    dayGroups.forEach(g => {
+      const client = clients.find(c => c.id === g.clientId);
+      const statuses = [...new Set(g.orders.map(o => o.status))];
+      const st = statuses.length === 1 ? statuses[0] : "частично";
+      const drv = drivers.find(dr => dr.id === g.orders[0].driverId);
+      const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+      L.push(`• ${g.clientName}${client?.org_name ? ` (${client.org_name})` : ""} — ${st}${drv ? `, водитель: ${drv.name}` : ""} — ${fmt(gKg)} кг`);
+      g.orders.forEach(o => L.push(`    - ${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags} = ${fmt(o.bags * o.bag_kg)} кг${showPrices && o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}`));
+    });
+    const byDrv = {};
+    dayOrders.forEach(o => { if (!o.driverId) return; const dr = drivers.find(x => x.id === o.driverId); if (!dr) return; byDrv[o.driverId] = byDrv[o.driverId] || { name: dr.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; byDrv[o.driverId].kg += kg; byDrv[o.driverId].pay += kg * (dr.rate_per_kg || 0); });
+    if (Object.keys(byDrv).length) { L.push("", "ВОДИТЕЛИ:"); Object.values(byDrv).forEach(v => L.push(`• ${v.name}: ${fmt(v.kg)} кг · к оплате ${fmt(v.pay)} тг`)); }
+    return L.join("\n");
+  };
+  // Таблица для Excel (CSV с ; и BOM — корректно открывается в Excel)
+  const buildCsv = () => {
+    const headers = ["Дата", "Клиент", "Организация", "Бренд", "Сорт", "Фасовка кг", "Мешков", "Кг", "Цена тг/кг", "Сумма тг", "Статус", "Водитель", "Внёс"];
+    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = dayOrders.map(o => {
+      const client = clients.find(c => c.id === o.clientId);
+      const drv = drivers.find(dr => dr.id === o.driverId);
+      const kg = o.bags * o.bag_kg;
+      return [o.date, o.clientName, client?.org_name || "", o.brand, o.grade, o.bag_kg, o.bags, kg, o.price_per_kg || 0, kg * (o.price_per_kg || 0), o.status, drv?.name || "", o.created_by_name || ""];
+    });
+    return "﻿" + [headers, ...rows].map(r => r.map(esc).join(";")).join("\r\n");
+  };
+
   const prevMonth = () => setCursor(new Date(year, month - 1, 1));
   const nextMonth = () => setCursor(new Date(year, month + 1, 1));
 
@@ -377,6 +421,12 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
           <h4 className="font-semibold text-gray-700">Отгрузки на {selected.split("-").reverse().join(".")}</h4>
           {dayKg > 0 && <span className="text-sm text-gray-500">📦 {fmt(dayKg)} кг</span>}
         </div>
+        {!driverMode && dayOrders.length > 0 && (
+          <div className="flex gap-2 mb-3">
+            <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Отчёт_${selected}.txt`, buildReport(), "text/plain;charset=utf-8")}>📄 Отчёт за день</Btn>
+            <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Склад_${selected}.csv`, buildCsv(), "text/csv;charset=utf-8")}>📊 Excel</Btn>
+          </div>
+        )}
         {dayOrders.length === 0 ? (
           <div className="text-center py-10 text-gray-400">На это число отгрузок нет</div>
         ) : (
