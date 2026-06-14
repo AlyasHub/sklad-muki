@@ -1227,6 +1227,16 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
           <div className="text-sm text-gray-500">Пока мало отгрузок для прогноза — он появится, когда накопится статистика за 2–4 недели.</div>
         ) : (
           <>
+            {restock.some(x => x.exp - x.st > 0) && (
+              <div className="bg-red-100 border border-red-200 rounded-xl p-3 mb-3">
+                <div className="font-semibold text-red-700 text-sm mb-1">⚠️ Пора заказать муку — на следующую неделю может не хватить:</div>
+                <div className="space-y-0.5 text-sm">
+                  {restock.filter(x => x.exp - x.st > 0).map(x => (
+                    <div key={x.p} className="text-red-700">• <b>{x.p}</b>: нужно ~{fmt(x.exp)} кг, на складе {fmt(x.st)} → закажи ещё ~{fmt(x.exp - x.st)} кг</div>
+                  ))}
+                </div>
+              </div>
+            )}
             {regulars.length > 0 && (
               <div className="mb-3">
                 <div className="text-xs font-semibold text-gray-500 mb-1">Постоянные клиенты (по дням)</div>
