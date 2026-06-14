@@ -347,6 +347,7 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
+                    {o.created_by_name && <span>✍️ {o.created_by_name}</span>}
                   </div>
                   {(o.photos || []).length > 0 && (
                     <div className="flex gap-1 flex-wrap mt-2">
@@ -592,7 +593,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
                     <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{o.clientName || "Клиент"}</span><Badge color={sc[o.status] || "gray"}>{o.status}</Badge>{o.isSample && <Badge color="yellow">🧪 Проба</Badge>}</div>
                     <div className="text-sm text-gray-500 mt-1">{o.brand} · {o.grade} · {o.bag_kg}кг × {o.bags} = <b>{fmt(kg)} кг</b></div>
                     <div className="text-sm text-gray-500">{o.price_per_kg ? `${fmt(o.price_per_kg)} тг/кг · ${fmt(sum)} тг` : "Цена не указана"}</div>
-                    <div className="text-xs text-gray-400 mt-1">📅 {o.date}{driver ? ` · 🚛 ${driver.name}` : ""}</div>
+                    <div className="text-xs text-gray-400 mt-1">📅 {o.date}{driver ? ` · 🚛 ${driver.name}` : ""}{o.created_by_name ? ` · ✍️ ${o.created_by_name}` : ""}</div>
                   </div>
                   <div className="flex gap-1 flex-wrap">
                     {o.status === "новая" && <><Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>В путь</Btn><select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={o.driverId || ""} onChange={e => assignDriver(o, e.target.value)}><option value="">Водитель</option>{drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></>}

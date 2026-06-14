@@ -44,9 +44,13 @@ async function listFor(u, table) {
 async function upsertFor(u, table, item) {
   if (!item || !item.id) throw new Error("Нет данных");
   if (u.role === "director") {
-    if (table === "users" && !item.passhash) { // при редактировании без нового пароля — сохранить старый хэш
-      const existing = (await dbList("users")).find(x => x.id === item.id);
-      item = { ...item, passhash: existing?.passhash };
+    const existing = (await dbList(table)).find(r => r.id === item.id);
+    if (table === "users" && !item.passhash) item = { ...item, passhash: existing?.passhash }; // без нового пароля — старый хэш
+    // Авторство: проставляем «кто добавил» только на новой записи; у существующей сохраняем оригинального автора
+    if (existing?.created_by_name) {
+      item = { ...item, created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at };
+    } else if (!existing) {
+      item = { ...item, created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString() };
     }
     return dbUpsert(table, item);
   }
