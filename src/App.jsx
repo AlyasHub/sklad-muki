@@ -829,14 +829,25 @@ function StockTab({ stock, reload }) {
   );
 }
 
-function ClientsTab({ clients, reload }) {
+function ClientsTab({ clients, orders = [], reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState("");
+  const [historyClient, setHistoryClient] = useState(null);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
+
+  // Долг клиента = отгружено и не оплачено
+  const clientDebt = c => orders.filter(o => o.clientId === c.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+  // Отметить заявку (все позиции за дату) оплаченной/неоплаченной
+  const markPaid = async (clientId, date, paid) => {
+    try {
+      for (const o of orders.filter(o => o.clientId === clientId && o.date === date)) await dbUpsert("orders", { ...o, paid });
+      await reload("orders");
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+  };
 
   const openEdit = c => { setEditId(c.id); setResolveErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", prices: c.prices || [] }); setShowAdd(true); };
   const openNew = () => { setEditId(null); setResolveErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", prices: [] }); setShowAdd(true); };
@@ -910,11 +921,13 @@ function ClientsTab({ clients, reload }) {
       )}
       <div className="space-y-3">
         {clients.length === 0 && <div className="text-center py-12 text-gray-400">Клиентов нет.</div>}
-        {clients.map(c => (
+        {clients.map(c => {
+          const debt = clientDebt(c);
+          return (
           <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
             <div className="flex items-start justify-between">
               <div>
-                <div className="font-bold text-gray-900">{c.name}</div>
+                <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}</div>
                 {c.org_name && <div className="text-sm text-gray-500">🏢 {c.org_name}</div>}
                 {c.contact_name && <div className="text-sm text-gray-500">👤 {c.contact_name}</div>}
                 {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
@@ -924,9 +937,52 @@ function ClientsTab({ clients, reload }) {
               </div>
               <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}>✕</Btn></div>
             </div>
+            <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
           </div>
-        ))}
+          );
+        })}
       </div>
+
+      {historyClient && (() => {
+        const co = orders.filter(o => o.clientId === historyClient.id).sort((a, b) => b.date.localeCompare(a.date));
+        const byDate = {};
+        co.forEach(o => { (byDate[o.date] = byDate[o.date] || []).push(o); });
+        const delivered = co.filter(o => o.status === "отгружена");
+        const totalDelivered = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+        const totalPaid = delivered.filter(o => o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+        const debt = totalDelivered - totalPaid;
+        return (
+          <Modal title={`📋 ${historyClient.name}`} onClose={() => setHistoryClient(null)}>
+            <div className="text-sm mb-3 space-y-0.5 bg-gray-50 rounded-xl p-3">
+              <div>Отгружено всего: <b>{fmt(totalDelivered)} тг</b></div>
+              <div className="text-emerald-600">Оплачено: {fmt(totalPaid)} тг</div>
+              <div className={debt > 0 ? "text-red-600 font-bold" : "text-gray-500"}>Долг: {fmt(debt)} тг</div>
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {Object.entries(byDate).map(([date, list]) => {
+                const sum = list.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+                const kg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+                const allPaid = list.every(o => o.paid);
+                return (
+                  <div key={date} className="border border-gray-100 rounded-xl p-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{date.split("-").reverse().join(".")}</span>
+                      <span className="text-gray-500">{fmt(kg)} кг · {fmt(sum)} тг</span>
+                    </div>
+                    {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} — {o.status}</div>)}
+                    <div className="mt-2">
+                      {allPaid
+                        ? <Btn size="sm" variant="secondary" onClick={() => markPaid(historyClient.id, date, false)}>✓ Оплачено — отменить</Btn>
+                        : <Btn size="sm" onClick={() => markPaid(historyClient.id, date, true)}>💰 Отметить оплаченным</Btn>}
+                    </div>
+                  </div>
+                );
+              })}
+              {co.length === 0 && <div className="text-gray-400 text-center py-6">Отгрузок ещё не было</div>}
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
@@ -1405,7 +1461,7 @@ export default function App() {
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
-            {tab === "clients" && <ClientsTab clients={data.clients} reload={reload} />}
+            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
