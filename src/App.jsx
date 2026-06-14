@@ -59,7 +59,7 @@ async function sha256(str) {
 const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["orders", "calendar", "stock", "supply", "clients", "drivers", "reports", "access"],
+  director: ["orders", "calendar", "stock", "supply", "clients", "drivers", "expenses", "reports", "access"],
   accountant: ["calendar", "reports"],
   driver: ["calendar"],
 };
@@ -68,6 +68,7 @@ const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
 const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Прочее"];
+const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Поддоны/Склад", "Аренда", "Зарплата", "Прочее"];
 
 const WAREHOUSE = { lat: 51.17833, lon: 71.460803 };
 
@@ -218,7 +219,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "supply", label: "🚚 Поставки" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "reports", label: "📊 Отчёты" }, { id: "access", label: "⚙️ Доступ" }];
+const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "supply", label: "🚚 Поставки" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "reports", label: "📊 Отчёты" }, { id: "access", label: "⚙️ Доступ" }];
 
 function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -841,10 +842,10 @@ function ClientsTab({ clients, orders = [], reload }) {
 
   // Долг клиента = отгружено и не оплачено
   const clientDebt = c => orders.filter(o => o.clientId === c.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
-  // Отметить заявку (все позиции за дату) оплаченной/неоплаченной
-  const markPaid = async (clientId, date, paid) => {
+  // Отметить поставку (все позиции за дату) оплаченной — с указанием способа (нал/безнал)
+  const markPaid = async (clientId, date, paid, method = "") => {
     try {
-      for (const o of orders.filter(o => o.clientId === clientId && o.date === date)) await dbUpsert("orders", { ...o, paid });
+      for (const o of orders.filter(o => o.clientId === clientId && o.date === date)) await dbUpsert("orders", { ...o, paid, pay_method: paid ? method : "" });
       await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
@@ -963,8 +964,9 @@ function ClientsTab({ clients, orders = [], reload }) {
                 const sum = list.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
                 const kg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
                 const allPaid = list.every(o => o.paid);
+                const method = list.find(o => o.pay_method)?.pay_method;
                 return (
-                  <div key={date} className="border border-gray-100 rounded-xl p-3 text-sm">
+                  <div key={date} className={`border rounded-xl p-3 text-sm ${allPaid ? "border-emerald-200 bg-emerald-50" : "border-gray-100"}`}>
                     <div className="flex items-center justify-between">
                       <span className="font-medium">{date.split("-").reverse().join(".")}</span>
                       <span className="text-gray-500">{fmt(kg)} кг · {fmt(sum)} тг</span>
@@ -972,8 +974,8 @@ function ClientsTab({ clients, orders = [], reload }) {
                     {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} — {o.status}</div>)}
                     <div className="mt-2">
                       {allPaid
-                        ? <Btn size="sm" variant="secondary" onClick={() => markPaid(historyClient.id, date, false)}>✓ Оплачено — отменить</Btn>
-                        : <Btn size="sm" onClick={() => markPaid(historyClient.id, date, true)}>💰 Отметить оплаченным</Btn>}
+                        ? <div className="flex items-center gap-2 flex-wrap"><span className="text-emerald-700 font-medium text-xs">✓ Оплачено{method ? ` · ${method}` : ""}</span><Btn size="sm" variant="ghost" onClick={() => markPaid(historyClient.id, date, false)}>отменить</Btn></div>
+                        : <div className="flex gap-2 flex-wrap"><Btn size="sm" onClick={() => markPaid(historyClient.id, date, true, "Нал")}>💵 Нал</Btn><Btn size="sm" variant="secondary" onClick={() => markPaid(historyClient.id, date, true, "Безнал")}>💳 Безнал</Btn></div>}
                     </div>
                   </div>
                 );
@@ -1019,7 +1021,7 @@ function DriversTab({ drivers, orders, reload }) {
   );
 }
 
-function ReportsTab({ orders, drivers, stock = [] }) {
+function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   const [from, setFrom] = useState(TODAY());
@@ -1049,6 +1051,11 @@ function ReportsTab({ orders, drivers, stock = [] }) {
   orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) debtByClient[o.clientName || "?"] = (debtByClient[o.clientName || "?"] || 0) + sum; });
   const debtList = Object.entries(debtByClient).sort((a, b) => b[1] - a[1]);
   const totalDebt = debtList.reduce((s, [, v]) => s + v, 0);
+  // Расходы за период
+  const expInPeriod = expenses.filter(filterFn);
+  const expTotal = expInPeriod.reduce((s, x) => s + (x.amount || 0), 0);
+  const expByCat = {};
+  expInPeriod.forEach(x => { expByCat[x.category] = (expByCat[x.category] || 0) + (x.amount || 0); });
   const ds = {};
   delivered.forEach(o => { if (!o.driverId) return; const d = drivers.find(x => x.id === o.driverId); if (!d) return; if (!ds[o.driverId]) ds[o.driverId] = { name: d.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; ds[o.driverId].kg += kg; ds[o.driverId].pay += kg * d.rate_per_kg; });
   const totalPay = Object.values(ds).reduce((s, d) => s + d.pay, 0);
@@ -1141,6 +1148,24 @@ function ReportsTab({ orders, drivers, stock = [] }) {
             ))}
           </div>
           <div className="text-xs text-gray-400 mt-2">Отметить оплату — во вкладке «Клиенты» → История и оплаты.</div>
+        </div>
+      )}
+
+      {expTotal > 0 && (
+        <div className="bg-gradient-to-br from-slate-50 to-gray-100 border border-gray-200 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold text-gray-800">💸 Расходы за период</div>
+            <div className="text-lg font-bold text-gray-700">{fmt(expTotal)} тг</div>
+          </div>
+          <div className="space-y-1 text-sm">
+            {Object.entries(expByCat).sort((a, b) => b[1] - a[1]).map(([cat, v]) => (
+              <div key={cat} className="flex items-center justify-between">
+                <span className="text-gray-600">{cat}</span>
+                <span className="font-medium">{fmt(v)} тг</span>
+              </div>
+            ))}
+          </div>
+          {totalRev > 0 && <div className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">Выручка {fmt(totalRev)} − расходы {fmt(expTotal)} = <b className={totalRev - expTotal >= 0 ? "text-emerald-600" : "text-red-600"}>{fmt(totalRev - expTotal)} тг</b></div>}
         </div>
       )}
 
@@ -1394,10 +1419,66 @@ function LoginScreen({ onLogin }) {
   );
 }
 
+function ExpensesTab({ expenses, reload }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const blank = { date: TODAY(), category: EXPENSE_CATS[0], amount: "", note: "" };
+  const [form, setForm] = useState(blank);
+
+  const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
+  const openEdit = x => { setEditId(x.id); setForm({ date: x.date, category: x.category, amount: x.amount, note: x.note || "" }); setShowAdd(true); };
+  const save = async () => {
+    if (!form.amount) return;
+    setSaving(true);
+    try { await dbUpsert("expenses", { id: editId || uid(), date: form.date, category: form.category, amount: Number(form.amount), note: form.note }); setShowAdd(false); await reload("expenses"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
+  const del = async id => { if (!confirm("Удалить расход?")) return; try { await dbDelete("expenses", id); await reload("expenses"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
+
+  const now = new Date();
+  const monthTotal = expenses.filter(x => { const d = new Date(x.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); }).reduce((s, x) => s + (x.amount || 0), 0);
+  const sorted = [...expenses].sort((a, b) => b.date.localeCompare(a.date));
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Расходы</h3><Btn onClick={openNew}>+ Расход</Btn></div>
+      <div className="bg-gradient-to-br from-rose-50 to-red-50 rounded-2xl p-4"><div className="text-xs text-red-700 font-medium">Расходы за текущий месяц</div><div className="text-2xl font-bold text-red-700">{fmt(monthTotal)} тг</div></div>
+      {showAdd && (
+        <Modal title={editId ? "Изменить расход" : "Новый расход"} onClose={() => setShowAdd(false)}>
+          <div className="space-y-3">
+            <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            <Sel label="Категория" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={EXPENSE_CATS} />
+            <Inp label="Сумма, тг" type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
+            <Inp label="Примечание" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. оплата фуры, водитель Эрик, поддоны" />
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={save} disabled={saving || !form.amount}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
+            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
+      <div className="space-y-2">
+        {expenses.length === 0 && <div className="text-center py-12 text-gray-400">Расходов нет.</div>}
+        {sorted.map(x => (
+          <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
+            <div>
+              <div className="font-medium text-gray-900">{x.category} — {fmt(x.amount)} тг</div>
+              <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}</div>
+            </div>
+            <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}>✕</Btn></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("orders");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -1413,10 +1494,10 @@ export default function App() {
     setError("");
     try {
       // Сервер сам отдаёт каждой роли только разрешённое (остальное — пустой список)
-      const [clients, stock, orders, drivers, trucks, users] = await Promise.all(
-        ["clients", "stock", "orders", "drivers", "trucks", "users"].map(t => dbGetAll(t).catch(() => []))
+      const [clients, stock, orders, drivers, trucks, users, expenses] = await Promise.all(
+        ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"].map(t => dbGetAll(t).catch(() => []))
       );
-      setData({ clients, stock, orders, drivers, trucks, users }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
+      setData({ clients, stock, orders, drivers, trucks, users, expenses }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) { setError("Нет связи с базой: " + e.message); }
     if (showSpinner) setLoading(false);
   }, []);
@@ -1446,7 +1527,7 @@ export default function App() {
     if (!allowed.includes(tab)) setTab(allowed[0] || "calendar");
   }, [user]);
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -1486,7 +1567,8 @@ export default function App() {
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} />}
+            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
           </>
         )}
