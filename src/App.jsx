@@ -306,10 +306,12 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
 
   const kgByDate = {};
   const countByDate = {};
+  const seenByDate = {}; // считаем заявки по клиентам, а не по позициям
   vis.forEach(o => {
-    const kg = o.bags * o.bag_kg;
-    kgByDate[o.date] = (kgByDate[o.date] || 0) + kg;
-    countByDate[o.date] = (countByDate[o.date] || 0) + 1;
+    kgByDate[o.date] = (kgByDate[o.date] || 0) + o.bags * o.bag_kg;
+    const key = o.clientId || ("nm:" + (o.clientName || ""));
+    if (!seenByDate[o.date]) seenByDate[o.date] = new Set();
+    if (!seenByDate[o.date].has(key)) { seenByDate[o.date].add(key); countByDate[o.date] = (countByDate[o.date] || 0) + 1; }
   });
 
   const cells = [];
@@ -911,7 +913,7 @@ function DriversTab({ drivers, orders, reload }) {
   );
 }
 
-function ReportsTab({ orders, drivers }) {
+function ReportsTab({ orders, drivers, stock = [] }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   const [from, setFrom] = useState(TODAY());
@@ -930,6 +932,12 @@ function ReportsTab({ orders, drivers }) {
   const allDelivered = orders.filter(o => o.status === "отгружена");
   const totalKg = delivered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
   const totalRev = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+  const ordersCount = new Set(delivered.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size; // заявок по клиентам, не позициям
+  // Брак и списания за период (ручные списания со склада с причиной)
+  const writeoffs = stock.filter(s => s.weight_kg < 0 && s.reason && filterFn(s));
+  const writeoffKg = writeoffs.reduce((sum, s) => sum + Math.abs(s.weight_kg), 0);
+  const byReason = {};
+  writeoffs.forEach(s => { byReason[s.reason] = (byReason[s.reason] || 0) + Math.abs(s.weight_kg); });
   const ds = {};
   delivered.forEach(o => { if (!o.driverId) return; const d = drivers.find(x => x.id === o.driverId); if (!d) return; if (!ds[o.driverId]) ds[o.driverId] = { name: d.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; ds[o.driverId].kg += kg; ds[o.driverId].pay += kg * d.rate_per_kg; });
   const totalPay = Object.values(ds).reduce((s, d) => s + d.pay, 0);
@@ -969,7 +977,7 @@ function ReportsTab({ orders, drivers }) {
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Отгружено</div><div className="text-2xl font-bold text-emerald-800">{fmt(totalKg)} кг</div></div>
         <div className="bg-gradient-to-br from-amber-50 to-orange-100 rounded-2xl p-4"><div className="text-xs text-amber-700 font-medium">Выручка</div><div className="text-2xl font-bold text-amber-800">{fmt(totalRev)} тг</div></div>
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4"><div className="text-xs text-blue-700 font-medium">Заявок</div><div className="text-2xl font-bold text-blue-800">{delivered.length}</div></div>
+        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4"><div className="text-xs text-blue-700 font-medium">Заявок</div><div className="text-2xl font-bold text-blue-800">{ordersCount}</div></div>
         <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl p-4"><div className="text-xs text-purple-700 font-medium">Водителям</div><div className="text-2xl font-bold text-purple-800">{fmt(totalPay)} тг</div></div>
       </div>
 
@@ -989,6 +997,24 @@ function ReportsTab({ orders, drivers }) {
           </div>
         </div>
       )}
+
+      {writeoffKg > 0 && (
+        <div className="bg-gradient-to-br from-red-50 to-orange-50 border border-red-100 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold text-gray-800">🗑 Брак и списания за период</div>
+            <div className="text-lg font-bold text-red-600">{fmt(writeoffKg)} кг</div>
+          </div>
+          <div className="space-y-1 text-sm">
+            {Object.entries(byReason).sort((a, b) => b[1] - a[1]).map(([reason, kg]) => (
+              <div key={reason} className="flex items-center justify-between">
+                <span className="text-gray-600">{reason}</span>
+                <span className="font-medium">{fmt(kg)} кг ({Math.round(kg / writeoffKg * 100)}%)</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
         <div className="flex border-b border-gray-100 overflow-x-auto">
           {[["product", "По продукту"], ["pack", "По фасовке"], ["client", "По клиентам"], ["trend", "Динамика"]].map(([v, l]) => (
@@ -1331,7 +1357,7 @@ export default function App() {
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
           </>
         )}
