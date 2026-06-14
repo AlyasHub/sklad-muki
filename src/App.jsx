@@ -1044,6 +1044,11 @@ function ReportsTab({ orders, drivers, stock = [] }) {
   const writeoffKg = writeoffs.reduce((sum, s) => sum + Math.abs(s.weight_kg), 0);
   const byReason = {};
   writeoffs.forEach(s => { byReason[s.reason] = (byReason[s.reason] || 0) + Math.abs(s.weight_kg); });
+  // Долги клиентов — всё отгруженное и неоплаченное (не зависит от периода)
+  const debtByClient = {};
+  orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) debtByClient[o.clientName || "?"] = (debtByClient[o.clientName || "?"] || 0) + sum; });
+  const debtList = Object.entries(debtByClient).sort((a, b) => b[1] - a[1]);
+  const totalDebt = debtList.reduce((s, [, v]) => s + v, 0);
   const ds = {};
   delivered.forEach(o => { if (!o.driverId) return; const d = drivers.find(x => x.id === o.driverId); if (!d) return; if (!ds[o.driverId]) ds[o.driverId] = { name: d.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; ds[o.driverId].kg += kg; ds[o.driverId].pay += kg * d.rate_per_kg; });
   const totalPay = Object.values(ds).reduce((s, d) => s + d.pay, 0);
@@ -1118,6 +1123,24 @@ function ReportsTab({ orders, drivers, stock = [] }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {totalDebt > 0 && (
+        <div className="bg-gradient-to-br from-rose-50 to-red-50 border border-rose-100 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold text-gray-800">💰 Долги клиентов (всего)</div>
+            <div className="text-lg font-bold text-red-600">{fmt(totalDebt)} тг</div>
+          </div>
+          <div className="space-y-1 text-sm">
+            {debtList.map(([name, v]) => (
+              <div key={name} className="flex items-center justify-between">
+                <span className="text-gray-600">{name}</span>
+                <span className="font-medium text-red-600">{fmt(v)} тг</span>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-gray-400 mt-2">Отметить оплату — во вкладке «Клиенты» → История и оплаты.</div>
         </div>
       )}
 
