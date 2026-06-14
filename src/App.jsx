@@ -72,6 +72,35 @@ function parseCoordsFromText(text) {
   return null;
 }
 
+// Сжатие фото на стороне браузера: уменьшаем до 1280px и JPEG ~0.6 — обычно 100–200 КБ
+async function compressImage(file, maxDim = 1280, quality = 0.6) {
+  try {
+    const img = await createImageBitmap(file);
+    let { width, height } = img;
+    if (width > maxDim || height > maxDim) {
+      const r = Math.min(maxDim / width, maxDim / height);
+      width = Math.round(width * r); height = Math.round(height * r);
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = height;
+    canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", quality));
+    return blob || file;
+  } catch { return file; }
+}
+// Загрузка фото в Supabase Storage (бакет "photos"), возвращает публичную ссылку
+async function uploadPhoto(orderId, file) {
+  const blob = await compressImage(file);
+  const path = `${orderId}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`;
+  const res = await fetch(`${SUPA_URL}/storage/v1/object/photos/${path}`, {
+    method: "POST",
+    headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true" },
+    body: blob,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return `${SUPA_URL}/storage/v1/object/public/photos/${path}`;
+}
+
 async function resolveGisCoords(link) {
   const res = await fetch(`/api/resolve-gis?url=${encodeURIComponent(link)}`);
   if (!res.ok) {
@@ -164,12 +193,39 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
 
 const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "supply", label: "🚚 Поставки" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "reports", label: "📊 Отчёты" }, { id: "access", label: "⚙️ Доступ" }];
 
-function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPrices = true, driverFilter = null }) {
+function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
+  const [uploadingId, setUploadingId] = useState(null);
+  const [photoView, setPhotoView] = useState(null);
 
   // Водитель видит только свои отгрузки
   const vis = driverFilter != null ? orders.filter(o => o.driverId === driverFilter) : orders;
+
+  // Водитель отмечает «доставил» (предварительно, без списания со склада)
+  const driverMarkDelivered = async o => { await dbUpsert("orders", { ...o, delivered_by_driver: true, delivered_at: new Date().toISOString() }); await reload("orders"); };
+  const driverUnmark = async o => { await dbUpsert("orders", { ...o, delivered_by_driver: false }); await reload("orders"); };
+  // Прикрепить фото (накладная / мука у клиента)
+  const addPhoto = async (o, file) => {
+    if (!file) return;
+    setUploadingId(o.id);
+    try {
+      const url = await uploadPhoto(o.id, file);
+      await dbUpsert("orders", { ...o, photos: [...(o.photos || []), url] });
+      await reload("orders");
+    } catch (e) { alert("Не удалось загрузить фото: " + e.message); }
+    setUploadingId(null);
+  };
+  // Директор подтверждает доставку → списание со склада
+  const confirmDelivery = async o => {
+    await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
+    if (o.status !== "отгружена") {
+      const kg = o.bags * o.bag_kg;
+      await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+      await reload("stock");
+    }
+    await reload("orders");
+  };
 
   // Изменение статуса. Если переключаем НА "отгружена" — списываем со склада;
   // если снимаем "отгружена" — возвращаем на склад, чтобы остатки не врали.
@@ -276,15 +332,35 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
                     {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                   </div>
-                  {canEdit ? (
+                  {(o.photos || []).length > 0 && (
+                    <div className="flex gap-1 flex-wrap mt-2">
+                      {o.photos.map((url, i) => <img key={i} src={url} onClick={() => setPhotoView(url)} className="w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer" alt="фото" />)}
+                    </div>
+                  )}
+                  {o.delivered_by_driver && !o.confirmed && <div className="text-xs text-amber-600 mt-1">🚚 Водитель отметил «доставил» — ждёт подтверждения</div>}
+                  {o.confirmed && <div className="text-xs text-emerald-600 mt-1">✓ Подтверждено</div>}
+
+                  {driverMode ? (
+                    <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
+                      {o.delivered_by_driver
+                        ? <Btn size="sm" variant="secondary" onClick={() => driverUnmark(o)}>↩ Отменить «доставил»</Btn>
+                        : <Btn size="sm" onClick={() => driverMarkDelivered(o)}>✓ Доставил</Btn>}
+                      <label className={`cursor-pointer text-xs rounded-lg px-3 py-1.5 font-medium ${uploadingId === o.id ? "bg-gray-200 text-gray-400" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
+                        {uploadingId === o.id ? "Загрузка..." : "📷 Фото"}
+                        <input type="file" accept="image/*" capture="environment" hidden disabled={uploadingId === o.id} onChange={e => { addPhoto(o, e.target.files[0]); e.target.value = ""; }} />
+                      </label>
+                    </div>
+                  ) : canEdit ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={o.driverId || ""} onChange={e => assignDriver(o, e.target.value)}>
                         <option value="">🚛 Водитель</option>
                         {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                       </select>
-                      {o.status !== "отгружена"
-                        ? <Btn size="sm" onClick={() => updateStatus(o, "отгружена")}>✓ Доставлено</Btn>
-                        : <Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>↩ Не доставлено</Btn>}
+                      {o.delivered_by_driver && !o.confirmed
+                        ? <Btn size="sm" onClick={() => confirmDelivery(o)}>✓ Подтвердить</Btn>
+                        : (o.status !== "отгружена"
+                          ? <Btn size="sm" onClick={() => updateStatus(o, "отгружена")}>✓ Доставлено</Btn>
+                          : <Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>↩ Не доставлено</Btn>)}
                       <Btn size="sm" variant="danger" onClick={() => deleteOrder(o.id)}>✕</Btn>
                     </div>
                   ) : (
@@ -340,6 +416,13 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
           </div>
         );
       })()}
+
+      {photoView && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }} onClick={() => setPhotoView(null)}>
+          <img src={photoView} className="max-w-full max-h-full rounded-lg" alt="фото" />
+          <button className="absolute top-4 right-4 text-white text-3xl" onClick={() => setPhotoView(null)}>&times;</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1079,7 +1162,7 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} reload={reload} />}
