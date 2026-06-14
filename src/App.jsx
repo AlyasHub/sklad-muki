@@ -621,16 +621,32 @@ function OrdersTab({ clients, drivers, orders, reload }) {
 
 function StockTab({ stock, reload }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ date: TODAY(), brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", note: "" });
+  const blank = { date: TODAY(), brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", note: "", op: "in" };
+  const [form, setForm] = useState(blank);
 
-  const addArrival = async () => {
+  const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
+  const openEdit = s => {
+    setEditId(s.id);
+    setForm({ date: s.date || TODAY(), brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, bags: Math.abs(s.bags), price_per_kg: s.price_per_kg || "", note: s.note || "", op: s.weight_kg < 0 ? "out" : "in" });
+    setShowAdd(true);
+  };
+
+  const saveMovement = async () => {
     setSaving(true);
+    const sign = form.op === "out" ? -1 : 1;
+    const bag_kg = Number(form.bag_kg);
+    const bags = Math.abs(Number(form.bags)) * sign;
     try {
-      await dbUpsert("stock", { id: uid(), ...form, bags: Number(form.bags), bag_kg: Number(form.bag_kg), weight_kg: Number(form.bags) * Number(form.bag_kg), price_per_kg: Number(form.price_per_kg) });
+      await dbUpsert("stock", { id: editId || uid(), date: form.date, brand: form.brand, grade: form.grade, bag_kg, bags, weight_kg: bags * bag_kg, price_per_kg: Number(form.price_per_kg) || 0, note: form.note });
       setShowAdd(false); await reload("stock");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
+  };
+  const deleteMovement = async id => {
+    if (!confirm("Удалить эту запись со склада? Остаток пересчитается.")) return;
+    try { await dbDelete("stock", id); await reload("stock"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
   };
 
   const balances = {};
@@ -642,20 +658,25 @@ function StockTab({ stock, reload }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3><Btn onClick={() => setShowAdd(true)}>+ Приход фуры</Btn></div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3><Btn onClick={openNew}>+ Операция</Btn></div>
+      <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>
       {showAdd && (
-        <Modal title="Приход муки" onClose={() => setShowAdd(false)}>
+        <Modal title={editId ? "Изменить запись" : "Операция со складом"} onClose={() => setShowAdd(false)}>
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => setForm({ ...form, op: "in" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.op === "in" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>▲ Приход (+)</button>
+            <button onClick={() => setForm({ ...form, op: "out" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.op === "out" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-600"}`}>▼ Списание (−)</button>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            <Inp label="Цена закупки тг/кг" type="number" value={form.price_per_kg} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />
-            <div className="col-span-2"><Inp label="Примечание" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /></div>
+            {form.op === "in" && <Inp label="Цена закупки тг/кг" type="number" value={form.price_per_kg} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
+            <div className="col-span-2"><Inp label="Примечание" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={editId ? "" : "напр. остаток на сегодня"} /></div>
           </div>
           <div className="flex gap-2 mt-4">
-            <Btn onClick={addArrival} disabled={saving}>{saving ? "Сохраняю..." : "Добавить приход"}</Btn>
+            <Btn onClick={saveMovement} disabled={saving || !form.bags}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
             <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
           </div>
         </Modal>
@@ -674,10 +695,18 @@ function StockTab({ stock, reload }) {
       <div>
         <h4 className="font-semibold text-gray-700 mb-3">История движений</h4>
         <div className="space-y-2">
-          {[...stock].reverse().slice(0, 20).map(s => (
+          {[...stock].reverse().slice(0, 30).map(s => (
             <div key={s.id} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm">
-              <div><span className={s.weight_kg > 0 ? "text-emerald-600 font-medium" : "text-red-500 font-medium"}>{s.weight_kg > 0 ? "▲ Приход" : "▼ Расход"}</span><span className="text-gray-600 ml-2">{s.brand} {s.grade} {s.bag_kg}кг</span>{s.note && <span className="text-gray-400 ml-2">· {s.note}</span>}</div>
-              <div className="text-right"><div className="font-medium">{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)} кг</div><div className="text-gray-400">{s.date}</div></div>
+              <div className="min-w-0">
+                <span className={s.weight_kg > 0 ? "text-emerald-600 font-medium" : "text-red-500 font-medium"}>{s.weight_kg > 0 ? "▲ Приход" : "▼ Расход"}</span>
+                <span className="text-gray-600 ml-2">{s.brand} {s.grade} {s.bag_kg}кг</span>
+                {s.note && <span className="text-gray-400 ml-2">· {s.note}</span>}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="text-right"><div className="font-medium">{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)} кг</div><div className="text-gray-400 text-xs">{s.date}</div></div>
+                <button onClick={() => openEdit(s)} className="text-gray-400 hover:text-gray-700" title="Изменить">✏️</button>
+                <button onClick={() => deleteMovement(s.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>
+              </div>
             </div>
           ))}
         </div>
