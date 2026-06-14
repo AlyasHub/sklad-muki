@@ -22,8 +22,12 @@ async function dbDelete(table, id) {
   if (!res.ok) throw new Error(await res.text());
 }
 
-const TODAY = () => new Date().toISOString().split("T")[0];
-const TOMORROW = () => new Date(Date.now() + 86400000).toISOString().split("T")[0];
+// Дата в местном времени (не UTC) — иначе в Астане вечером дата уезжала на день вперёд
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const WEEKDAYS = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
+const TODAY = () => ymd(new Date());
+const TOMORROW = () => ymd(new Date(Date.now() + 86400000));
+const TODAY_WEEKDAY = () => WEEKDAYS[new Date().getDay()];
 const fmt = n => Number(n).toLocaleString("ru-RU");
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
@@ -85,9 +89,10 @@ function optimizeRoute(points) {
 }
 
 function buildGisRouteUrl(points) {
+  // Формат маршрута 2ГИС: /directions/points/|lon,lat;|lon,lat;... (спецсимволы кодируются)
   const all = [WAREHOUSE, ...points];
-  const coords = all.map(p => `${p.lon},${p.lat}`).join("|");
-  return `https://2gis.kz/astana/routeService?type=car&points=${coords}`;
+  const seg = all.map(p => `|${p.lon},${p.lat}`).join(";");
+  return `https://2gis.kz/astana/directions/points/${encodeURIComponent(seg)}`;
 }
 
 async function parseOrderWithAI(text, clients) {
@@ -97,7 +102,9 @@ async function parseOrderWithAI(text, clients) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text,
+      today: TODAY(),
       tomorrow: TOMORROW(),
+      weekday: TODAY_WEEKDAY(),
       clients: clients.map(c => ({ name: c.name, org_name: c.org_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand })),
     }),
   });

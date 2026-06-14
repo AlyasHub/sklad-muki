@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY не настроен на сервере (добавь в Vercel → Settings → Environment Variables)" });
 
-  const { text, clients = [], tomorrow } = req.body || {};
+  const { text, clients = [], today, tomorrow, weekday } = req.body || {};
   if (!text || !String(text).trim()) return res.status(400).json({ error: "Пустая заявка" });
 
   const clientInfo = clients.map(c =>
@@ -17,14 +17,18 @@ export default async function handler(req, res) {
   ).join("\n");
 
   const prompt = `Ты помощник на складе муки. Разбери заявку и верни ТОЛЬКО JSON без markdown.
+Сегодня ${today}, это ${weekday}. Завтра ${tomorrow}.
 Клиенты и их настройки по умолчанию:
 ${clientInfo}
 Бренды: ДАРАД, ДАЛА НАН. Сорта: Высший сорт, Первый сорт. Фасовки: 5,10,25,50 кг.
 Заявка: "${text}"
-Правила:
-- Если клиент упомянул только кг — используй его фасовку по умолчанию и раздели кг на фасовку чтобы получить количество мешков
-- Если у клиента есть бренд по умолчанию — используй его
-- Если дата не указана — завтра (${tomorrow})
+Правила определения даты (всегда возвращай реальную дату в формате YYYY-MM-DD):
+- Если указан день недели (понедельник, вторник, среда и т.д.) — найди БЛИЖАЙШУЮ будущую дату с этим днём недели, считая от сегодня (${today}, ${weekday}). Если этот день недели сегодня — бери сегодня.
+- "завтра" = ${tomorrow}. "сегодня" = ${today}.
+- Если дата вообще не указана — ставь завтра (${tomorrow}).
+Правила количества:
+- Если клиент упомянул только кг — используй его фасовку по умолчанию и раздели кг на фасовку чтобы получить количество мешков.
+- Если у клиента есть бренд по умолчанию — используй его.
 Верни JSON массив: [{"clientName":"...","brand":"...","grade":"...","bag_kg":25,"bags":40,"date":"YYYY-MM-DD"}]
 Только JSON.`;
 
