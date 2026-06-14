@@ -30,6 +30,18 @@ const TOMORROW = () => ymd(new Date(Date.now() + 86400000));
 const TODAY_WEEKDAY = () => WEEKDAYS[new Date().getDay()];
 const fmt = n => Number(n).toLocaleString("ru-RU");
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+// Шифрование пароля (SHA-256) — пароли не хранятся в открытом виде
+async function sha256(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+const ROLES = { director: "Директор", accountant: "Бухгалтер" };
+// Какие вкладки видит каждая роль
+const TABS_BY_ROLE = {
+  director: ["orders", "calendar", "stock", "supply", "clients", "drivers", "reports", "access"],
+  accountant: ["calendar", "reports"],
+};
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -149,9 +161,9 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "reports", label: "📊 Отчёты" }];
+const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "supply", label: "🚚 Поставки" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "reports", label: "📊 Отчёты" }, { id: "access", label: "⚙️ Доступ" }];
 
-function CalendarTab({ orders, drivers, clients, reload }) {
+function CalendarTab({ orders, drivers, clients, reload, canEdit = true }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
 
@@ -251,24 +263,29 @@ function CalendarTab({ orders, drivers, clients, reload }) {
               return (
                 <div key={o.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm shadow-sm">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900">{o.clientName || "Клиент"}</span>
+                    <span className="font-bold text-gray-900">{o.clientName || "Клиент"}{o.isSample && " 🧪"}</span>
                     <Badge color={sc[o.status] || "gray"}>{o.status}</Badge>
                   </div>
+                  {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
                   <div className="text-gray-500 mt-1">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                   </div>
-                  <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
-                    <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={o.driverId || ""} onChange={e => assignDriver(o, e.target.value)}>
-                      <option value="">🚛 Водитель</option>
-                      {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                    </select>
-                    {o.status !== "отгружена"
-                      ? <Btn size="sm" onClick={() => updateStatus(o, "отгружена")}>✓ Доставлено</Btn>
-                      : <Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>↩ Не доставлено</Btn>}
-                    <Btn size="sm" variant="danger" onClick={() => deleteOrder(o.id)}>✕</Btn>
-                  </div>
+                  {canEdit ? (
+                    <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
+                      <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={o.driverId || ""} onChange={e => assignDriver(o, e.target.value)}>
+                        <option value="">🚛 Водитель</option>
+                        {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                      {o.status !== "отгружена"
+                        ? <Btn size="sm" onClick={() => updateStatus(o, "отгружена")}>✓ Доставлено</Btn>
+                        : <Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>↩ Не доставлено</Btn>}
+                      <Btn size="sm" variant="danger" onClick={() => deleteOrder(o.id)}>✕</Btn>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-400 mt-1">{driver ? `🚛 ${driver.name}` : ""}</div>
+                  )}
                 </div>
               );
             })}
@@ -331,7 +348,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
   const [showManual, setShowManual] = useState(false);
   const [saving, setSaving] = useState(false);
   const [filterDate, setFilterDate] = useState(TODAY());
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TOMORROW(), driverId: "", price_per_kg: "" });
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TOMORROW(), driverId: "", price_per_kg: "", isSample: false, sampleName: "" });
 
   function getPrice(client, brand, grade, bag_kg) {
     return (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
@@ -363,10 +380,18 @@ function OrdersTab({ clients, drivers, orders, reload }) {
 
   const addManual = async () => {
     setSaving(true);
-    const client = clients.find(c => c.id === form.clientId);
-    const price = form.price_per_kg || (client ? getPrice(client, form.brand, form.grade, Number(form.bag_kg)) : 0);
+    const client = form.isSample ? null : clients.find(c => c.id === form.clientId);
+    // У пробника цена 0 (везём бесплатно), клиент не из базы — имя пишется вручную
+    const price = form.isSample ? 0 : (form.price_per_kg || (client ? getPrice(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
     try {
-      await dbUpsert("orders", { id: uid(), ...form, bags: Number(form.bags), bag_kg: Number(form.bag_kg), price_per_kg: Number(price), status: "новая", clientName: client?.name || "" });
+      await dbUpsert("orders", {
+        id: uid(), date: form.date, brand: form.brand, grade: form.grade,
+        bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId,
+        price_per_kg: Number(price), status: "новая",
+        isSample: form.isSample,
+        clientId: form.isSample ? null : form.clientId,
+        clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
+      });
       setShowManual(false); await reload("orders");
     } catch { }
     setSaving(false);
@@ -422,14 +447,20 @@ function OrdersTab({ clients, drivers, orders, reload }) {
       )}
 
       {showManual && (
-        <Modal title="Новая заявка" onClose={() => setShowManual(false)}>
+        <Modal title={form.isSample ? "🧪 Пробник" : "Новая заявка"} onClose={() => setShowManual(false)}>
+          <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
+            <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked })} className="w-4 h-4 accent-amber-500" />
+            <span className="text-sm font-medium text-gray-700">🧪 Пробник (везём на пробу, без клиента, бесплатно)</span>
+          </label>
           <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} /></div>
+            {form.isSample
+              ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
+              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} /></div>}
             <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />
+            {!form.isSample && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
             <Inp label="Дата доставки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             <div className="col-span-2"><Sel label="Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
           </div>
@@ -455,7 +486,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
               <div key={o.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div>
-                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{o.clientName || "Клиент"}</span><Badge color={sc[o.status] || "gray"}>{o.status}</Badge></div>
+                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{o.clientName || "Клиент"}</span><Badge color={sc[o.status] || "gray"}>{o.status}</Badge>{o.isSample && <Badge color="yellow">🧪 Проба</Badge>}</div>
                     <div className="text-sm text-gray-500 mt-1">{o.brand} · {o.grade} · {o.bag_kg}кг × {o.bags} = <b>{fmt(kg)} кг</b></div>
                     <div className="text-sm text-gray-500">{o.price_per_kg ? `${fmt(o.price_per_kg)} тг/кг · ${fmt(sum)} тг` : "Цена не указана"}</div>
                     <div className="text-xs text-gray-400 mt-1">📅 {o.date}{driver ? ` · 🚛 ${driver.name}` : ""}</div>
@@ -743,9 +774,206 @@ function ReportsTab({ orders, drivers }) {
   );
 }
 
+function TrucksTab({ trucks, reload }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [date, setDate] = useState(TODAY());
+  const [note, setNote] = useState("");
+  const [items, setItems] = useState([]);
+  const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" });
+
+  const reset = () => { setDate(TODAY()); setNote(""); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" }); };
+  const addItem = () => {
+    if (!it.tonnes) return;
+    setItems([...items, { ...it, bag_kg: Number(it.bag_kg), tonnes: Number(it.tonnes) }]);
+    setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" });
+  };
+  const removeItem = i => setItems(items.filter((_, j) => j !== i));
+
+  const saveTruck = async () => {
+    if (items.length === 0) return;
+    setSaving(true);
+    try { await dbUpsert("trucks", { id: uid(), date, note, items, status: "запланирована" }); setShowAdd(false); reset(); await reload("trucks"); } catch { }
+    setSaving(false);
+  };
+  // Приёмка фуры: каждая позиция падает на склад приходом
+  const acceptTruck = async t => {
+    setSaving(true);
+    try {
+      for (const item of t.items) {
+        const weight_kg = item.tonnes * 1000;
+        const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0;
+        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` });
+      }
+      await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
+      await reload("stock"); await reload("trucks");
+    } catch { }
+    setSaving(false);
+  };
+  const deleteTruck = async id => { await dbDelete("trucks", id); await reload("trucks"); };
+
+  const totalTonnes = t => t.items.reduce((s, i) => s + i.tonnes, 0);
+  const sorted = [...trucks].sort((a, b) => (a.status === b.status ? b.date.localeCompare(a.date) : a.status === "запланирована" ? -1 : 1));
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Поставки (фуры)</h3><Btn onClick={() => { reset(); setShowAdd(true); }}>+ Запланировать фуру</Btn></div>
+      {showAdd && (
+        <Modal title="Новая фура" onClose={() => setShowAdd(false)}>
+          <div className="space-y-3">
+            <Inp label="Дата прихода" type="date" value={date} onChange={e => setDate(e.target.value)} />
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Что в фуре (добавляй по позициям)</p>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <Sel value={it.brand} onChange={e => setIt({ ...it, brand: e.target.value })} options={BRANDS} />
+                <Sel value={it.grade} onChange={e => setIt({ ...it, grade: e.target.value })} options={GRADES} />
+                <Sel value={it.bag_kg} onChange={e => setIt({ ...it, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+                <Inp type="number" placeholder="тонн" value={it.tonnes} onChange={e => setIt({ ...it, tonnes: e.target.value })} />
+              </div>
+              <Btn size="sm" variant="secondary" onClick={addItem}>+ Добавить позицию</Btn>
+              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm"><span>{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium">{fmt(p.tonnes)} т</span><button className="text-red-400 hover:text-red-600" onClick={() => removeItem(i)}>✕</button></div>)}</div>}
+            </div>
+            <Inp label="Примечание" value={note} onChange={e => setNote(e.target.value)} />
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={saveTruck} disabled={saving || items.length === 0}>{saving ? "Сохраняю..." : "Запланировать"}</Btn>
+            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
+      <div className="space-y-3">
+        {trucks.length === 0 && <div className="text-center py-12 text-gray-400">Фур пока нет.</div>}
+        {sorted.map(t => (
+          <div key={t.id} className={`rounded-2xl p-4 border ${t.status === "запланирована" ? "bg-amber-50 border-amber-200" : "bg-white border-gray-100 shadow-sm"}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-bold text-gray-900">🚚 Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalTonnes(t))} т</span></div>
+              <Badge color={t.status === "запланирована" ? "yellow" : "green"}>{t.status}</Badge>
+            </div>
+            <div className="space-y-1 text-sm text-gray-600">
+              {t.items.map((p, i) => <div key={i}>• {p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.tonnes)} т ({fmt(Math.round(p.tonnes * 1000 / p.bag_kg))} мешков)</div>)}
+            </div>
+            {t.note && <div className="text-xs text-gray-400 mt-1">{t.note}</div>}
+            <div className="flex gap-2 mt-3">
+              {t.status === "запланирована" && <Btn size="sm" onClick={() => acceptTruck(t)} disabled={saving}>✓ Принять на склад</Btn>}
+              <Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function UsersTab({ users, reload, currentUser }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant" });
+
+  const openNew = () => { setForm({ name: "", username: "", password: "", role: "accountant" }); setErr(""); setShowAdd(true); };
+  const saveUser = async () => {
+    setErr("");
+    if (!form.name.trim() || !form.username.trim() || !form.password) { setErr("Заполни все поля"); return; }
+    if (users.some(u => (u.username || "").toLowerCase() === form.username.trim().toLowerCase())) { setErr("Такой логин уже есть"); return; }
+    setSaving(true);
+    try {
+      const passhash = await sha256(form.password);
+      await dbUpsert("users", { id: uid(), name: form.name.trim(), username: form.username.trim(), passhash, role: form.role });
+      setShowAdd(false); await reload("users");
+    } catch (e) { setErr("Ошибка: " + e.message); }
+    setSaving(false);
+  };
+  const deleteUser = async id => { await dbDelete("users", id); await reload("users"); };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Пользователи</h3><Btn onClick={openNew}>+ Добавить</Btn></div>
+      <p className="text-sm text-gray-500">Директор — полный доступ. Бухгалтер — только просмотр календаря и отчётов (кг, сорт, фасовка, ТОО/ИП, цены для накладных).</p>
+      {showAdd && (
+        <Modal title="Новый пользователь" onClose={() => setShowAdd(false)}>
+          <div className="space-y-3">
+            <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Асхат" />
+            <Inp label="Логин" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="ashat" />
+            <Inp label="Пароль" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+            <Sel label="Роль" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} options={Object.entries(ROLES).map(([v, l]) => ({ value: v, label: l }))} />
+            {err && <p className="text-red-500 text-sm">{err}</p>}
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={saveUser} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
+            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
+      <div className="space-y-2">
+        {users.map(u => (
+          <div key={u.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
+            <div><div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span></div><div className="text-sm text-gray-500">{ROLES[u.role] || u.role}</div></div>
+            {u.id !== currentUser.id && <Btn size="sm" variant="danger" onClick={() => deleteUser(u.id)}>✕</Btn>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ users, onLogin, reloadUsers }) {
+  const bootstrap = users.length === 0;
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const doLogin = async () => {
+    setErr(""); setBusy(true);
+    try {
+      const hash = await sha256(password);
+      const u = users.find(x => (x.username || "").toLowerCase() === username.trim().toLowerCase() && x.passhash === hash);
+      if (!u) { setErr("Неверный логин или пароль"); setBusy(false); return; }
+      localStorage.setItem("sklad_uid", u.id);
+      onLogin(u);
+    } catch (e) { setErr("Ошибка: " + e.message); }
+    setBusy(false);
+  };
+  const doBootstrap = async () => {
+    setErr("");
+    if (!name.trim() || !username.trim() || !password) { setErr("Заполни все поля"); return; }
+    setBusy(true);
+    try {
+      const passhash = await sha256(password);
+      const u = { id: uid(), name: name.trim(), username: username.trim(), passhash, role: "director" };
+      await dbUpsert("users", u);
+      localStorage.setItem("sklad_uid", u.id);
+      await reloadUsers();
+      onLogin(u);
+    } catch (e) { setErr("Не удалось. Проверь, что таблица users создана в Supabase. " + e.message); }
+    setBusy(false);
+  };
+  const submit = () => (bootstrap ? doBootstrap() : doLogin());
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 font-sans">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+        <div className="text-center mb-5">
+          <h1 className="text-2xl font-black text-gray-900">🌾 Склад Муки</h1>
+          <p className="text-sm text-gray-400 mt-1">{bootstrap ? "Создай первого пользователя (директора)" : "Вход в систему"}</p>
+        </div>
+        <div className="space-y-3">
+          {bootstrap && <Inp label="Имя" value={name} onChange={e => setName(e.target.value)} placeholder="Алияс" />}
+          <Inp label="Логин" value={username} onChange={e => setUsername(e.target.value)} />
+          <Inp label="Пароль" type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} />
+          {err && <p className="text-red-500 text-sm">{err}</p>}
+          <div className="pt-1"><Btn onClick={submit} disabled={busy} size="lg">{busy ? "..." : bootstrap ? "Создать и войти" : "Войти"}</Btn></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("orders");
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [] });
+  const [user, setUser] = useState(null);
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -760,7 +988,10 @@ export default function App() {
     setError("");
     try {
       const [clients, stock, orders, drivers] = await Promise.all(["clients", "stock", "orders", "drivers"].map(dbGetAll));
-      setData({ clients, stock, orders, drivers }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
+      // trucks/users — новые таблицы; если ещё не созданы, не роняем приложение
+      const trucks = await dbGetAll("trucks").catch(() => []);
+      const users = await dbGetAll("users").catch(() => []);
+      setData({ clients, stock, orders, drivers, trucks, users }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) { setError("Нет связи с базой: " + e.message); }
     if (showSpinner) setLoading(false);
   }, []);
@@ -768,6 +999,28 @@ export default function App() {
   useEffect(() => { reloadAll(true); }, []);
   useEffect(() => { const t = setInterval(() => reloadAll(false), 30000); return () => clearInterval(t); }, []);
 
+  // Восстановить сессию после загрузки пользователей
+  useEffect(() => {
+    if (loading || user) return;
+    const saved = localStorage.getItem("sklad_uid");
+    if (saved) { const u = data.users.find(x => x.id === saved); if (u) setUser(u); }
+  }, [loading, data.users, user]);
+
+  // При входе переключить на первую доступную для роли вкладку
+  useEffect(() => {
+    if (!user) return;
+    const allowed = TABS_BY_ROLE[user.role] || [];
+    if (!allowed.includes(tab)) setTab(allowed[0] || "calendar");
+  }, [user]);
+
+  const logout = () => { localStorage.removeItem("sklad_uid"); setUser(null); };
+
+  if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
+  if (!user) return <LoginScreen users={data.users} onLogin={setUser} reloadUsers={() => reload("users")} />;
+
+  const isDirector = user.role === "director";
+  const allowedTabs = TABS_BY_ROLE[user.role] || [];
+  const visibleTabs = TABS.filter(t => allowedTabs.includes(t.id));
   const newOrders = data.orders.filter(o => o.status === "новая").length;
 
   return (
@@ -776,29 +1029,32 @@ export default function App() {
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-xl font-black text-gray-900">🌾 Склад Муки</h1>
-            <p className="text-xs text-gray-400">{lastSync ? `🟢 Синхронизировано в ${lastSync}` : "Загрузка..."}</p>
+            <p className="text-xs text-gray-400">{user.name} · {ROLES[user.role] || user.role}{lastSync ? ` · 🟢 ${lastSync}` : ""}</p>
           </div>
           <div className="flex items-center gap-2">
-            {newOrders > 0 && <div className="bg-amber-500 text-white text-sm font-bold px-3 py-1.5 rounded-full">{newOrders} новых</div>}
-            <button onClick={reloadAll} className="text-gray-400 hover:text-gray-600 text-lg">🔄</button>
+            {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-sm font-bold px-3 py-1.5 rounded-full">{newOrders} новых</div>}
+            <button onClick={() => reloadAll(false)} className="text-gray-400 hover:text-gray-600 text-lg" title="Обновить">🔄</button>
+            <button onClick={logout} className="text-gray-400 hover:text-gray-600 text-sm" title="Выйти">Выйти</button>
           </div>
         </div>
       </div>
       {error && <div className="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-600 text-center">{error}</div>}
       <div className="bg-white border-b border-gray-100 sticky top-16 z-30">
         <div className="max-w-2xl mx-auto flex overflow-x-auto">
-          {TABS.map(t => <button key={t.id} onClick={() => setTab(t.id)} className={`flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${tab === t.id ? "border-amber-500 text-amber-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>{t.label}</button>)}
+          {visibleTabs.map(t => <button key={t.id} onClick={() => setTab(t.id)} className={`flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${tab === t.id ? "border-amber-500 text-amber-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>{t.label}</button>)}
         </div>
       </div>
       <div className="max-w-2xl mx-auto px-4 py-5">
-        {loading ? <Spinner /> : (
+        {allowedTabs.includes(tab) && (
           <>
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
+            {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} />}
+            {tab === "access" && <UsersTab users={data.users} reload={reload} currentUser={user} />}
           </>
         )}
       </div>
