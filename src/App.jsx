@@ -218,9 +218,11 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
   // Водитель видит только свои отгрузки
   const vis = driverFilter != null ? orders.filter(o => o.driverId === driverFilter) : orders;
 
+  const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
+
   // Водитель отмечает «доставил» (предварительно, без списания со склада)
-  const driverMarkDelivered = async o => { await dbUpsert("orders", { ...o, delivered_by_driver: true, delivered_at: new Date().toISOString() }); await reload("orders"); };
-  const driverUnmark = async o => { await dbUpsert("orders", { ...o, delivered_by_driver: false }); await reload("orders"); };
+  const driverMarkDelivered = async o => { try { await dbUpsert("orders", { ...o, delivered_by_driver: true, delivered_at: new Date().toISOString() }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const driverUnmark = async o => { try { await dbUpsert("orders", { ...o, delivered_by_driver: false }); await reload("orders"); } catch (e) { notifyErr(e); } };
   // Прикрепить фото (накладная / мука у клиента)
   const addPhoto = async (o, file) => {
     if (!file) return;
@@ -229,37 +231,41 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
       const url = await uploadPhoto(o.id, file);
       await dbUpsert("orders", { ...o, photos: [...(o.photos || []), url] });
       await reload("orders");
-    } catch (e) { alert("Не удалось загрузить фото: " + e.message); }
+    } catch (e) { alert("⚠️ Не удалось загрузить фото: " + e.message + "\nПроверь интернет и попробуй ещё раз."); }
     setUploadingId(null);
   };
   // Директор подтверждает доставку → списание со склада
   const confirmDelivery = async o => {
-    await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
-    if (o.status !== "отгружена") {
-      const kg = o.bags * o.bag_kg;
-      await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
-      await reload("stock");
-    }
-    await reload("orders");
+    try {
+      await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
+      if (o.status !== "отгружена") {
+        const kg = o.bags * o.bag_kg;
+        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+        await reload("stock");
+      }
+      await reload("orders");
+    } catch (e) { notifyErr(e); }
   };
 
   // Изменение статуса. Если переключаем НА "отгружена" — списываем со склада;
   // если снимаем "отгружена" — возвращаем на склад, чтобы остатки не врали.
   const updateStatus = async (o, status) => {
     if (status === o.status) return;
-    const kg = o.bags * o.bag_kg;
-    await dbUpsert("orders", { ...o, status });
-    if (status === "отгружена" && o.status !== "отгружена") {
-      await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
-      await reload("stock");
-    } else if (status !== "отгружена" && o.status === "отгружена") {
-      await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат (отмена отгрузки): ${o.clientName}` });
-      await reload("stock");
-    }
-    await reload("orders");
+    try {
+      const kg = o.bags * o.bag_kg;
+      await dbUpsert("orders", { ...o, status });
+      if (status === "отгружена" && o.status !== "отгружена") {
+        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+        await reload("stock");
+      } else if (status !== "отгружена" && o.status === "отгружена") {
+        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат (отмена отгрузки): ${o.clientName}` });
+        await reload("stock");
+      }
+      await reload("orders");
+    } catch (e) { notifyErr(e); }
   };
-  const assignDriver = async (o, driverId) => { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); };
-  const deleteOrder = async (id) => { await dbDelete("orders", id); await reload("orders"); };
+  const assignDriver = async (o, driverId) => { try { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const deleteOrder = async (id) => { try { await dbDelete("orders", id); await reload("orders"); } catch (e) { notifyErr(e); } };
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -497,22 +503,25 @@ function OrdersTab({ clients, drivers, orders, reload }) {
         clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
       });
       setShowManual(false); await reload("orders");
-    } catch { }
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
 
+  const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
   const updateStatus = async (o, status) => {
-    await dbUpsert("orders", { ...o, status });
-    if (status === "отгружена") {
-      const kg = o.bags * o.bag_kg;
-      await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
-      await reload("stock");
-    }
-    await reload("orders");
+    try {
+      await dbUpsert("orders", { ...o, status });
+      if (status === "отгружена") {
+        const kg = o.bags * o.bag_kg;
+        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+        await reload("stock");
+      }
+      await reload("orders");
+    } catch (e) { notifyErr(e); }
   };
 
-  const assignDriver = async (o, driverId) => { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); };
-  const deleteOrder = async id => { await dbDelete("orders", id); await reload("orders"); };
+  const assignDriver = async (o, driverId) => { try { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const deleteOrder = async id => { try { await dbDelete("orders", id); await reload("orders"); } catch (e) { notifyErr(e); } };
 
   const filtered = orders.filter(o => !filterDate || o.date === filterDate);
   const totalKg = filtered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
@@ -620,7 +629,7 @@ function StockTab({ stock, reload }) {
     try {
       await dbUpsert("stock", { id: uid(), ...form, bags: Number(form.bags), bag_kg: Number(form.bag_kg), weight_kg: Number(form.bags) * Number(form.bag_kg), price_per_kg: Number(form.price_per_kg) });
       setShowAdd(false); await reload("stock");
-    } catch { }
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
 
@@ -706,7 +715,7 @@ function ClientsTab({ clients, reload }) {
   };
   const saveClient = async () => {
     setSaving(true);
-    try { await dbUpsert("clients", { id: editId || uid(), ...form }); setShowAdd(false); await reload("clients"); } catch { }
+    try { await dbUpsert("clients", { id: editId || uid(), ...form }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
   const deleteClient = async id => { await dbDelete("clients", id); await reload("clients"); };
@@ -786,7 +795,7 @@ function DriversTab({ drivers, orders, reload }) {
 
   const saveDriver = async () => {
     setSaving(true);
-    try { await dbUpsert("drivers", { id: uid(), name: form.name, rate_per_kg: Number(form.rate_per_kg) }); setShowAdd(false); setForm({ name: "", rate_per_kg: "" }); await reload("drivers"); } catch { }
+    try { await dbUpsert("drivers", { id: uid(), name: form.name, rate_per_kg: Number(form.rate_per_kg) }); setShowAdd(false); setForm({ name: "", rate_per_kg: "" }); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
   const deleteDriver = async id => { await dbDelete("drivers", id); await reload("drivers"); };
@@ -933,7 +942,7 @@ function TrucksTab({ trucks, reload }) {
   const saveTruck = async () => {
     if (items.length === 0) return;
     setSaving(true);
-    try { await dbUpsert("trucks", { id: uid(), date, note, items, status: "запланирована" }); setShowAdd(false); reset(); await reload("trucks"); } catch { }
+    try { await dbUpsert("trucks", { id: uid(), date, note, items, status: "запланирована" }); setShowAdd(false); reset(); await reload("trucks"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
   // Приёмка фуры: каждая позиция падает на склад приходом
@@ -947,7 +956,7 @@ function TrucksTab({ trucks, reload }) {
       }
       await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
       await reload("stock"); await reload("trucks");
-    } catch { }
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
   const deleteTruck = async id => { await dbDelete("trucks", id); await reload("trucks"); };
