@@ -813,8 +813,17 @@ function DriversTab({ drivers, orders, reload }) {
 function ReportsTab({ orders, drivers }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
+  const [from, setFrom] = useState(TODAY());
+  const [to, setTo] = useState(TODAY());
   const now = new Date();
-  const filterFn = o => { const d = new Date(o.date); if (period === "week") { const w = new Date(now); w.setDate(w.getDate() - 7); return d >= w; } if (period === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); if (period === "3month") { const m = new Date(now); m.setMonth(m.getMonth() - 3); return d >= m; } return true; };
+  const filterFn = o => {
+    const d = new Date(o.date);
+    if (period === "week") { const w = new Date(now); w.setDate(w.getDate() - 7); return d >= w; }
+    if (period === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    if (period === "3month") { const m = new Date(now); m.setMonth(m.getMonth() - 3); return d >= m; }
+    if (period === "custom") return o.date >= from && o.date <= to; // сравнение строк YYYY-MM-DD работает для диапазона
+    return true;
+  };
   const filtered = orders.filter(filterFn);
   const delivered = filtered.filter(o => o.status === "отгружена");
   const allDelivered = orders.filter(o => o.status === "отгружена");
@@ -841,10 +850,20 @@ function ReportsTab({ orders, drivers }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex gap-2 flex-wrap">
-        {[["week", "7 дней"], ["month", "Месяц"], ["3month", "3 месяца"], ["all", "Всё время"]].map(([v, l]) => (
-          <button key={v} onClick={() => setPeriod(v)} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${period === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>
-        ))}
+      <div className="space-y-2">
+        <div className="flex gap-2 flex-wrap">
+          {[["week", "7 дней"], ["month", "Месяц"], ["3month", "3 месяца"], ["all", "Всё время"], ["custom", "Свой период"]].map(([v, l]) => (
+            <button key={v} onClick={() => setPeriod(v)} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${period === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>
+          ))}
+        </div>
+        {period === "custom" && (
+          <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-100 rounded-xl p-3">
+            <span className="text-sm text-gray-500">с</span>
+            <Inp type="date" value={from} onChange={e => setFrom(e.target.value)} />
+            <span className="text-sm text-gray-500">по</span>
+            <Inp type="date" value={to} onChange={e => setTo(e.target.value)} />
+          </div>
+        )}
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Отгружено</div><div className="text-2xl font-bold text-emerald-800">{fmt(totalKg)} кг</div></div>
@@ -852,6 +871,23 @@ function ReportsTab({ orders, drivers }) {
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4"><div className="text-xs text-blue-700 font-medium">Заявок</div><div className="text-2xl font-bold text-blue-800">{delivered.length}</div></div>
         <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl p-4"><div className="text-xs text-purple-700 font-medium">Водителям</div><div className="text-2xl font-bold text-purple-800">{fmt(totalPay)} тг</div></div>
       </div>
+
+      {pl.length > 0 && totalKg > 0 && (
+        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100 rounded-2xl p-4">
+          <div className="font-bold text-gray-800 mb-2">🎯 Приоритеты закупа за период</div>
+          <div className="space-y-1.5 text-sm">
+            {pl.slice(0, 3).map(([name, v], i) => (
+              <div key={name} className="flex items-center justify-between">
+                <span>{i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"} {name}</span>
+                <span className="font-medium">{Math.round(v.kg / totalKg * 100)}% · {fmt(v.kg)} кг</span>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-gray-600 mt-2">
+            Чаще всего уходит <b>{pl[0][0]}</b> ({Math.round(pl[0][1].kg / totalKg * 100)}% объёма){wl.length > 0 ? <>, фасовка <b>{wl[0][0]}</b></> : null}. Держи в приоритете при заказе.
+          </div>
+        </div>
+      )}
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
         <div className="flex border-b border-gray-100 overflow-x-auto">
           {[["product", "По продукту"], ["pack", "По фасовке"], ["client", "По клиентам"], ["trend", "Динамика"]].map(([v, l]) => (
