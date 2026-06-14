@@ -1594,6 +1594,7 @@ export default function App() {
       const [clients, stock, orders, drivers, trucks, users, expenses] = await Promise.all(
         ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"].map(t => dbGetAll(t).catch(() => []))
       );
+      if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData({ clients, stock, orders, drivers, trucks, users, expenses }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) { setError("Нет связи с базой: " + e.message); }
     if (showSpinner) setLoading(false);
@@ -1613,7 +1614,8 @@ export default function App() {
   useEffect(() => { if (user) reloadAll(true); }, [user]);
   useEffect(() => {
     if (!user) return;
-    const t = setInterval(() => reloadAll(false), 30000);
+    // обновляем только когда вкладка открыта — экономим трафик/лимиты, когда сайт свёрнут
+    const t = setInterval(() => { if (document.visibilityState === "visible") reloadAll(false); }, 30000);
     return () => clearInterval(t);
   }, [user]);
 
