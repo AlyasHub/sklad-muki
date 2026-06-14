@@ -1286,7 +1286,21 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
         </div>
       </div>
       {Object.keys(ds).length > 0 && <div><h4 className="font-semibold text-gray-700 mb-3">Расчёт с водителями</h4><div className="space-y-2">{Object.values(ds).map((d, i) => <div key={i} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between"><div><div className="font-medium">🚛 {d.name}</div><div className="text-sm text-gray-500">{fmt(d.kg)} кг</div></div><div className="text-emerald-600 font-bold">{fmt(d.pay)} тг</div></div>)}</div></div>}
-      <div><h4 className="font-semibold text-gray-700 mb-3">Маршрутный лист</h4>{filtered.length === 0 ? <div className="text-center py-8 text-gray-400">Нет заявок</div> : <div className="space-y-2">{[...filtered].sort((a, b) => a.date.localeCompare(b.date)).map(o => { const driver = drivers.find(d => d.id === o.driverId); return (<div key={o.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm"><div className="flex items-center justify-between flex-wrap gap-2"><div><span className="font-medium">{o.clientName}</span><span className="text-gray-400 ml-2">{o.date}</span></div><Badge color={{ "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red" }[o.status] || "gray"}>{o.status}</Badge></div><div className="text-gray-500 mt-1">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = {fmt(o.bags * o.bag_kg)}кг{driver ? ` · 🚛 ${driver.name}` : ""}</div></div>); })}</div>}</div>
+      <div><h4 className="font-semibold text-gray-700 mb-3">Маршрутный лист</h4>{filtered.length === 0 ? <div className="text-center py-8 text-gray-400">Нет заявок</div> : (() => {
+        const groups = {};
+        [...filtered].sort((a, b) => a.date.localeCompare(b.date)).forEach(o => { const key = (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date; (groups[key] = groups[key] || { clientName: o.clientName, date: o.date, orders: [] }).orders.push(o); });
+        return <div className="space-y-2">{Object.values(groups).map((g, i) => {
+          const driver = drivers.find(d => d.id === g.orders[0].driverId);
+          const statuses = [...new Set(g.orders.map(o => o.status))];
+          const st = statuses.length === 1 ? statuses[0] : "частично";
+          const kg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+          return (<div key={i} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2"><div><span className="font-medium">{g.clientName}</span><span className="text-gray-400 ml-2">{g.date}</span></div><Badge color={{ "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red", "частично": "gray" }[st] || "gray"}>{st}</Badge></div>
+            {g.orders.map(o => <div key={o.id} className="text-gray-500 mt-0.5">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = {fmt(o.bags * o.bag_kg)}кг</div>)}
+            <div className="text-xs text-gray-400 mt-1">Итого {fmt(kg)} кг{driver ? ` · 🚛 ${driver.name}` : ""}</div>
+          </div>);
+        })}</div>;
+      })()}</div>
     </div>
   );
 }
