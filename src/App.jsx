@@ -151,9 +151,27 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
 
 const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "reports", label: "📊 Отчёты" }];
 
-function CalendarTab({ orders, drivers, clients }) {
+function CalendarTab({ orders, drivers, clients, reload }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
+
+  // Изменение статуса. Если переключаем НА "отгружена" — списываем со склада;
+  // если снимаем "отгружена" — возвращаем на склад, чтобы остатки не врали.
+  const updateStatus = async (o, status) => {
+    if (status === o.status) return;
+    const kg = o.bags * o.bag_kg;
+    await dbUpsert("orders", { ...o, status });
+    if (status === "отгружена" && o.status !== "отгружена") {
+      await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+      await reload("stock");
+    } else if (status !== "отгружена" && o.status === "отгружена") {
+      await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат (отмена отгрузки): ${o.clientName}` });
+      await reload("stock");
+    }
+    await reload("orders");
+  };
+  const assignDriver = async (o, driverId) => { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); };
+  const deleteOrder = async (id) => { await dbDelete("orders", id); await reload("orders"); };
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -238,9 +256,18 @@ function CalendarTab({ orders, drivers, clients }) {
                   </div>
                   <div className="text-gray-500 mt-1">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</div>
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                    {driver ? `🚛 ${driver.name}` : "🚛 водитель не назначен"}
                     {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
+                    <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={o.driverId || ""} onChange={e => assignDriver(o, e.target.value)}>
+                      <option value="">🚛 Водитель</option>
+                      {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    {o.status !== "отгружена"
+                      ? <Btn size="sm" onClick={() => updateStatus(o, "отгружена")}>✓ Доставлено</Btn>
+                      : <Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>↩ Не доставлено</Btn>}
+                    <Btn size="sm" variant="danger" onClick={() => deleteOrder(o.id)}>✕</Btn>
                   </div>
                 </div>
               );
@@ -767,7 +794,7 @@ export default function App() {
         {loading ? <Spinner /> : (
           <>
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} />}
             {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
