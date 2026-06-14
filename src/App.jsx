@@ -57,6 +57,7 @@ const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
+const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Прочее"];
 
 const WAREHOUSE = { lat: 51.17833, lon: 71.460803 };
 
@@ -623,13 +624,13 @@ function StockTab({ stock, reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const blank = { date: TODAY(), brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", note: "", op: "in" };
+  const blank = { date: TODAY(), brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", note: "", op: "in", reason: WRITEOFF_REASONS[0] };
   const [form, setForm] = useState(blank);
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
   const openEdit = s => {
     setEditId(s.id);
-    setForm({ date: s.date || TODAY(), brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, bags: Math.abs(s.bags), price_per_kg: s.price_per_kg || "", note: s.note || "", op: s.weight_kg < 0 ? "out" : "in" });
+    setForm({ date: s.date || TODAY(), brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, bags: Math.abs(s.bags), price_per_kg: s.price_per_kg || "", note: s.note || "", op: s.weight_kg < 0 ? "out" : "in", reason: s.reason || WRITEOFF_REASONS[0] });
     setShowAdd(true);
   };
 
@@ -639,7 +640,7 @@ function StockTab({ stock, reload }) {
     const bag_kg = Number(form.bag_kg);
     const bags = Math.abs(Number(form.bags)) * sign;
     try {
-      await dbUpsert("stock", { id: editId || uid(), date: form.date, brand: form.brand, grade: form.grade, bag_kg, bags, weight_kg: bags * bag_kg, price_per_kg: Number(form.price_per_kg) || 0, note: form.note });
+      await dbUpsert("stock", { id: editId || uid(), date: form.date, brand: form.brand, grade: form.grade, bag_kg, bags, weight_kg: bags * bag_kg, price_per_kg: Number(form.price_per_kg) || 0, note: form.note, reason: form.op === "out" ? form.reason : "" });
       setShowAdd(false); await reload("stock");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
@@ -672,8 +673,10 @@ function StockTab({ stock, reload }) {
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            {form.op === "in" && <Inp label="Цена закупки тг/кг" type="number" value={form.price_per_kg} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
-            <div className="col-span-2"><Inp label="Примечание" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={editId ? "" : "напр. остаток на сегодня"} /></div>
+            {form.op === "in"
+              ? <Inp label="Цена закупки тг/кг" type="number" value={form.price_per_kg} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />
+              : <Sel label="Причина" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} options={WRITEOFF_REASONS} />}
+            <div className="col-span-2"><Inp label="Примечание" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={editId ? "" : (form.op === "out" ? "напр. подмок при разгрузке" : "напр. остаток на сегодня")} /></div>
           </div>
           <div className="flex gap-2 mt-4">
             <Btn onClick={saveMovement} disabled={saving || !form.bags}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
@@ -700,6 +703,7 @@ function StockTab({ stock, reload }) {
               <div className="min-w-0">
                 <span className={s.weight_kg > 0 ? "text-emerald-600 font-medium" : "text-red-500 font-medium"}>{s.weight_kg > 0 ? "▲ Приход" : "▼ Расход"}</span>
                 <span className="text-gray-600 ml-2">{s.brand} {s.grade} {s.bag_kg}кг</span>
+                {s.reason && <span className="text-red-400 ml-2">· {s.reason}</span>}
                 {s.note && <span className="text-gray-400 ml-2">· {s.note}</span>}
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
