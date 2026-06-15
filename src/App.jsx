@@ -524,6 +524,11 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
             })}
           </div>
         )}
+        {!driverMode && dayGroups.length > 0 && (
+          <div className="mt-3">
+            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + dayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).join("\n\n"))}>📋 Скопировать все накладные ({dayGroups.length})</Btn>
+          </div>
+        )}
       </div>
 
       {dayOrders.length > 0 && (() => {
