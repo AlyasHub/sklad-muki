@@ -795,7 +795,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
   );
 }
 
-function StockTab({ stock, reload }) {
+function StockTab({ stock, orders = [], reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -832,10 +832,40 @@ function StockTab({ stock, reload }) {
     balances[k].kg += s.weight_kg; balances[k].bags += s.bags;
   });
 
+  // Сколько мешков «забронировано» заявками, которые ещё НЕ отгружены (новая + в пути).
+  // При отгрузке склад списывается автоматически, поэтому здесь только будущий спрос.
+  const reserved = {};
+  orders.filter(o => o.status === "новая" || o.status === "в пути").forEach(o => {
+    const k = `${o.brand}|${o.grade}|${o.bag_kg}`;
+    reserved[k] = (reserved[k] || 0) + Number(o.bags || 0);
+  });
+
+  // Нехватка: где спрос больше остатка. Учитываем и позиции, которых вообще нет на складе.
+  const shortages = [];
+  Object.entries(reserved).forEach(([k, need]) => {
+    const have = Math.max(0, balances[k]?.bags || 0);
+    if (need > have) {
+      const [brand, grade, bag_kg] = k.split("|");
+      shortages.push({ brand, grade, bag_kg: Number(bag_kg), need, have, lack: need - have });
+    }
+  });
+  shortages.sort((a, b) => b.lack - a.lack);
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3><Btn onClick={openNew}>+ Операция</Btn></div>
       <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>
+      {shortages.length > 0 && (
+        <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
+          <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
+          <div className="space-y-1">
+            {shortages.map((s, i) => (
+              <div key={i} className="text-sm text-red-700">• <b>{s.brand} {s.grade} {s.bag_kg}кг</b> — нужно {s.need} меш., в наличии {s.have} → не хватает <b>{s.lack} меш.</b></div>
+            ))}
+          </div>
+          <div className="text-xs text-red-600 mt-2">Закажи приход (фуру) или перенеси часть заявок на другой день.</div>
+        </div>
+      )}
       {showAdd && (
         <Modal title={editId ? "Изменить запись" : "Операция со складом"} onClose={() => setShowAdd(false)}>
           <div className="flex gap-2 mb-3">
@@ -860,14 +890,23 @@ function StockTab({ stock, reload }) {
         </Modal>
       )}
       <div className="grid grid-cols-1 gap-3">
-        {Object.values(balances).map((b, i) => (
-          <div key={i} className={`rounded-2xl p-4 border ${b.kg <= 0 ? "bg-red-50 border-red-200" : "bg-white border-gray-100 shadow-sm"}`}>
+        {Object.values(balances).map((b, i) => {
+          const need = reserved[`${b.brand}|${b.grade}|${b.bag_kg}`] || 0;
+          const short = need > Math.max(0, b.bags);
+          return (
+          <div key={i} className={`rounded-2xl p-4 border ${short ? "bg-red-50 border-red-300" : b.kg <= 0 ? "bg-red-50 border-red-200" : "bg-white border-gray-100 shadow-sm"}`}>
             <div className="flex items-center justify-between">
               <div><div className="font-bold text-gray-900">{b.brand} · {b.grade}</div><div className="text-sm text-gray-500">Мешки по {b.bag_kg} кг</div></div>
               <div className="text-right"><div className={`text-2xl font-bold ${b.kg <= 0 ? "text-red-600" : "text-emerald-600"}`}>{fmt(Math.max(0, b.kg))} кг</div><div className="text-sm text-gray-400">{Math.max(0, b.bags)} мешков</div></div>
             </div>
+            {need > 0 && (
+              <div className={`text-sm mt-2 ${short ? "text-red-700 font-semibold" : "text-gray-500"}`}>
+                📋 В заявках (не отгружено): {need} меш.{short && ` · не хватает ${need - Math.max(0, b.bags)} меш.`}
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
         {Object.keys(balances).length === 0 && <div className="text-center py-12 text-gray-400">Склад пуст.</div>}
       </div>
       <div>
@@ -1823,7 +1862,7 @@ export default function App() {
           <>
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
-            {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
+            {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
