@@ -47,7 +47,9 @@ const clientTime = c => (c && ((c.delivery_from && c.delivery_to) ? `${c.deliver
 // Текст для накладной (бухгалтеру) по заявке клиента
 function nakladnayaText(g, client) {
   const head = (client && client.org_name) || g.clientName || "Клиент";
-  const lines = g.orders.map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
+  const billable = g.orders.filter(o => !o.trial); // позиции «на пробу» в накладную не идут
+  if (!billable.length) return null;
+  const lines = billable.map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
   return head + ":\n" + lines.join("\n");
 }
 function copyToClipboard(text) {
@@ -356,9 +358,10 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
     const m = {};
     dayOrders.forEach(o => {
       const key = o.clientId || ("nm:" + (o.clientName || ""));
-      if (!m[key]) m[key] = { key, clientId: o.clientId, clientName: o.clientName, isSample: false, orders: [] };
+      if (!m[key]) m[key] = { key, clientId: o.clientId, clientName: o.clientName, isSample: false, isTrial: false, orders: [] };
       m[key].orders.push(o);
       if (o.isSample) m[key].isSample = true;
+      if (o.trial) m[key].isTrial = true;
     });
     return Object.values(m);
   })();
@@ -486,7 +489,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
               return (
                 <div key={g.key} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm shadow-sm">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900">{g.clientName || "Клиент"}{g.isSample && " 🧪"}</span>
+                    <span className="font-bold text-gray-900">{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</span>
                     <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
@@ -496,7 +499,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
                         <span>• {o.brand} {o.grade}</span>
                         <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
                         <span>= <b>{fmt(o.bags * o.bag_kg)} кг</b></span>
-                        {showPrices && o.price_per_kg ? <span className="text-gray-400">· {fmt(o.bags * o.bag_kg * o.price_per_kg)} тг</span> : null}
+                        {o.trial ? <span className="text-orange-600 font-medium">🎁 на пробу</span> : (showPrices && o.price_per_kg ? <span className="text-gray-400">· {fmt(o.bags * o.bag_kg * o.price_per_kg)} тг</span> : null)}
                       </div>
                     ))}
                   </div>
@@ -505,7 +508,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                     {(() => { const co = client && (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)); return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
-                    {!driverMode && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                    {!driverMode && g.orders.some(o => !o.trial) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
                   {gPhotos.length > 0 && (
@@ -547,9 +550,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
             })}
           </div>
         )}
-        {!driverMode && dayGroups.length > 0 && (
+        {!driverMode && dayGroups.filter(g => g.orders.some(o => !o.trial)).length > 0 && (
           <div className="mt-3">
-            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + dayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).join("\n\n"))}>📋 Скопировать все накладные ({dayGroups.length})</Btn>
+            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + dayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}>📋 Скопировать все накладные ({dayGroups.filter(g => g.orders.some(o => !o.trial)).length})</Btn>
           </div>
         )}
       </div>
@@ -620,7 +623,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
   const [showManual, setShowManual] = useState(false);
   const [saving, setSaving] = useState(false);
   const [filterDate, setFilterDate] = useState(TODAY());
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TOMORROW(), driverId: "", price_per_kg: "", isSample: false, sampleName: "" });
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TOMORROW(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false });
 
   function getPrice(client, brand, grade, bag_kg) {
     return (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
@@ -651,16 +654,18 @@ function OrdersTab({ clients, drivers, orders, reload }) {
   };
 
   const addManual = async () => {
+    const isTrial = form.trial && !form.isSample; // «на пробу» — существующему клиенту, бесплатно
+    if (isTrial && !form.clientId) { alert("Выбери клиента для пробы."); return; }
     setSaving(true);
     const client = form.isSample ? null : clients.find(c => c.id === form.clientId);
-    // У пробника цена 0 (везём бесплатно), клиент не из базы — имя пишется вручную
-    const price = form.isSample ? 0 : (form.price_per_kg || (client ? getPrice(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
+    // Пробник и «на пробу» — цена 0 (везём бесплатно). У пробника клиент не из базы — имя пишется вручную.
+    const price = (form.isSample || isTrial) ? 0 : (form.price_per_kg || (client ? getPrice(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
     try {
       await dbUpsert("orders", {
         id: uid(), date: form.date, brand: form.brand, grade: form.grade,
         bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId,
         price_per_kg: Number(price), status: "новая",
-        isSample: form.isSample,
+        isSample: form.isSample, trial: isTrial,
         clientId: form.isSample ? null : form.clientId,
         clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
       });
@@ -709,8 +714,8 @@ function OrdersTab({ clients, drivers, orders, reload }) {
     const m = {};
     [...filtered].sort((a, b) => a.date.localeCompare(b.date)).forEach(o => {
       const key = (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date;
-      if (!m[key]) m[key] = { key, clientName: o.clientName, isSample: false, orders: [] };
-      m[key].orders.push(o); if (o.isSample) m[key].isSample = true;
+      if (!m[key]) m[key] = { key, clientName: o.clientName, isSample: false, isTrial: false, orders: [] };
+      m[key].orders.push(o); if (o.isSample) m[key].isSample = true; if (o.trial) m[key].isTrial = true;
     });
     return Object.values(m);
   })();
@@ -747,11 +752,17 @@ function OrdersTab({ clients, drivers, orders, reload }) {
       )}
 
       {showManual && (
-        <Modal title={form.isSample ? "🧪 Пробник" : "Новая заявка"} onClose={() => setShowManual(false)}>
+        <Modal title={form.isSample ? "🧪 Пробник" : form.trial ? "🎁 На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
           <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
-            <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked })} className="w-4 h-4 accent-amber-500" />
+            <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
             <span className="text-sm font-medium text-gray-700">🧪 Пробник (везём на пробу, без клиента, бесплатно)</span>
           </label>
+          {!form.isSample && (
+            <label className="flex items-center gap-2 mb-3 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
+              <input type="checkbox" checked={form.trial} onChange={e => setForm({ ...form, trial: e.target.checked })} className="w-4 h-4 accent-orange-500" />
+              <span className="text-sm font-medium text-gray-700">🎁 На пробу клиенту (бесплатно, без накладной, со склада списывается)</span>
+            </label>
+          )}
           <div className="grid grid-cols-2 gap-3">
             {form.isSample
               ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
@@ -760,7 +771,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            {!form.isSample && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
+            {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
             <Inp label="Дата доставки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             <div className="col-span-2"><Sel label="Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
           </div>
@@ -791,9 +802,9 @@ function OrdersTab({ clients, drivers, orders, reload }) {
               <div key={g.key} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div>
-                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{g.clientName || "Клиент"}</span><Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>{g.isSample && <Badge color="yellow">🧪 Проба</Badge>}</div>
+                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{g.clientName || "Клиент"}</span><Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>{g.isSample && <Badge color="yellow">🧪 Проба</Badge>}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
                     <div className="text-sm text-gray-500 mt-1 space-y-0.5">
-                      {g.orders.map(o => <div key={o.id} className="flex items-center gap-2 flex-wrap"><span>• {o.brand} · {o.grade}</span><span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span><span>= <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</span></div>)}
+                      {g.orders.map(o => <div key={o.id} className="flex items-center gap-2 flex-wrap"><span>• {o.brand} · {o.grade}</span><span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span><span>= <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.trial ? " · 🎁 на пробу" : (o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : "")}</span></div>)}
                     </div>
                     {g.orders.length > 1 && <div className="text-sm text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
                     <div className="text-xs text-gray-400 mt-1">📅 {g.orders[0].date}{driver ? ` · 🚛 ${driver.name}` : ""}{g.orders[0].created_by_name ? ` · ✍️ ${g.orders[0].created_by_name}` : ""}</div>
@@ -1260,9 +1271,22 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   paidOrders.forEach(o => { const m = o.pay_method || "Не указано"; paidByMethod[m] = (paidByMethod[m] || 0) + o.bags * o.bag_kg * (o.price_per_kg || 0); });
   // Расходы за период
   const expInPeriod = expenses.filter(filterFn);
-  const expTotal = expInPeriod.reduce((s, x) => s + (x.amount || 0), 0);
   const expByCat = {};
   expInPeriod.forEach(x => { expByCat[x.category] = (expByCat[x.category] || 0) + (x.amount || 0); });
+
+  // 🎁 «На пробу» — бесплатно отгруженная мука. Оцениваем по закупочной цене (средней из приходов склада).
+  const costPerKg = {};
+  const costAgg = {};
+  stock.filter(s => s.weight_kg > 0 && s.price_per_kg).forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; (costAgg[k] = costAgg[k] || { kg: 0, sum: 0 }); costAgg[k].kg += s.weight_kg; costAgg[k].sum += s.weight_kg * s.price_per_kg; });
+  Object.entries(costAgg).forEach(([k, v]) => { costPerKg[k] = v.kg ? v.sum / v.kg : 0; });
+  const trialDel = delivered.filter(o => o.trial);
+  const trialKg = trialDel.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  const trialCost = Math.round(trialDel.reduce((s, o) => s + o.bags * o.bag_kg * (costPerKg[`${o.brand}|${o.grade}|${o.bag_kg}`] || 0), 0));
+  const trialByProduct = {};
+  trialDel.forEach(o => { const p = `${o.brand} ${o.grade}`; trialByProduct[p] = (trialByProduct[p] || 0) + o.bags * o.bag_kg; });
+  if (trialCost > 0) expByCat["🎁 На пробу"] = (expByCat["🎁 На пробу"] || 0) + trialCost;
+  // Общие расходы = ручные расходы + оценка стоимости проб
+  const expTotal = expInPeriod.reduce((s, x) => s + (x.amount || 0), 0) + trialCost;
 
   // 🔮 Прогноз: спрос по дням недели за последние 8 недель → ожидание на неделю vs остатки
   const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
@@ -1355,6 +1379,24 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {trialKg > 0 && (
+        <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold text-gray-800">🎁 На пробу (бесплатно) за период</div>
+            <div className="text-right"><div className="text-lg font-bold text-orange-600">{fmt(trialKg)} кг</div>{trialCost > 0 && <div className="text-xs text-gray-500">≈ {fmt(trialCost)} тг по закупке</div>}</div>
+          </div>
+          <div className="space-y-1 text-sm">
+            {Object.entries(trialByProduct).sort((a, b) => b[1] - a[1]).map(([p, kg]) => (
+              <div key={p} className="flex items-center justify-between">
+                <span className="text-gray-600">{p}</span>
+                <span className="font-medium">{fmt(kg)} кг</span>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-gray-400 mt-2">Везём клиентам на пробу бесплатно. Стоимость оценена по средней закупочной цене и учтена в расходах.</div>
         </div>
       )}
 

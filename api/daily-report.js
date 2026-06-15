@@ -34,7 +34,7 @@ function buildText(dateStr, day, clients, drivers, orders, stock) {
     const drv = drivers.find(d => d.id === g.orders[0].driverId);
     const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
     L.push(`• ${g.name}${client?.org_name ? ` (${client.org_name})` : ""} — ${st}${drv ? `, водитель: ${drv.name}` : ""} — ${fmt(gKg)} кг`);
-    g.orders.forEach(o => L.push(`    - ${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags} = ${fmt(o.bags * o.bag_kg)} кг`));
+    g.orders.forEach(o => L.push(`    - ${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags} = ${fmt(o.bags * o.bag_kg)} кг${o.trial ? " (на пробу, бесплатно)" : ""}`));
   });
   const byDrv = {};
   day.forEach(o => { if (!o.driverId) return; const dr = drivers.find(x => x.id === o.driverId); if (!dr) return; byDrv[o.driverId] = byDrv[o.driverId] || { name: dr.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; byDrv[o.driverId].kg += kg; byDrv[o.driverId].pay += kg * (dr.rate_per_kg || 0); });
