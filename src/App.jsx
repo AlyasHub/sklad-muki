@@ -41,6 +41,21 @@ const TODAY_WEEKDAY = () => WEEKDAYS[new Date().getDay()];
 const fmt = n => Number(n).toLocaleString("ru-RU");
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+// Время доставки клиента: точный интервал (с–по) если задан, иначе пресет
+const clientTime = c => (c && ((c.delivery_from && c.delivery_to) ? `${c.delivery_from}–${c.delivery_to}` : c.delivery_time)) || "";
+
+// Текст для накладной (бухгалтеру) по заявке клиента
+function nakladnayaText(g, client) {
+  const head = (client && client.org_name) || g.clientName || "Клиент";
+  const lines = g.orders.map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
+  return head + ":\n" + lines.join("\n");
+}
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => alert("✓ Скопировано — вставь бухгалтеру (WhatsApp)")).catch(() => window.prompt("Скопируй вручную:", text));
+  } else { window.prompt("Скопируй вручную:", text); }
+}
+
 // Скачивание файла из браузера (отчёт .txt / таблица .csv для Excel)
 function downloadFile(name, content, mime) {
   const blob = new Blob([content], { type: mime });
@@ -464,9 +479,10 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
                   </div>
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                    {client?.delivery_time && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {client.delivery_time}</span>}
+                    {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                     {(() => { const co = client && (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)); return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
+                    {!driverMode && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
                   {gPhotos.length > 0 && (
@@ -520,7 +536,7 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
           const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
           if (!coords) return;
           seen.add(client.id);
-          points.push({ ...coords, name: o.clientName, delivery_time: client.delivery_time });
+          points.push({ ...coords, name: o.clientName, delivery_time: clientTime(client) });
         });
 
         if (points.length === 0) return (
@@ -653,6 +669,8 @@ function OrdersTab({ clients, drivers, orders, reload }) {
       await reload("stock"); await reload("orders");
     } catch (e) { notifyErr(e); }
   };
+  // Перенести заявку на другую дату (все позиции)
+  const rescheduleGroup = async (g, date) => { if (!date) return; try { for (const o of g.orders) await dbUpsert("orders", { ...o, date }); await reload("orders"); } catch (e) { notifyErr(e); } };
 
   const filtered = orders.filter(o => !filterDate || o.date === filterDate);
   const totalKg = filtered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
@@ -752,11 +770,16 @@ function OrdersTab({ clients, drivers, orders, reload }) {
                     {g.orders.length > 1 && <div className="text-sm text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
                     <div className="text-xs text-gray-400 mt-1">📅 {g.orders[0].date}{driver ? ` · 🚛 ${driver.name}` : ""}{g.orders[0].created_by_name ? ` · ✍️ ${g.orders[0].created_by_name}` : ""}</div>
                   </div>
-                  <div className="flex gap-1 flex-wrap">
+                  <div className="flex gap-1 flex-wrap items-center">
                     {allNew && <><Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>В путь</Btn><select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}><option value="">Водитель</option>{drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></>}
                     {allRoute && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
                     <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
                   </div>
+                </div>
+                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-50 text-xs text-gray-500">
+                  <span>📅 Перенести:</span>
+                  <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].date} onChange={e => rescheduleGroup(g, e.target.value)} />
+                  <button className="text-amber-600 hover:text-amber-700 font-medium" onClick={() => rescheduleGroup(g, TOMORROW())}>→ на завтра</button>
                 </div>
               </div>
             );
@@ -886,8 +909,8 @@ function ClientsTab({ clients, orders = [], reload }) {
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", prices: c.prices || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", prices: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [] }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [] }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -926,7 +949,16 @@ function ClientsTab({ clients, orders = [], reload }) {
               <Sel label="Фасовка по умолчанию" value={form.default_bag_kg} onChange={e => setForm({ ...form, default_bag_kg: Number(e.target.value) })} options={[{ value: "", label: "— не указана —" }, ...WEIGHTS.map(w => ({ value: w, label: w + " кг" }))]} />
               <Sel label="Бренд по умолчанию" value={form.default_brand} onChange={e => setForm({ ...form, default_brand: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...BRANDS.map(b => ({ value: b, label: b }))]} />
             </div>
-            <Sel label="Предпочтительное время доставки" value={form.delivery_time} onChange={e => setForm({ ...form, delivery_time: e.target.value })} options={[{ value: "", label: "— не указано —" }, ...DELIVERY_TIMES.map(t => ({ value: t, label: t }))]} />
+            <Sel label="Время доставки (общее)" value={form.delivery_time} onChange={e => setForm({ ...form, delivery_time: e.target.value })} options={[{ value: "", label: "— не указано —" }, ...DELIVERY_TIMES.map(t => ({ value: t, label: t }))]} />
+            <div>
+              <label className="text-sm font-medium text-gray-700">Или точное время (с — по)</label>
+              <div className="flex items-center gap-2 mt-1">
+                <input type="time" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" value={form.delivery_from} onChange={e => setForm({ ...form, delivery_from: e.target.value })} />
+                <span className="text-gray-500">—</span>
+                <input type="time" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" value={form.delivery_to} onChange={e => setForm({ ...form, delivery_to: e.target.value })} />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Если заполнишь — будет показываться как «08:00–10:00» вместо общего.</p>
+            </div>
             <div>
               <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value, coords: null })} placeholder="https://2gis.kz/astana/geo/..." />
               <div className="flex items-center gap-2 mt-2">
@@ -1025,19 +1057,36 @@ function ClientsTab({ clients, orders = [], reload }) {
   );
 }
 
-function DriversTab({ drivers, orders, reload }) {
+function DriversTab({ drivers, orders, expenses = [], reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", rate_per_kg: "" });
+  const [payDriver, setPayDriver] = useState(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payDate, setPayDate] = useState(TODAY());
+  const [historyDriver, setHistoryDriver] = useState(null);
 
   const saveDriver = async () => {
     setSaving(true);
     try { await dbUpsert("drivers", { id: uid(), name: form.name, rate_per_kg: Number(form.rate_per_kg) }); setShowAdd(false); setForm({ name: "", rate_per_kg: "" }); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
-  const deleteDriver = async id => { await dbDelete("drivers", id); await reload("drivers"); };
+  const deleteDriver = async id => { if (!confirm("Удалить водителя?")) return; await dbDelete("drivers", id); await reload("drivers"); };
+
+  // Заработал (по доставленным × ставка) и выплачено (расходы кат. «Водители» с этим driverId)
   const earnings = {};
-  orders.filter(o => o.status === "отгружена" && o.driverId).forEach(o => { const d = drivers.find(x => x.id === o.driverId); if (d) earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * d.rate_per_kg; });
+  orders.filter(o => o.status === "отгружена" && o.driverId).forEach(o => { const d = drivers.find(x => x.id === o.driverId); if (d) earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * (d.rate_per_kg || 0); });
+  const paidByDriver = {};
+  expenses.filter(x => x.driverId).forEach(x => { paidByDriver[x.driverId] = (paidByDriver[x.driverId] || 0) + (x.amount || 0); });
+
+  const openPay = d => { setPayDriver(d); setPayAmount(String(Math.max(0, Math.round((earnings[d.id] || 0) - (paidByDriver[d.id] || 0))))); setPayDate(TODAY()); };
+  const doPay = async () => {
+    if (!payAmount) return;
+    setSaving(true);
+    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), note: `Оплата водителю ${payDriver.name}` }); setPayDriver(null); await reload("expenses"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
 
   return (
     <div className="space-y-5">
@@ -1046,11 +1095,49 @@ function DriversTab({ drivers, orders, reload }) {
         <div className="space-y-3"><Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /><Inp label="Ставка тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} /></div>
         <div className="flex gap-2 mt-4"><Btn onClick={saveDriver} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
       </Modal>)}
+      {payDriver && (<Modal title={`Выплата: ${payDriver.name}`} onClose={() => setPayDriver(null)}>
+        <div className="space-y-3">
+          <div className="text-sm bg-gray-50 rounded-xl p-3">Заработал: <b>{fmt(earnings[payDriver.id] || 0)} тг</b> · Выплачено: {fmt(paidByDriver[payDriver.id] || 0)} тг · Осталось: <b className="text-red-600">{fmt(Math.max(0, (earnings[payDriver.id] || 0) - (paidByDriver[payDriver.id] || 0)))} тг</b></div>
+          <Inp label="Дата" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
+          <Inp label="Сумма выплаты, тг" type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} />
+        </div>
+        <div className="flex gap-2 mt-4"><Btn onClick={doPay} disabled={saving || !payAmount}>{saving ? "Сохраняю..." : "💵 Выплатить"}</Btn><Btn variant="secondary" onClick={() => setPayDriver(null)}>Отмена</Btn></div>
+      </Modal>)}
+      {historyDriver && (() => {
+        const pays = expenses.filter(x => x.driverId === historyDriver.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const total = pays.reduce((s, x) => s + (x.amount || 0), 0);
+        return (<Modal title={`Выплаты: ${historyDriver.name}`} onClose={() => setHistoryDriver(null)}>
+          <div className="text-sm mb-3 bg-gray-50 rounded-xl p-3">Всего выплачено: <b>{fmt(total)} тг</b></div>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {pays.length === 0 && <div className="text-gray-400 text-center py-6">Выплат ещё не было</div>}
+            {pays.map(x => <div key={x.id} className="flex items-center justify-between border border-gray-100 rounded-xl px-3 py-2 text-sm"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
+          </div>
+        </Modal>);
+      })()}
       <div className="space-y-3">
         {drivers.length === 0 && <div className="text-center py-12 text-gray-400">Водителей нет.</div>}
         {drivers.map(d => {
           const kg = orders.filter(o => o.driverId === d.id && o.status === "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
-          return <div key={d.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm"><div className="flex items-center justify-between"><div><div className="font-bold text-gray-900">🚛 {d.name}</div><div className="text-sm text-gray-500">Ставка: {fmt(d.rate_per_kg)} тг/кг</div>{kg > 0 && <div className="text-sm text-emerald-600 font-medium mt-1">Доставлено: {fmt(kg)} кг · К оплате: {fmt(earnings[d.id] || 0)} тг</div>}</div><Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn></div></div>;
+          const earned = earnings[d.id] || 0;
+          const paid = paidByDriver[d.id] || 0;
+          const left = earned - paid;
+          return (
+            <div key={d.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="font-bold text-gray-900">🚛 {d.name}</div>
+                  <div className="text-sm text-gray-500">Ставка: {fmt(d.rate_per_kg)} тг/кг · доставлено {fmt(kg)} кг</div>
+                  <div className="text-sm mt-1">Заработал: <b>{fmt(earned)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(paid)} тг</span></div>
+                  <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось: {fmt(Math.max(0, left))} тг</div>
+                </div>
+                <Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn>
+              </div>
+              <div className="flex gap-2 mt-3">
+                <Btn size="sm" onClick={() => openPay(d)}>💵 Выплатить</Btn>
+                <Btn size="sm" variant="secondary" onClick={() => setHistoryDriver(d)}>📋 История выплат</Btn>
+              </div>
+            </div>
+          );
         })}
       </div>
     </div>
@@ -1344,43 +1431,44 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
 function TrucksTab({ trucks, reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [date, setDate] = useState(TODAY());
-  const [note, setNote] = useState("");
+  const [f, setF] = useState({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" });
   const [items, setItems] = useState([]);
   const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" });
 
-  const reset = () => { setDate(TODAY()); setNote(""); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" }); };
-  const addItem = () => {
-    if (!it.tonnes) return;
-    setItems([...items, { ...it, bag_kg: Number(it.bag_kg), tonnes: Number(it.tonnes) }]);
-    setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" });
-  };
+  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" }); };
+  const addItem = () => { if (!it.tonnes) return; setItems([...items, { ...it, bag_kg: Number(it.bag_kg), tonnes: Number(it.tonnes) }]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" }); };
   const removeItem = i => setItems(items.filter((_, j) => j !== i));
 
   const saveTruck = async () => {
     if (items.length === 0) return;
     setSaving(true);
-    try { await dbUpsert("trucks", { id: uid(), date, note, items, status: "запланирована" }); setShowAdd(false); reset(); await reload("trucks"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    try { await dbUpsert("trucks", { id: uid(), ...f, price: Number(f.price) || 0, items, status: "запланирована" }); setShowAdd(false); reset(); await reload("trucks"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
-  // Приёмка фуры: каждая позиция падает на склад приходом
-  const acceptTruck = async t => {
+
+  // Смена статуса. При «принята» — позиции падают на склад приходом, а цена фуры идёт в расходы.
+  const setTruckStatus = async (t, status) => {
+    if (t.status === status) return;
     setSaving(true);
     try {
-      for (const item of t.items) {
-        const weight_kg = item.tonnes * 1000;
-        const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0;
-        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` });
+      if (status === "принята" && t.status !== "принята") {
+        for (const item of t.items) { const weight_kg = item.tonnes * 1000; const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` }); }
+        if (t.price) await dbUpsert("expenses", { id: uid(), date: TODAY(), category: "Фура/Поставка", amount: Number(t.price), note: `Фура от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}` });
+        await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
+        await reload("stock"); await reload("expenses");
+      } else {
+        await dbUpsert("trucks", { ...t, status });
       }
-      await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
-      await reload("stock"); await reload("trucks");
+      await reload("trucks");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
-  const deleteTruck = async id => { await dbDelete("trucks", id); await reload("trucks"); };
+  const deleteTruck = async id => { if (!confirm("Удалить фуру?")) return; await dbDelete("trucks", id); await reload("trucks"); };
 
   const totalTonnes = t => t.items.reduce((s, i) => s + i.tonnes, 0);
-  const sorted = [...trucks].sort((a, b) => (a.status === b.status ? b.date.localeCompare(a.date) : a.status === "запланирована" ? -1 : 1));
+  const sorted = [...trucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
+  const waLink = n => "https://wa.me/" + String(n || "").replace(/\D/g, "");
 
   return (
     <div className="space-y-5">
@@ -1388,9 +1476,16 @@ function TrucksTab({ trucks, reload }) {
       {showAdd && (
         <Modal title="Новая фура" onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
-            <Inp label="Дата прихода" type="date" value={date} onChange={e => setDate(e.target.value)} />
+            <Inp label="Дата прихода" type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
+            <div className="grid grid-cols-2 gap-2">
+              <Inp label="Фурист (имя)" value={f.driver_name} onChange={e => setF({ ...f, driver_name: e.target.value })} />
+              <Inp label="Номер машины" value={f.car_number} onChange={e => setF({ ...f, car_number: e.target.value })} placeholder="123 ABC 01" />
+              <Inp label="WhatsApp фуриста" value={f.whatsapp} onChange={e => setF({ ...f, whatsapp: e.target.value })} placeholder="+7..." />
+              <Inp label="Телефон логиста" value={f.logist_phone} onChange={e => setF({ ...f, logist_phone: e.target.value })} placeholder="+7..." />
+            </div>
+            <Inp label="Цена за фуру, тг (пойдёт в расходы)" type="number" value={f.price} onChange={e => setF({ ...f, price: e.target.value })} />
             <div>
-              <p className="text-sm font-medium text-gray-700 mb-2">Что в фуре (добавляй по позициям)</p>
+              <p className="text-sm font-medium text-gray-700 mb-2">Что в фуре (по позициям)</p>
               <div className="grid grid-cols-2 gap-2 mb-2">
                 <Sel value={it.brand} onChange={e => setIt({ ...it, brand: e.target.value })} options={BRANDS} />
                 <Sel value={it.grade} onChange={e => setIt({ ...it, grade: e.target.value })} options={GRADES} />
@@ -1400,7 +1495,7 @@ function TrucksTab({ trucks, reload }) {
               <Btn size="sm" variant="secondary" onClick={addItem}>+ Добавить позицию</Btn>
               {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm"><span>{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium">{fmt(p.tonnes)} т</span><button className="text-red-400 hover:text-red-600" onClick={() => removeItem(i)}>✕</button></div>)}</div>}
             </div>
-            <Inp label="Примечание" value={note} onChange={e => setNote(e.target.value)} />
+            <Inp label="Примечание" value={f.note} onChange={e => setF({ ...f, note: e.target.value })} />
           </div>
           <div className="flex gap-2 mt-4">
             <Btn onClick={saveTruck} disabled={saving || items.length === 0}>{saving ? "Сохраняю..." : "Запланировать"}</Btn>
@@ -1411,19 +1506,30 @@ function TrucksTab({ trucks, reload }) {
       <div className="space-y-3">
         {trucks.length === 0 && <div className="text-center py-12 text-gray-400">Фур пока нет.</div>}
         {sorted.map(t => (
-          <div key={t.id} className={`rounded-2xl p-4 border ${t.status === "запланирована" ? "bg-amber-50 border-amber-200" : "bg-white border-gray-100 shadow-sm"}`}>
+          <div key={t.id} className={`rounded-2xl p-4 border ${t.status === "принята" ? "bg-white border-gray-100 shadow-sm" : "bg-amber-50 border-amber-200"}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className="font-bold text-gray-900">🚚 Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalTonnes(t))} т</span></div>
-              <Badge color={t.status === "запланирована" ? "yellow" : "green"}>{t.status}</Badge>
+              <div className="font-bold text-gray-900">🚚 Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalTonnes(t))} т{t.price ? ` · ${fmt(t.price)} тг` : ""}</span></div>
+              <Badge color={t.status === "принята" ? "green" : t.status === "в пути" ? "yellow" : "blue"}>{t.status}</Badge>
             </div>
             <div className="space-y-1 text-sm text-gray-600">
               {t.items.map((p, i) => <div key={i}>• {p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.tonnes)} т ({fmt(Math.round(p.tonnes * 1000 / p.bag_kg))} мешков)</div>)}
             </div>
+            {(t.driver_name || t.car_number || t.whatsapp || t.logist_phone) && (
+              <div className="text-xs text-gray-500 mt-2 space-y-0.5">
+                {(t.driver_name || t.car_number) && <div>👤 {t.driver_name}{t.car_number ? ` · 🚛 ${t.car_number}` : ""}</div>}
+                {t.whatsapp && <div>📱 <a href={waLink(t.whatsapp)} target="_blank" rel="noreferrer" className="text-emerald-600">{t.whatsapp}</a></div>}
+                {t.logist_phone && <div>📞 Логист: {t.logist_phone}</div>}
+              </div>
+            )}
             {t.note && <div className="text-xs text-gray-400 mt-1">{t.note}</div>}
-            <div className="flex gap-2 mt-3">
-              {t.status === "запланирована" && <Btn size="sm" onClick={() => acceptTruck(t)} disabled={saving}>✓ Принять на склад</Btn>}
-              <Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn>
-            </div>
+            {t.status !== "принята" && (
+              <div className="flex gap-1 flex-wrap mt-3 items-center">
+                <span className="text-xs text-gray-400">Статус:</span>
+                {["грузится", "в пути", "разгрузка"].map(s => <button key={s} onClick={() => setTruckStatus(t, s)} className={`text-xs px-2 py-1 rounded-lg ${t.status === s ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{s}</button>)}
+                <Btn size="sm" onClick={() => setTruckStatus(t, "принята")} disabled={saving}>✓ Принять на склад</Btn>
+              </div>
+            )}
+            <div className="mt-2"><Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn></div>
           </div>
         ))}
       </div>
@@ -1716,7 +1822,7 @@ export default function App() {
             {tab === "stock" && <StockTab stock={data.stock} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
-            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} reload={reload} />}
+            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
