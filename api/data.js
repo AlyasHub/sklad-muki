@@ -11,6 +11,13 @@ export default async function handler(req, res) {
   if (!u) return res.status(401).json({ error: "Сессия истекла — войдите заново" });
 
   try {
+    if (op === "loadAll") {
+      // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
+      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"];
+      const out = {};
+      await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
+      return res.status(200).json({ data: out });
+    }
     if (op === "list") return res.status(200).json({ rows: await listFor(u, table) });
     if (op === "upsert") { await upsertFor(u, table, item); return res.status(200).json({ ok: true }); }
     if (op === "delete") { await deleteFor(u, table, id); return res.status(200).json({ ok: true }); }

@@ -1746,12 +1746,11 @@ export default function App() {
     if (showSpinner) setLoading(true);
     setError("");
     try {
-      // Сервер сам отдаёт каждой роли только разрешённое (остальное — пустой список)
-      const [clients, stock, orders, drivers, trucks, users, expenses] = await Promise.all(
-        ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"].map(t => dbGetAll(t).catch(() => []))
-      );
+      // Все таблицы одним запросом (быстрее, особенно на «холодном» старте)
+      const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
-      setData({ clients, stock, orders, drivers, trucks, users, expenses }); setLastSync(new Date().toLocaleTimeString("ru-RU"));
+      setData({ clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [] });
+      setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) { setError("Нет связи с базой: " + e.message); }
     if (showSpinner) setLoading(false);
   }, []);
