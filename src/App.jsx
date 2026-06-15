@@ -47,7 +47,7 @@ const clientTime = c => (c && ((c.delivery_from && c.delivery_to) ? `${c.deliver
 // Текст для накладной (бухгалтеру) по заявке клиента
 function nakladnayaText(g, client) {
   const head = (client && client.org_name) || g.clientName || "Клиент";
-  const billable = g.orders.filter(o => !o.trial); // позиции «на пробу» в накладную не идут
+  const billable = g.orders.filter(o => !o.trial && !o.isSample); // бесплатные пробы в накладную не идут
   if (!billable.length) return null;
   const lines = billable.map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
   return head + ":\n" + lines.join("\n");
@@ -508,7 +508,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                     {(() => { const co = client && (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)); return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
-                    {!driverMode && g.orders.some(o => !o.trial) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                    {!driverMode && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
                   {gPhotos.length > 0 && (
@@ -550,9 +550,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
             })}
           </div>
         )}
-        {!driverMode && dayGroups.filter(g => g.orders.some(o => !o.trial)).length > 0 && (
+        {!driverMode && dayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length > 0 && (
           <div className="mt-3">
-            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + dayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}>📋 Скопировать все накладные ({dayGroups.filter(g => g.orders.some(o => !o.trial)).length})</Btn>
+            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + dayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}>📋 Скопировать все накладные ({dayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
           </div>
         )}
       </div>
@@ -636,7 +636,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
       const parsed = await parseOrderWithAI(aiText, clients);
       setAiResult(parsed.map(p => {
         const found = clients.find(c => c.name.toLowerCase().includes(p.clientName.toLowerCase()) || p.clientName.toLowerCase().includes(c.name.toLowerCase()));
-        return { ...p, clientId: found?.id || null, clientFound: found?.name || p.clientName, price_per_kg: found ? getPrice(found, p.brand, p.grade, p.bag_kg) : null };
+        return { ...p, trial: !!p.trial, clientId: found?.id || null, clientFound: found?.name || p.clientName, price_per_kg: p.trial ? 0 : (found ? getPrice(found, p.brand, p.grade, p.bag_kg) : null) };
       }));
     } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
     setAiLoading(false);
@@ -646,7 +646,7 @@ function OrdersTab({ clients, drivers, orders, reload }) {
     setSaving(true);
     try {
       for (const p of aiResult) {
-        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.price_per_kg, driverId: "", status: "новая" });
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: "", status: "новая" });
       }
       setAiResult(null); setAiText(""); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + e.message); }
@@ -739,9 +739,9 @@ function OrdersTab({ clients, drivers, orders, reload }) {
           <h4 className="font-bold text-gray-800 mb-3">✅ Проверь и подтверди</h4>
           {aiResult.map((p, i) => (
             <div key={i} className="bg-gray-50 rounded-xl p-4 mb-3 text-sm space-y-1">
-              <div className="flex items-center gap-2"><span className="font-semibold">{p.clientFound}</span>{!p.clientId && <Badge color="red">Не в базе</Badge>}</div>
+              <div className="flex items-center gap-2"><span className="font-semibold">{p.clientFound}</span>{!p.clientId && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
               <div className="text-gray-600">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
-              <div className="text-gray-600">Дата: {p.date} · Цена: {p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">не найдена</span>}</div>
+              <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">🎁 бесплатно (на пробу)</span> : <>Цена: {p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">не найдена</span>}</>}</div>
             </div>
           ))}
           <div className="flex gap-2">
@@ -753,14 +753,16 @@ function OrdersTab({ clients, drivers, orders, reload }) {
 
       {showManual && (
         <Modal title={form.isSample ? "🧪 Пробник" : form.trial ? "🎁 На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
-          <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
-            <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
-            <span className="text-sm font-medium text-gray-700">🧪 Пробник (везём на пробу, без клиента, бесплатно)</span>
-          </label>
           {!form.isSample && (
-            <label className="flex items-center gap-2 mb-3 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
+            <label className="flex items-center gap-2 mb-2 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.trial} onChange={e => setForm({ ...form, trial: e.target.checked })} className="w-4 h-4 accent-orange-500" />
-              <span className="text-sm font-medium text-gray-700">🎁 На пробу клиенту (бесплатно, без накладной, со склада списывается)</span>
+              <span className="text-sm font-medium text-gray-700">🎁 На пробу — клиенту из базы (бесплатно, маршрут строится, без накладной)</span>
+            </label>
+          )}
+          {!form.trial && (
+            <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
+              <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
+              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно, без маршрута)</span>
             </label>
           )}
           <div className="grid grid-cols-2 gap-3">
