@@ -236,7 +236,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
 
 const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "supply", label: "🚚 Поставки" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "reports", label: "📊 Отчёты" }, { id: "access", label: "⚙️ Доступ" }];
 
-function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
+function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
@@ -400,8 +400,31 @@ function CalendarTab({ orders, drivers, clients, reload, canEdit = true, showPri
   const prevMonth = () => setCursor(new Date(year, month - 1, 1));
   const nextMonth = () => setCursor(new Date(year, month + 1, 1));
 
+  // Нехватка муки: спрос неотгруженных заявок (новая + в пути) против остатка на складе
+  const stockShortages = (() => {
+    if (driverMode || !stock.length) return [];
+    const bal = {};
+    stock.forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; bal[k] = (bal[k] || 0) + Number(s.bags || 0); });
+    const need = {};
+    orders.filter(o => o.status === "новая" || o.status === "в пути").forEach(o => { const k = `${o.brand}|${o.grade}|${o.bag_kg}`; need[k] = (need[k] || 0) + Number(o.bags || 0); });
+    const out = [];
+    Object.entries(need).forEach(([k, n]) => { const have = Math.max(0, bal[k] || 0); if (n > have) { const [brand, grade, bag_kg] = k.split("|"); out.push({ brand, grade, bag_kg, need: n, have, lack: n - have }); } });
+    return out.sort((a, b) => b.lack - a.lack);
+  })();
+
   return (
     <div className="space-y-5">
+      {stockShortages.length > 0 && (
+        <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
+          <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
+          <div className="space-y-1">
+            {stockShortages.map((s, i) => (
+              <div key={i} className="text-sm text-red-700">• <b>{s.brand} {s.grade} {s.bag_kg}кг</b> — нужно {s.need} меш., на складе {s.have} → не хватает <b>{s.lack} меш.</b></div>
+            ))}
+          </div>
+          <div className="text-xs text-red-600 mt-2">Закажи приход (фуру) или перенеси часть заявок на другой день.</div>
+        </div>
+      )}
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
         <div className="flex items-center justify-between mb-4">
           <button onClick={prevMonth} className="px-3 py-1 rounded-lg hover:bg-gray-100 text-gray-600 text-lg">‹</button>
@@ -1861,7 +1884,7 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}

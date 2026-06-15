@@ -4,9 +4,24 @@ import { dbList } from "./_lib.js";
 
 const fmt = n => Number(n || 0).toLocaleString("ru-RU");
 
-function buildText(dateStr, day, clients, drivers) {
+// Нехватка муки: спрос неотгруженных заявок (новая + в пути) против остатка на складе
+function buildShortages(orders, stock) {
+  const bal = {};
+  (stock || []).forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; bal[k] = (bal[k] || 0) + Number(s.bags || 0); });
+  const need = {};
+  orders.filter(o => o.status === "новая" || o.status === "в пути").forEach(o => { const k = `${o.brand}|${o.grade}|${o.bag_kg}`; need[k] = (need[k] || 0) + Number(o.bags || 0); });
+  const out = [];
+  Object.entries(need).forEach(([k, n]) => { const have = Math.max(0, bal[k] || 0); if (n > have) { const [brand, grade, bag_kg] = k.split("|"); out.push({ brand, grade, bag_kg, need: n, have, lack: n - have }); } });
+  return out.sort((a, b) => b.lack - a.lack);
+}
+
+function buildText(dateStr, day, clients, drivers, orders, stock) {
   const dDisplay = dateStr.split("-").reverse().join(".");
-  if (!day.length) return `Отчёт за ${dDisplay}\n\nЗа день отгрузок нет.`;
+  const shortages = buildShortages(orders || [], stock);
+  const shortBlock = shortages.length
+    ? "\n\n⚠️ НЕ ХВАТАЕТ МУКИ ПОД ЗАЯВКИ:\n" + shortages.map(s => `• ${s.brand} ${s.grade} ${s.bag_kg}кг — нужно ${s.need} меш., на складе ${s.have} → не хватает ${s.lack} меш.`).join("\n") + "\nЗакажи приход или перенеси часть заявок."
+    : "";
+  if (!day.length) return `Отчёт за ${dDisplay}\n\nЗа день отгрузок нет.${shortBlock}`;
   const totalKg = day.reduce((s, o) => s + o.bags * o.bag_kg, 0);
   const totalSum = day.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
   const groups = {};
@@ -24,7 +39,7 @@ function buildText(dateStr, day, clients, drivers) {
   const byDrv = {};
   day.forEach(o => { if (!o.driverId) return; const dr = drivers.find(x => x.id === o.driverId); if (!dr) return; byDrv[o.driverId] = byDrv[o.driverId] || { name: dr.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; byDrv[o.driverId].kg += kg; byDrv[o.driverId].pay += kg * (dr.rate_per_kg || 0); });
   if (Object.keys(byDrv).length) { L.push("", "Водители:"); Object.values(byDrv).forEach(v => L.push(`• ${v.name}: ${fmt(v.kg)} кг · к оплате ${fmt(v.pay)} тг`)); }
-  return L.join("\n");
+  return L.join("\n") + shortBlock;
 }
 
 function buildCsv(day, clients, drivers) {
@@ -47,7 +62,7 @@ export default async function handler(req, res) {
 
   try {
     const dateStr = (req.query && req.query.date) || new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10); // дата по Астане (UTC+5)
-    const [orders, clients, drivers] = await Promise.all([dbList("orders"), dbList("clients"), dbList("drivers")]);
+    const [orders, clients, drivers, stock] = await Promise.all([dbList("orders"), dbList("clients"), dbList("drivers"), dbList("stock")]);
     const day = orders.filter(o => o.date === dateStr);
     const dDisplay = dateStr.split("-").reverse().join(".");
 
@@ -61,7 +76,7 @@ export default async function handler(req, res) {
         from,
         to: to.split(",").map(s => s.trim()).filter(Boolean),
         subject: `Отчёт склада за ${dDisplay}`,
-        text: buildText(dateStr, day, clients, drivers),
+        text: buildText(dateStr, day, clients, drivers, orders, stock),
         attachments,
       }),
     });
