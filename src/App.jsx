@@ -640,11 +640,34 @@ function OrdersTab({ clients, drivers, orders, reload }) {
 
   const assignDriver = async (o, driverId) => { try { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
   const deleteOrder = async id => { try { await dbDelete("orders", id); await reload("orders"); } catch (e) { notifyErr(e); } };
+  // Действия на всю заявку клиента (несколько позиций)
+  const assignDriverGroup = async (g, driverId) => { try { for (const o of g.orders) await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const deleteGroup = async g => { if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return; try { for (const o of g.orders) await dbDelete("orders", o.id); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const setGroupStatus = async (g, status) => {
+    try {
+      for (const o of g.orders) {
+        if (o.status === status) continue;
+        await dbUpsert("orders", { ...o, status });
+        if (status === "отгружена" && o.status !== "отгружена") { const kg = o.bags * o.bag_kg; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` }); }
+      }
+      await reload("stock"); await reload("orders");
+    } catch (e) { notifyErr(e); }
+  };
 
   const filtered = orders.filter(o => !filterDate || o.date === filterDate);
   const totalKg = filtered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
   const totalSum = filtered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
-  const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red" };
+  const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red", "частично": "gray" };
+  // Группируем позиции одного клиента (за дату) в одну заявку
+  const filteredGroups = (() => {
+    const m = {};
+    [...filtered].sort((a, b) => a.date.localeCompare(b.date)).forEach(o => {
+      const key = (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date;
+      if (!m[key]) m[key] = { key, clientName: o.clientName, isSample: false, orders: [] };
+      m[key].orders.push(o); if (o.isSample) m[key].isSample = true;
+    });
+    return Object.values(m);
+  })();
 
   return (
     <div className="space-y-5">
@@ -710,22 +733,29 @@ function OrdersTab({ clients, drivers, orders, reload }) {
 
       {filtered.length === 0 ? <div className="text-center py-12 text-gray-400">Заявок нет.</div> : (
         <div className="space-y-3">
-          {[...filtered].sort((a, b) => a.date.localeCompare(b.date)).map(o => {
-            const driver = drivers.find(d => d.id === o.driverId);
-            const kg = o.bags * o.bag_kg; const sum = kg * (o.price_per_kg || 0);
+          {filteredGroups.map(g => {
+            const driver = drivers.find(d => d.id === g.orders[0].driverId);
+            const statuses = [...new Set(g.orders.map(o => o.status))];
+            const gStatus = statuses.length === 1 ? statuses[0] : "частично";
+            const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+            const gSum = g.orders.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+            const allNew = g.orders.every(o => o.status === "новая");
+            const allRoute = g.orders.every(o => o.status === "в пути");
             return (
-              <div key={o.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <div key={g.key} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div>
-                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{o.clientName || "Клиент"}</span><Badge color={sc[o.status] || "gray"}>{o.status}</Badge>{o.isSample && <Badge color="yellow">🧪 Проба</Badge>}</div>
-                    <div className="text-sm text-gray-500 mt-1">{o.brand} · {o.grade} · {o.bag_kg}кг × {o.bags} = <b>{fmt(kg)} кг</b></div>
-                    <div className="text-sm text-gray-500">{o.price_per_kg ? `${fmt(o.price_per_kg)} тг/кг · ${fmt(sum)} тг` : "Цена не указана"}</div>
-                    <div className="text-xs text-gray-400 mt-1">📅 {o.date}{driver ? ` · 🚛 ${driver.name}` : ""}{o.created_by_name ? ` · ✍️ ${o.created_by_name}` : ""}</div>
+                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{g.clientName || "Клиент"}</span><Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>{g.isSample && <Badge color="yellow">🧪 Проба</Badge>}</div>
+                    <div className="text-sm text-gray-500 mt-1 space-y-0.5">
+                      {g.orders.map(o => <div key={o.id} className="flex items-center gap-2 flex-wrap"><span>• {o.brand} · {o.grade}</span><span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span><span>= <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</span></div>)}
+                    </div>
+                    {g.orders.length > 1 && <div className="text-sm text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
+                    <div className="text-xs text-gray-400 mt-1">📅 {g.orders[0].date}{driver ? ` · 🚛 ${driver.name}` : ""}{g.orders[0].created_by_name ? ` · ✍️ ${g.orders[0].created_by_name}` : ""}</div>
                   </div>
                   <div className="flex gap-1 flex-wrap">
-                    {o.status === "новая" && <><Btn size="sm" variant="secondary" onClick={() => updateStatus(o, "в пути")}>В путь</Btn><select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={o.driverId || ""} onChange={e => assignDriver(o, e.target.value)}><option value="">Водитель</option>{drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></>}
-                    {o.status === "в пути" && <Btn size="sm" onClick={() => updateStatus(o, "отгружена")}>✓ Доставлено</Btn>}
-                    <Btn size="sm" variant="danger" onClick={() => deleteOrder(o.id)}>✕</Btn>
+                    {allNew && <><Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>В путь</Btn><select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}><option value="">Водитель</option>{drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></>}
+                    {allRoute && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
+                    <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
                   </div>
                 </div>
               </div>
