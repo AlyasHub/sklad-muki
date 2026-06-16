@@ -76,7 +76,7 @@ async function sha256(str) {
 const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reports", "orders", "supply", "drivers", "expenses", "access"],
+  director: ["today", "calendar", "stock", "clients", "reports", "supply", "drivers", "expenses", "access"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
@@ -244,7 +244,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "orders", label: "📋 Все заявки" }, { id: "supply", label: "🚚 Поставки" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
+const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "supply", label: "🚚 Поставки" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
 
 function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -1851,12 +1851,17 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
   );
 }
 
-function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () => {}, canEdit = true }) {
+function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, canEdit = true, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiError, setAiError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+  const [savingManual, setSavingManual] = useState(false);
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false });
+  // Открыть форму заявки по сигналу с кнопки «+»
+  useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
   const vis = driverFilter != null ? orders.filter(o => o.driverId === driverFilter) : orders;
   const groupCount = list => new Set(list.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
@@ -1914,6 +1919,27 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
   // Перенести доставку на другую дату (если сегодня не получилось отгрузить)
   const rescheduleGroup = async (g, date) => { if (!date) return; try { for (const o of g.orders) await dbUpsert("orders", { ...o, date }); await reload("orders"); } catch (e) { notifyErr(e); } };
 
+  // Добавить заявку вручную (форма та же, что была в «Заявках»)
+  const addManual = async () => {
+    const isTrial = form.trial && !form.isSample;
+    if (isTrial && !form.clientId) { alert("Выбери клиента для пробы."); return; }
+    setSavingManual(true);
+    const client = form.isSample ? null : clients.find(c => c.id === form.clientId);
+    const price = (form.isSample || isTrial) ? 0 : (form.price_per_kg || (client ? priceFor(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
+    try {
+      await dbUpsert("orders", {
+        id: uid(), date: form.date, brand: form.brand, grade: form.grade,
+        bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId,
+        price_per_kg: Number(price), status: "новая",
+        isSample: form.isSample, trial: isTrial,
+        clientId: form.isSample ? null : form.clientId,
+        clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
+      });
+      setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "" })); await reload("orders");
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSavingManual(false);
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
@@ -1927,7 +1953,7 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
         {aiError && <div className="text-sm text-red-500 mt-2">{aiError}</div>}
         <div className="mt-2 flex gap-2">
           <button onClick={handleAI} disabled={aiLoading || !aiText.trim()} style={{ flex: 2 }} className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{aiLoading ? "Разбираю..." : "📲 Разобрать"}</button>
-          <button onClick={onManual} style={{ flex: 1 }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-3 py-2.5 text-sm whitespace-nowrap">✍️ Вручную</button>
+          <button onClick={() => setShowManual(true)} style={{ flex: 1 }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-3 py-2.5 text-sm whitespace-nowrap">✍️ Вручную</button>
         </div>
         {aiResult && (
           <div className="mt-3 border-t border-gray-100 pt-3 space-y-2">
@@ -1994,6 +2020,39 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
           </div>
         )}
       </div>
+
+      {showManual && (
+        <Modal title={form.isSample ? "🧪 Пробник" : form.trial ? "🎁 На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
+          {!form.isSample && (
+            <label className="flex items-center gap-2 mb-2 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
+              <input type="checkbox" checked={form.trial} onChange={e => setForm({ ...form, trial: e.target.checked })} className="w-4 h-4 accent-orange-500" />
+              <span className="text-sm font-medium text-gray-700">🎁 На пробу — клиенту из базы (бесплатно, маршрут строится, без накладной)</span>
+            </label>
+          )}
+          {!form.trial && (
+            <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
+              <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
+              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно, без маршрута)</span>
+            </label>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            {form.isSample
+              ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
+              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} /></div>}
+            <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
+            <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
+            <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+            <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
+            {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
+            <Inp label="Дата доставки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            <div className="col-span-2"><Sel label="Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={addManual} disabled={savingManual}>{savingManual ? "Сохраняю..." : "Добавить"}</Btn>
+            <Btn variant="secondary" onClick={() => setShowManual(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2088,8 +2147,7 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} onManual={() => { setTab("orders"); setOpenOrderSignal(n => n + 1); }} />}
-            {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} openSignal={openOrderSignal} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
@@ -2109,7 +2167,7 @@ export default function App() {
               <div className="max-w-2xl mx-auto px-4 relative h-full">
                 <div className="absolute right-4 bottom-40 flex flex-col items-end gap-3" onClick={e => e.stopPropagation()}>
                   <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">📲</span></button>
-                  <button onClick={() => { goTab("orders"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">✍️</span></button>
+                  <button onClick={() => { goTab("today"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">✍️</span></button>
                   <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">💸</span></button>
                 </div>
               </div>
