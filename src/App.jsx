@@ -1872,8 +1872,13 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
 function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), price_per_kg: "", note: "" });
+  const blankPos = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
+  const [form, setForm] = useState({ clientId: "", date: TODAY(), note: "", positions: [{ ...blankPos }] });
   const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
+  const openAdd = () => { setForm({ clientId: "", date: TODAY(), note: "", positions: [{ ...blankPos }] }); setShowAdd(true); };
+  const updatePos = (i, field, value) => setForm(f => ({ ...f, positions: f.positions.map((p, idx) => idx === i ? { ...p, [field]: value } : p) }));
+  const addPos = () => setForm(f => ({ ...f, positions: [...f.positions, { ...blankPos }] }));
+  const removePos = i => setForm(f => ({ ...f, positions: f.positions.filter((_, idx) => idx !== i) }));
 
   const list = orders.filter(o => o.fromKaraganda);
   const byDate = {};
@@ -1882,13 +1887,16 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   const totalKg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
 
   const save = async () => {
-    if (!form.clientId || !form.bags) { alert("Выбери клиента и укажи число мешков."); return; }
+    const valid = form.positions.filter(p => Number(p.bags) > 0);
+    if (!form.clientId || valid.length === 0) { alert("Выбери клиента и укажи хотя бы одну позицию с мешками."); return; }
     setSaving(true);
     const client = clients.find(c => c.id === form.clientId);
-    const price = form.price_per_kg || priceFor(client, form.brand, form.grade, Number(form.bag_kg)) || 0;
     try {
-      await dbUpsert("orders", { id: uid(), date: form.date, clientId: form.clientId, clientName: client?.name || "", brand: form.brand, grade: form.grade, bag_kg: Number(form.bag_kg), bags: Number(form.bags), price_per_kg: Number(price), status: "отгружена", fromKaraganda: true, note: form.note });
-      setShowAdd(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "" })); await reload("orders");
+      for (const p of valid) {
+        const price = p.price_per_kg || priceFor(client, p.brand, p.grade, Number(p.bag_kg)) || 0;
+        await dbUpsert("orders", { id: uid(), date: form.date, clientId: form.clientId, clientName: client?.name || "", brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: Number(price), status: "отгружена", fromKaraganda: true, note: form.note });
+      }
+      setShowAdd(false); await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
@@ -1901,20 +1909,31 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
       </div>
       <div className="flex items-center justify-between">
         <div className="text-sm text-gray-500">Всего отправлено: <b>{fmt(totalKg)} кг</b></div>
-        {canEdit && <Btn onClick={() => setShowAdd(true)}>+ Отгрузка</Btn>}
+        {canEdit && <Btn onClick={openAdd}>+ Отгрузка</Btn>}
       </div>
 
       {showAdd && (
         <Modal title="Отгрузка из Караганды" onClose={() => setShowAdd(false)}>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} /></div>
-            <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
-            <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
-            <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
-            <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />
-            <Inp label="Дата отправки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-            <div className="col-span-2"><Inp label="Примечание (фура/машина)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. фура №2, Олжас" /></div>
+          <div className="space-y-3">
+            <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} />
+            <div className="grid grid-cols-2 gap-3">
+              <Inp label="Дата отправки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+              <Inp label="Примечание (фура)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. фура №2, Олжас" />
+            </div>
+            <div className="text-sm font-medium text-gray-700 pt-1">Что отправляем:</div>
+            {form.positions.map((p, i) => (
+              <div key={i} className="border border-gray-200 rounded-xl p-3 relative">
+                {form.positions.length > 1 && <button onClick={() => removePos(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600 text-lg leading-none" title="Убрать позицию">✕</button>}
+                <div className="grid grid-cols-2 gap-2">
+                  <Sel label="Бренд" value={p.brand} onChange={e => updatePos(i, "brand", e.target.value)} options={BRANDS} />
+                  <Sel label="Сорт" value={p.grade} onChange={e => updatePos(i, "grade", e.target.value)} options={GRADES} />
+                  <Sel label="Фасовка" value={p.bag_kg} onChange={e => updatePos(i, "bag_kg", e.target.value)} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+                  <Inp label="Мешков" type="number" value={p.bags} onChange={e => updatePos(i, "bags", e.target.value)} />
+                  <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={p.price_per_kg || ""} onChange={e => updatePos(i, "price_per_kg", e.target.value)} /></div>
+                </div>
+              </div>
+            ))}
+            <button onClick={addPos} className="w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm font-medium text-gray-500 hover:bg-gray-50">+ ещё вид муки</button>
           </div>
           <div className="flex gap-2 mt-4">
             <Btn onClick={save} disabled={saving}>{saving ? "Сохраняю..." : "Записать отгрузку"}</Btn>
