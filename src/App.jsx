@@ -76,7 +76,7 @@ async function sha256(str) {
 const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reports", "supply", "drivers", "expenses", "access"],
+  director: ["today", "calendar", "stock", "clients", "reports", "supply", "karaganda", "drivers", "expenses", "access"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
@@ -86,8 +86,8 @@ const PRIMARY_NAV = {
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", orders: "📋", supply: "🚚", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", orders: "Заявки", supply: "Поставки", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -244,7 +244,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "supply", label: "🚚 Поставки" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
+const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
 
 function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -252,8 +252,10 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
   const [uploadingId, setUploadingId] = useState(null);
   const [photoView, setPhotoView] = useState(null);
 
+  // Отгрузки из Караганды идут напрямую клиенту — в логистику/маршруты Астаны не показываем
+  const local = orders.filter(o => !o.fromKaraganda);
   // Водитель видит только свои отгрузки
-  const vis = driverFilter != null ? orders.filter(o => o.driverId === driverFilter) : orders;
+  const vis = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
 
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
 
@@ -1303,7 +1305,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   // 🔮 Прогноз: спрос по дням недели за последние 8 недель → ожидание на неделю vs остатки
   const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
   const cutoffD = new Date(now); cutoffD.setDate(cutoffD.getDate() - 56);
-  const recentDel = orders.filter(o => o.status === "отгружена" && new Date(o.date) >= cutoffD);
+  const recentDel = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && new Date(o.date) >= cutoffD);
   const demandWD = {};
   recentDel.forEach(o => { const wd = new Date(o.date).getDay(); const p = `${o.brand} ${o.grade}`; (demandWD[wd] = demandWD[wd] || {})[p] = (demandWD[wd][p] || 0) + o.bags * o.bag_kg; });
   const expectedWk = {};
@@ -1320,11 +1322,17 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   const ds = {};
   delivered.forEach(o => { if (!o.driverId) return; const d = drivers.find(x => x.id === o.driverId); if (!d) return; if (!ds[o.driverId]) ds[o.driverId] = { name: d.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; ds[o.driverId].kg += kg; ds[o.driverId].pay += kg * d.rate_per_kg; });
   const totalPay = Object.values(ds).reduce((s, d) => s + d.pay, 0);
+  // Из Караганды — напрямую клиенту: в объём/деньги входит, но в закуп для Астаны НЕ берём
+  const deliveredKaraganda = delivered.filter(o => o.fromKaraganda);
+  const karagandaKg = deliveredKaraganda.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  const karagandaSum = deliveredKaraganda.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
   const bp = {}, bw = {}, bc = {};
   delivered.forEach(o => {
     const kg = o.bags * o.bag_kg; const rev = kg * (o.price_per_kg || 0);
-    const pk = `${o.brand} · ${o.grade}`; if (!bp[pk]) bp[pk] = { kg: 0, revenue: 0, orders: 0 }; bp[pk].kg += kg; bp[pk].revenue += rev; bp[pk].orders += 1;
-    const wk = `${o.bag_kg} кг мешки`; if (!bw[wk]) bw[wk] = { kg: 0, bags: 0 }; bw[wk].kg += kg; bw[wk].bags += o.bags;
+    if (!o.fromKaraganda) { // приоритеты закупа и фасовки — только по своему складу
+      const pk = `${o.brand} · ${o.grade}`; if (!bp[pk]) bp[pk] = { kg: 0, revenue: 0, orders: 0 }; bp[pk].kg += kg; bp[pk].revenue += rev; bp[pk].orders += 1;
+      const wk = `${o.bag_kg} кг мешки`; if (!bw[wk]) bw[wk] = { kg: 0, bags: 0 }; bw[wk].kg += kg; bw[wk].bags += o.bags;
+    }
     const ck = o.clientName || "?"; if (!bc[ck]) bc[ck] = { kg: 0, revenue: 0 }; bc[ck].kg += kg; bc[ck].revenue += rev;
   });
   const pl = Object.entries(bp).sort((a, b) => b[1].kg - a[1].kg);
@@ -1409,6 +1417,16 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
             ))}
           </div>
           <div className="text-xs text-gray-400 mt-2">Везём клиентам на пробу бесплатно. Стоимость оценена по средней закупочной цене и учтена в расходах.</div>
+        </div>
+      )}
+
+      {karagandaKg > 0 && (
+        <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100 rounded-2xl p-4">
+          <div className="flex items-center justify-between">
+            <div className="font-bold text-gray-800">🏬 Из Караганды (напрямую клиентам)</div>
+            <div className="text-right"><div className="text-lg font-bold text-orange-600">{fmt(karagandaKg)} кг</div>{karagandaSum > 0 && <div className="text-xs text-gray-500">{fmt(karagandaSum)} тг</div>}</div>
+          </div>
+          <div className="text-xs text-gray-500 mt-2">Входит в объём и деньги, но склад Астаны не трогает и в закуп не считается.</div>
         </div>
       )}
 
@@ -1851,6 +1869,93 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
   );
 }
 
+function KaragandaTab({ orders, clients, reload, canEdit = true }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), price_per_kg: "", note: "" });
+  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
+
+  const list = orders.filter(o => o.fromKaraganda);
+  const byDate = {};
+  list.forEach(o => { (byDate[o.date] = byDate[o.date] || []).push(o); });
+  const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+  const totalKg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+
+  const save = async () => {
+    if (!form.clientId || !form.bags) { alert("Выбери клиента и укажи число мешков."); return; }
+    setSaving(true);
+    const client = clients.find(c => c.id === form.clientId);
+    const price = form.price_per_kg || priceFor(client, form.brand, form.grade, Number(form.bag_kg)) || 0;
+    try {
+      await dbUpsert("orders", { id: uid(), date: form.date, clientId: form.clientId, clientName: client?.name || "", brand: form.brand, grade: form.grade, bag_kg: Number(form.bag_kg), bags: Number(form.bags), price_per_kg: Number(price), status: "отгружена", fromKaraganda: true, note: form.note });
+      setShowAdd(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "" })); await reload("orders");
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
+  const del = async o => { if (!confirm("Удалить эту отгрузку из Караганды?")) return; try { await dbDelete("orders", o.id); await reload("orders"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-800">
+        🏬 Склад <b>Караганда</b>. Фуры идут <b>напрямую клиентам</b>. Эти отгрузки идут вам в отчёт, долги и историю клиента, но <b>склад в Астане не трогают</b>.
+      </div>
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-gray-500">Всего отправлено: <b>{fmt(totalKg)} кг</b></div>
+        {canEdit && <Btn onClick={() => setShowAdd(true)}>+ Отгрузка</Btn>}
+      </div>
+
+      {showAdd && (
+        <Modal title="Отгрузка из Караганды" onClose={() => setShowAdd(false)}>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} /></div>
+            <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
+            <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
+            <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+            <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
+            <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />
+            <Inp label="Дата отправки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            <div className="col-span-2"><Inp label="Примечание (фура/машина)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. фура №2, Олжас" /></div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={save} disabled={saving}>{saving ? "Сохраняю..." : "Записать отгрузку"}</Btn>
+            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {dates.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">Отгрузок из Караганды пока нет.</div>
+      ) : dates.map(date => {
+        const day = byDate[date];
+        const dayKg = day.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+        return (
+          <div key={date} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-bold text-gray-800">🚛 {date.split("-").reverse().join(".")}</div>
+              <div className="text-sm text-gray-500">{fmt(dayKg)} кг</div>
+            </div>
+            <div className="space-y-2">
+              {day.map(o => (
+                <div key={o.id} className="flex items-start justify-between gap-2 border-t border-gray-50 pt-2 first:border-0 first:pt-0">
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-900">{o.clientName}</div>
+                    <div className="text-sm text-gray-600 flex items-center gap-2 flex-wrap mt-0.5">
+                      <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
+                      <span>= <b>{fmt(o.bags * o.bag_kg)} кг</b> · {o.brand} {o.grade}{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</span>
+                    </div>
+                    {o.note && <div className="text-xs text-gray-400 mt-0.5">📝 {o.note}</div>}
+                  </div>
+                  {canEdit && <button onClick={() => del(o)} className="text-red-400 hover:text-red-600 flex-shrink-0 text-lg leading-none" title="Удалить">✕</button>}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, canEdit = true, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -1863,7 +1968,8 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
   // Открыть форму заявки по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
-  const vis = driverFilter != null ? orders.filter(o => o.driverId === driverFilter) : orders;
+  const local = orders.filter(o => !o.fromKaraganda); // карагандинские отгрузки тут не показываем
+  const vis = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
   const groupCount = list => new Set(list.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
   const todayList = vis.filter(o => o.date === TODAY());
   const tomorrowList = vis.filter(o => o.date === TOMORROW());
@@ -2154,6 +2260,7 @@ export default function App() {
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
+            {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
