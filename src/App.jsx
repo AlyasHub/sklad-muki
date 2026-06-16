@@ -1851,7 +1851,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
   );
 }
 
-function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () => {} }) {
+function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () => {}, canEdit = true }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -1897,6 +1897,21 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
     setSaving(false);
   };
 
+  // Смена статуса доставки — со списанием/возвратом склада, как в Календаре
+  const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
+  const setGroupStatus = async (g, status) => {
+    try {
+      for (const o of g.orders) {
+        if (o.status === status) continue;
+        const kg = o.bags * o.bag_kg;
+        await dbUpsert("orders", { ...o, status });
+        if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+        else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+      }
+      await reload("stock"); await reload("orders");
+    } catch (e) { notifyErr(e); }
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
@@ -1939,6 +1954,8 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
               const statuses = [...new Set(g.orders.map(o => o.status))];
               const st = statuses.length === 1 ? statuses[0] : "частично";
               const shipped = st === "отгружена";
+              const allNew = g.orders.every(o => o.status === "новая");
+              const allRoute = g.orders.every(o => o.status === "в пути");
               return (
                 <div key={g.key} className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
@@ -1953,6 +1970,13 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
                       </div>
                     ))}
                   </div>
+                  {canEdit && (
+                    <div className="flex gap-2 mt-3">
+                      {allNew && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
+                      {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
+                      {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -2053,7 +2077,7 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} onManual={() => { setTab("orders"); setOpenOrderSignal(n => n + 1); }} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} onManual={() => { setTab("orders"); setOpenOrderSignal(n => n + 1); }} />}
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
