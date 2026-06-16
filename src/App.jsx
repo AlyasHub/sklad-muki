@@ -495,10 +495,10 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
               const allShipped = g.orders.every(o => o.status === "отгружена");
               const firstId = g.orders[0].id;
               return (
-                <div key={g.key} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm shadow-sm">
+                <div key={g.key} className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900">{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</span>
-                    <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</span>
+                    {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
                   <div className="mt-1 space-y-1">
@@ -2132,9 +2132,12 @@ export default function App() {
     <div className="min-h-screen bg-gray-50 font-sans">
       <div className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-40 shadow-sm">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-black text-gray-900">🌾 Darad</h1>
-            <p className="text-xs text-gray-400">{user.name} · {ROLES[user.role] || user.role}{lastSync ? ` · 🟢 ${lastSync}` : ""}</p>
+          <div className="flex items-center gap-2.5">
+            <img src="/icon-192.png" alt="Darad" className="w-9 h-9 rounded-lg flex-shrink-0" />
+            <div>
+              <h1 className="text-xl font-black text-gray-900">Darad</h1>
+              <p className="text-xs text-gray-400">{user.name} · {ROLES[user.role] || user.role}{lastSync ? ` · 🟢 ${lastSync}` : ""}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-sm font-bold px-3 py-1.5 rounded-full">{newOrders} новых</div>}
