@@ -988,6 +988,8 @@ function ClientsTab({ clients, orders = [], reload }) {
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState("");
   const [historyClient, setHistoryClient] = useState(null);
+  const [search, setSearch] = useState("");
+  const [staleOnly, setStaleOnly] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
 
@@ -1026,9 +1028,28 @@ function ClientsTab({ clients, orders = [], reload }) {
   };
   const deleteClient = async id => { await dbDelete("clients", id); await reload("clients"); };
 
+  // Дата последнего заказа по каждому клиенту (любая продажа, включая Караганду)
+  const STALE_DAYS = 14;
+  const lastByClient = {};
+  orders.forEach(o => { if (!o.clientId) return; if (!lastByClient[o.clientId] || o.date > lastByClient[o.clientId]) lastByClient[o.clientId] = o.date; });
+  const daysSince = d => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null;
+  const isStale = c => { const days = daysSince(lastByClient[c.id]); return days !== null && days >= STALE_DAYS; }; // заказывал, но давно
+
+  const q = search.trim().toLowerCase();
+  let shown = clients.filter(c => !q || [c.name, c.org_name, c.contact_name, c.contact].some(v => (v || "").toLowerCase().includes(q)));
+  if (staleOnly) shown = shown.filter(isStale);
+  shown = shown.sort((a, b) => staleOnly ? (lastByClient[a.id] || "").localeCompare(lastByClient[b.id] || "") : (a.name || "").localeCompare(b.name || ""));
+  const staleCount = clients.filter(isStale).length;
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3><Btn onClick={openNew}>+ Новый клиент</Btn></div>
+      <div className="space-y-2">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Поиск по имени, организации, телефону" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
+        {staleCount > 0 && (
+          <button onClick={() => setStaleOnly(v => !v)} className={`text-xs font-medium px-3 py-1.5 rounded-full ${staleOnly ? "bg-orange-500 text-white" : "bg-orange-50 text-orange-700"}`}>⏳ Давно не заказывали ({staleCount}){staleOnly ? " ✕" : ""}</button>
+        )}
+      </div>
       {showAdd && (
         <Modal title={editId ? "Редактировать" : "Новый клиент"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
@@ -1082,17 +1103,22 @@ function ClientsTab({ clients, orders = [], reload }) {
       )}
       <div className="space-y-3">
         {clients.length === 0 && <div className="text-center py-12 text-gray-400">Клиентов нет.</div>}
-        {clients.map(c => {
+        {clients.length > 0 && shown.length === 0 && <div className="text-center py-12 text-gray-400">Ничего не найдено.</div>}
+        {shown.map(c => {
           const debt = clientDebt(c);
+          const last = lastByClient[c.id];
+          const days = daysSince(last);
+          const stale = days !== null && days >= STALE_DAYS;
           return (
           <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
             <div className="flex items-start justify-between">
               <div>
-                <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}</div>
+                <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
                 {c.org_name && <div className="text-sm text-gray-500">🏢 {c.org_name}</div>}
                 {c.contact_name && <div className="text-sm text-gray-500">👤 {c.contact_name}</div>}
                 {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
                 {c.contact && <div className="text-sm text-gray-500">📱 {c.contact}</div>}
+                <div className="text-xs text-gray-500 mt-1">🕒 {last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
                 {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">📦 {c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
                 {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
               </div>
