@@ -76,10 +76,18 @@ async function sha256(str) {
 const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["orders", "calendar", "stock", "supply", "clients", "drivers", "expenses", "reports", "access"],
-  accountant: ["calendar", "reports"],
+  director: ["today", "calendar", "stock", "clients", "reports", "orders", "supply", "drivers", "expenses", "access"],
+  accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
+// Что показываем в нижней панели (остальное — под «Ещё»)
+const PRIMARY_NAV = {
+  director: ["today", "calendar", "stock", "clients", "reports"],
+  accountant: ["today", "calendar", "reports"],
+  driver: ["calendar"],
+};
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", orders: "📋", supply: "🚚", drivers: "🚛", expenses: "💸", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", orders: "Заявки", supply: "Поставки", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -236,7 +244,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "orders", label: "📋 Заявки" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "supply", label: "🚚 Поставки" }, { id: "clients", label: "🏢 Клиенты" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "reports", label: "📊 Отчёты" }, { id: "access", label: "⚙️ Доступ" }];
+const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "orders", label: "📋 Все заявки" }, { id: "supply", label: "🚚 Поставки" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
 
 function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -615,7 +623,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
   );
 }
 
-function OrdersTab({ clients, drivers, orders, reload }) {
+function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -624,6 +632,8 @@ function OrdersTab({ clients, drivers, orders, reload }) {
   const [saving, setSaving] = useState(false);
   const [filterDate, setFilterDate] = useState(TODAY());
   const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TOMORROW(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false });
+  // Открыть форму заявки по сигналу с кнопки «+»
+  useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
   function getPrice(client, brand, grade, bag_kg) {
     return (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
@@ -1783,12 +1793,14 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function ExpensesTab({ expenses, reload }) {
+function ExpensesTab({ expenses, reload, openSignal = 0 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const blank = { date: TODAY(), category: EXPENSE_CATS[0], amount: "", note: "" };
   const [form, setForm] = useState(blank);
+  // Открыть форму расхода по сигналу с кнопки «+»
+  useEffect(() => { if (openSignal) { setEditId(null); setForm(blank); setShowAdd(true); } }, [openSignal]);
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
   const openEdit = x => { setEditId(x.id); setForm({ date: x.date, category: x.category, amount: x.amount, note: x.note || "" }); setShowAdd(true); };
@@ -1839,13 +1851,127 @@ function ExpensesTab({ expenses, reload }) {
   );
 }
 
+function TodayTab({ orders, clients, reload, driverFilter = null }) {
+  const [aiText, setAiText] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+  const [aiError, setAiError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const vis = driverFilter != null ? orders.filter(o => o.driverId === driverFilter) : orders;
+  const groupCount = list => new Set(list.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
+  const todayList = vis.filter(o => o.date === TODAY());
+  const tomorrowList = vis.filter(o => o.date === TOMORROW());
+
+  const todayGroups = (() => {
+    const m = {};
+    todayList.forEach(o => {
+      const k = o.clientId || ("nm:" + (o.clientName || ""));
+      if (!m[k]) m[k] = { key: k, clientId: o.clientId, clientName: o.clientName, isTrial: false, orders: [] };
+      m[k].orders.push(o); if (o.trial) m[k].isTrial = true;
+    });
+    return Object.values(m);
+  })();
+
+  const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red", "частично": "gray" };
+  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
+
+  const handleAI = async () => {
+    if (!aiText.trim()) return;
+    setAiLoading(true); setAiError(""); setAiResult(null);
+    try {
+      const parsed = await parseOrderWithAI(aiText, clients);
+      setAiResult(parsed.map(p => {
+        const found = clients.find(c => c.name.toLowerCase().includes(p.clientName.toLowerCase()) || p.clientName.toLowerCase().includes(c.name.toLowerCase()));
+        return { ...p, trial: !!p.trial, clientId: found?.id || null, clientFound: found?.name || p.clientName, price_per_kg: p.trial ? 0 : (found ? priceFor(found, p.brand, p.grade, p.bag_kg) : null) };
+      }));
+    } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
+    setAiLoading(false);
+  };
+  const confirmAI = async () => {
+    setSaving(true);
+    try {
+      for (const p of aiResult) await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: "", status: "новая" });
+      setAiResult(null); setAiText(""); await reload("orders");
+    } catch (e) { setAiError("Ошибка: " + (e && e.message ? e.message : e)); }
+    setSaving(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">Заявки сегодня</div><div className="text-3xl font-black text-gray-900">{groupCount(todayList)}</div></div>
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">На завтра</div><div className="text-3xl font-black text-gray-900">{groupCount(tomorrowList)}</div></div>
+      </div>
+
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+        <div className="font-semibold text-gray-800 mb-2">📲 Разобрать заявку из WhatsApp</div>
+        <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={3} placeholder="Вставь сюда сообщение из WhatsApp, напр.: Сегафредо 500 кг высший сорт на завтра" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
+        {aiError && <div className="text-sm text-red-500 mt-2">{aiError}</div>}
+        <button onClick={handleAI} disabled={aiLoading || !aiText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{aiLoading ? "Разбираю..." : "Разобрать"}</button>
+        {aiResult && (
+          <div className="mt-3 border-t border-gray-100 pt-3 space-y-2">
+            {aiResult.map((p, i) => (
+              <div key={i} className="bg-gray-50 rounded-xl p-3 text-sm">
+                <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{!p.clientId && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
+                <div className="text-gray-600">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
+                <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">бесплатно</span> : (p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">цена не найдена</span>)}</div>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <button onClick={confirmAI} disabled={saving} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{saving ? "Сохраняю..." : "Добавить все"}</button>
+              <button onClick={() => setAiResult(null)} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-4 py-2.5 text-sm">Отмена</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h4 className="font-semibold text-gray-700 mb-2">Доставки сегодня</h4>
+        {todayGroups.length === 0 ? (
+          <div className="text-center py-8 text-gray-400 bg-white border border-gray-100 rounded-2xl">На сегодня доставок нет.</div>
+        ) : (
+          <div className="space-y-2">
+            {todayGroups.map(g => {
+              const statuses = [...new Set(g.orders.map(o => o.status))];
+              const st = statuses.length === 1 ? statuses[0] : "частично";
+              const shipped = st === "отгружена";
+              return (
+                <div key={g.key} className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}</span>
+                    {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
+                  </div>
+                  <div className="space-y-1">
+                    {g.orders.map(o => (
+                      <div key={o.id} className="flex items-center gap-2 flex-wrap text-sm">
+                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
+                        <span className="text-gray-600">= <b>{fmt(o.bags * o.bag_kg)} кг</b> · {o.brand} {o.grade}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [tab, setTab] = useState("orders");
+  const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
   const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
+  const [fabOpen, setFabOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [openOrderSignal, setOpenOrderSignal] = useState(0);
+  const [openExpenseSignal, setOpenExpenseSignal] = useState(0);
+  const goTab = id => { setTab(id); setMoreOpen(false); setFabOpen(false); };
 
   const reload = useCallback(async (table) => {
     try { const rows = await dbGetAll(table); setData(prev => ({ ...prev, [table]: rows })); setLastSync(new Date().toLocaleTimeString("ru-RU")); }
@@ -1899,7 +2025,9 @@ export default function App() {
 
   const isDirector = user.role === "director";
   const allowedTabs = TABS_BY_ROLE[user.role] || [];
-  const visibleTabs = TABS.filter(t => allowedTabs.includes(t.id));
+  // Нижняя панель: основные разделы для роли (что есть в доступе), остальное — под «Ещё»
+  const primaryNav = (PRIMARY_NAV[user.role] || []).filter(id => allowedTabs.includes(id));
+  const moreNav = allowedTabs.filter(id => !primaryNav.includes(id));
   // Считаем новые ЗАЯВКИ (по клиенту+дате), а не отдельные позиции
   const newOrders = new Set(data.orders.filter(o => o.status === "новая").map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
 
@@ -1919,26 +2047,72 @@ export default function App() {
         </div>
       </div>
       {error && <div className="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-600 text-center">{error}</div>}
-      <div className="bg-white border-b border-gray-100 sticky top-16 z-30">
-        <div className="max-w-2xl mx-auto flex overflow-x-auto">
-          {visibleTabs.map(t => <button key={t.id} onClick={() => setTab(t.id)} className={`flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${tab === t.id ? "border-amber-500 text-amber-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}>{t.label}</button>)}
-        </div>
-      </div>
-      <div className="max-w-2xl mx-auto px-4 py-5">
+      <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} />}
+            {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
-            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} />}
+            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
           </>
         )}
       </div>
+
+      {isDirector && (
+        <>
+          {fabOpen && (
+            <div className="fixed inset-0 z-40" onClick={() => setFabOpen(false)} style={{ background: "rgba(0,0,0,0.35)" }}>
+              <div className="max-w-2xl mx-auto px-4 relative h-full">
+                <div className="absolute right-4 bottom-40 flex flex-col items-end gap-3" onClick={e => e.stopPropagation()}>
+                  <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">📲</span></button>
+                  <button onClick={() => { goTab("orders"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">✍️</span></button>
+                  <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">💸</span></button>
+                </div>
+              </div>
+            </div>
+          )}
+          <button onClick={() => setFabOpen(v => !v)} className="fixed z-40 right-4 bottom-24 w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-3xl leading-none flex items-center justify-center shadow-xl transition-transform" style={{ transform: fabOpen ? "rotate(45deg)" : "none" }} aria-label="Добавить">+</button>
+        </>
+      )}
+
+      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-gray-100">
+        <div className="max-w-2xl mx-auto flex justify-between px-2 py-1.5">
+          {primaryNav.map(id => (
+            <button key={id} onClick={() => goTab(id)} className={`flex-1 flex flex-col items-center gap-0.5 py-1 ${tab === id ? "text-amber-600" : "text-gray-400"}`}>
+              <span className="text-xl leading-none">{NAV_ICON[id]}</span>
+              <span className="text-[10px] font-medium">{NAV_SHORT[id]}</span>
+            </button>
+          ))}
+          {moreNav.length > 0 && (
+            <button onClick={() => setMoreOpen(true)} className={`flex-1 flex flex-col items-center gap-0.5 py-1 ${moreNav.includes(tab) ? "text-amber-600" : "text-gray-400"}`}>
+              <span className="text-xl leading-none">⋯</span>
+              <span className="text-[10px] font-medium">Ещё</span>
+            </button>
+          )}
+        </div>
+      </nav>
+
+      {moreOpen && (
+        <div className="fixed inset-0 z-40 flex items-end" onClick={() => setMoreOpen(false)} style={{ background: "rgba(0,0,0,0.4)" }}>
+          <div className="bg-white w-full rounded-t-2xl max-w-2xl mx-auto p-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800">Ещё</h3><button onClick={() => setMoreOpen(false)} className="text-gray-400 text-2xl leading-none">&times;</button></div>
+            <div className="grid grid-cols-3 gap-3">
+              {moreNav.map(id => (
+                <button key={id} onClick={() => goTab(id)} className={`flex flex-col items-center gap-1 rounded-2xl border p-4 ${tab === id ? "border-amber-300 bg-amber-50" : "border-gray-100 bg-gray-50"}`}>
+                  <span className="text-2xl leading-none">{NAV_ICON[id]}</span>
+                  <span className="text-xs font-medium text-gray-700 text-center">{NAV_SHORT[id]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
