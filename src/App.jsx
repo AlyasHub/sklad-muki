@@ -1911,6 +1911,8 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
       await reload("stock"); await reload("orders");
     } catch (e) { notifyErr(e); }
   };
+  // Перенести доставку на другую дату (если сегодня не получилось отгрузить)
+  const rescheduleGroup = async (g, date) => { if (!date) return; try { for (const o of g.orders) await dbUpsert("orders", { ...o, date }); await reload("orders"); } catch (e) { notifyErr(e); } };
 
   return (
     <div className="space-y-4">
@@ -1971,10 +1973,19 @@ function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () 
                     ))}
                   </div>
                   {canEdit && (
-                    <div className="flex gap-2 mt-3">
-                      {allNew && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
-                      {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
-                      {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>}
+                    <div className="mt-3 space-y-2">
+                      <div className="flex gap-2 flex-wrap">
+                        {allNew && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
+                        {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
+                        {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>}
+                      </div>
+                      {!shipped && (
+                        <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap pt-1 border-t border-gray-50">
+                          <span>📅 Перенести:</span>
+                          <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].date} onChange={e => rescheduleGroup(g, e.target.value)} />
+                          <button className="text-amber-600 hover:text-amber-700 font-medium" onClick={() => rescheduleGroup(g, TOMORROW())}>→ на завтра</button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
