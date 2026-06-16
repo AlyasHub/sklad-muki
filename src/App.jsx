@@ -1851,7 +1851,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
   );
 }
 
-function TodayTab({ orders, clients, reload, driverFilter = null }) {
+function TodayTab({ orders, clients, reload, driverFilter = null, onManual = () => {} }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -1908,7 +1908,10 @@ function TodayTab({ orders, clients, reload, driverFilter = null }) {
         <div className="font-semibold text-gray-800 mb-2">📲 Разобрать заявку из WhatsApp</div>
         <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={3} placeholder="Вставь сюда сообщение из WhatsApp, напр.: Сегафредо 500 кг высший сорт на завтра" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
         {aiError && <div className="text-sm text-red-500 mt-2">{aiError}</div>}
-        <button onClick={handleAI} disabled={aiLoading || !aiText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{aiLoading ? "Разбираю..." : "Разобрать"}</button>
+        <div className="mt-2 flex gap-2">
+          <button onClick={handleAI} disabled={aiLoading || !aiText.trim()} style={{ flex: 2 }} className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{aiLoading ? "Разбираю..." : "📲 Разобрать"}</button>
+          <button onClick={onManual} style={{ flex: 1 }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-3 py-2.5 text-sm whitespace-nowrap">✍️ Вручную</button>
+        </div>
         {aiResult && (
           <div className="mt-3 border-t border-gray-100 pt-3 space-y-2">
             {aiResult.map((p, i) => (
@@ -2050,7 +2053,7 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} onManual={() => { setTab("orders"); setOpenOrderSignal(n => n + 1); }} />}
             {tab === "orders" && <OrdersTab clients={data.clients} drivers={data.drivers} orders={data.orders} reload={reload} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
