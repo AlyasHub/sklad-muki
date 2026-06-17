@@ -1988,18 +1988,23 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
     try {
       for (const p of valid) {
         const price = p.price_per_kg || priceFor(client, p.brand, p.grade, Number(p.bag_kg)) || 0;
-        await dbUpsert("orders", { id: uid(), date: form.date, clientId: form.clientId, clientName: client?.name || "", brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: Number(price), status: "отгружена", fromKaraganda: true, note: form.note });
+        await dbUpsert("orders", { id: uid(), date: form.date, clientId: form.clientId, clientName: client?.name || "", brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: Number(price), status: "в пути", fromKaraganda: true, note: form.note });
       }
       setShowAdd(false); await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
+  };
+  // Караганда: статус НЕ трогает склад Астаны. «Отгружено» → сумма вешается клиенту в долг.
+  const setGroupStatus = async (ordersArr, status) => {
+    try { for (const o of ordersArr) await dbUpsert("orders", { ...o, status }); await reload("orders"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
   const del = async o => { if (!confirm("Удалить эту отгрузку из Караганды?")) return; try { await dbDelete("orders", o.id); await reload("orders"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
 
   return (
     <div className="space-y-4">
       <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-800">
-        🏬 Склад <b>Караганда</b>. Фуры идут <b>напрямую клиентам</b>. Эти отгрузки идут вам в отчёт, долги и историю клиента, но <b>склад в Астане не трогают</b>.
+        🏬 Склад <b>Караганда</b>. Фуры идут <b>напрямую клиентам</b>. Записываешь как <b>«в пути»</b>; когда отправили — жмёшь <b>«Отгружено»</b>, и сумма идёт клиенту в долг и в отчёт. Склад в Астане <b>не трогается</b>.
       </div>
       <div className="flex items-center justify-between">
         <div className="text-sm text-gray-500">Всего отправлено: <b>{fmt(totalKg)} кг</b></div>
@@ -2041,26 +2046,46 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
       ) : dates.map(date => {
         const day = byDate[date];
         const dayKg = day.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+        // внутри даты — по клиенту (одна отправка клиенту)
+        const groups = {};
+        day.forEach(o => { const k = o.clientId || ("nm:" + (o.clientName || "")); (groups[k] = groups[k] || { clientName: o.clientName, orders: [] }).orders.push(o); });
         return (
           <div key={date} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="font-bold text-gray-800">🚛 {date.split("-").reverse().join(".")}</div>
               <div className="text-sm text-gray-500">{fmt(dayKg)} кг</div>
             </div>
-            <div className="space-y-2">
-              {day.map(o => (
-                <div key={o.id} className="flex items-start justify-between gap-2 border-t border-gray-50 pt-2 first:border-0 first:pt-0">
-                  <div className="min-w-0">
-                    <div className="font-medium text-gray-900">{o.clientName}</div>
-                    <div className="text-sm text-gray-600 flex items-center gap-2 flex-wrap mt-0.5">
-                      <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
-                      <span>= <b>{fmt(o.bags * o.bag_kg)} кг</b> · {o.brand} {o.grade}{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</span>
+            <div className="space-y-3">
+              {Object.values(groups).map((g, gi) => {
+                const statuses = [...new Set(g.orders.map(o => o.status))];
+                const st = statuses.length === 1 ? statuses[0] : "частично";
+                const shipped = st === "отгружена";
+                return (
+                  <div key={gi} className={`rounded-xl p-3 border ${shipped ? "bg-emerald-50 border-emerald-200" : "bg-gray-50 border-gray-100"}`}>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="font-medium text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600">✓</span>}{g.clientName}</span>
+                      {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-2.5 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color="yellow">в пути</Badge>}
                     </div>
-                    {o.note && <div className="text-xs text-gray-400 mt-0.5">📝 {o.note}</div>}
+                    <div className="space-y-0.5">
+                      {g.orders.map(o => (
+                        <div key={o.id} className="text-sm text-gray-600 flex items-center gap-2 flex-wrap">
+                          <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
+                          <span>= <b>{fmt(o.bags * o.bag_kg)} кг</b> · {o.brand} {o.grade}{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</span>
+                          {canEdit && <button onClick={() => del(o)} className="text-red-300 hover:text-red-600 ml-auto" title="Удалить позицию">✕</button>}
+                        </div>
+                      ))}
+                    </div>
+                    {g.orders[0].note && <div className="text-xs text-gray-400 mt-1">📝 {g.orders[0].note}</div>}
+                    {canEdit && (
+                      <div className="mt-2">
+                        {shipped
+                          ? <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g.orders, "в пути")}>↩ Вернуть в путь</Btn>
+                          : <Btn size="sm" onClick={() => setGroupStatus(g.orders, "отгружена")}>✓ Отгружено (в долг клиенту)</Btn>}
+                      </div>
+                    )}
                   </div>
-                  {canEdit && <button onClick={() => del(o)} className="text-red-400 hover:text-red-600 flex-shrink-0 text-lg leading-none" title="Удалить">✕</button>}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
