@@ -76,7 +76,7 @@ async function sha256(str) {
 const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reports", "supply", "karaganda", "drivers", "expenses", "access"],
+  director: ["today", "calendar", "stock", "clients", "reports", "debts", "supply", "karaganda", "drivers", "expenses", "access"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
@@ -86,8 +86,8 @@ const PRIMARY_NAV = {
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", debts: "💰", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", debts: "Долги", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -244,7 +244,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
+const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "debts", label: "💰 Долги" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
 
 function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -780,7 +780,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           <div className="grid grid-cols-2 gap-3">
             {form.isSample
               ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
-              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} /></div>}
+              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
             <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
@@ -1895,6 +1895,74 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
   );
 }
 
+function DebtsTab({ orders, clients, reload, canEdit = true }) {
+  const [open, setOpen] = useState({});
+  // долг = отгружено и не оплачено (новые/в пути в долг НЕ идут)
+  const unpaid = orders.filter(o => o.status === "отгружена" && !o.paid && o.bags * o.bag_kg * (o.price_per_kg || 0) > 0);
+  const byClient = {};
+  unpaid.forEach(o => {
+    const k = o.clientId || ("nm:" + (o.clientName || "")); // по id — чтобы тёзки не слипались
+    if (!byClient[k]) { const c = clients.find(x => x.id === o.clientId); byClient[k] = { key: k, clientId: o.clientId, name: o.clientName || "?", org: c?.org_name || "", total: 0, byDate: {} }; }
+    const sum = o.bags * o.bag_kg * (o.price_per_kg || 0);
+    byClient[k].total += sum;
+    const d = (byClient[k].byDate[o.date] = byClient[k].byDate[o.date] || { kg: 0, sum: 0, items: [] });
+    d.kg += o.bags * o.bag_kg; d.sum += sum; d.items.push(o);
+  });
+  const list = Object.values(byClient).sort((a, b) => b.total - a.total);
+  const grand = list.reduce((s, c) => s + c.total, 0);
+
+  const markPaid = async (c, date, method) => {
+    try {
+      for (const o of orders.filter(o => (o.clientId ? o.clientId === c.clientId : o.clientName === c.name) && o.date === date && o.status === "отгружена")) await dbUpsert("orders", { ...o, paid: true, pay_method: method });
+      await reload("orders");
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-br from-rose-50 to-red-50 border border-rose-100 rounded-2xl p-4 flex items-center justify-between">
+        <div className="font-bold text-gray-800">💰 Общий долг клиентов</div>
+        <div className="text-2xl font-black text-red-600">{fmt(grand)} тг</div>
+      </div>
+      <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет.</div>
+      {list.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">Долгов нет — всё оплачено 👍</div>
+      ) : list.map(c => {
+        const dates = Object.keys(c.byDate).sort((a, b) => b.localeCompare(a));
+        const isOpen = open[c.key];
+        return (
+          <div key={c.key} className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+            <button onClick={() => setOpen(o => ({ ...o, [c.key]: !o[c.key] }))} className="w-full flex items-center justify-between p-4 text-left">
+              <div>
+                <div className="font-bold text-gray-900">{c.name}{c.org && <span className="text-sm text-gray-500 font-normal"> · {c.org}</span>}</div>
+                <div className="text-xs text-gray-400">{dates.length} {dates.length === 1 ? "отгрузка не оплачена" : "отгрузок не оплачено"}</div>
+              </div>
+              <div className="text-right"><div className="font-bold text-red-600">{fmt(c.total)} тг</div><div className="text-xs text-gray-400">{isOpen ? "▲ свернуть" : "▼ открыть"}</div></div>
+            </button>
+            {isOpen && (
+              <div className="px-4 pb-4 space-y-2 border-t border-gray-50 pt-3">
+                {dates.map(date => {
+                  const d = c.byDate[date];
+                  return (
+                    <div key={date} className="bg-gray-50 rounded-xl p-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <div><b>{date.split("-").reverse().join(".")}</b> · {fmt(d.kg)} кг</div>
+                        <div className="font-bold text-gray-800">{fmt(d.sum)} тг</div>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">{d.items.map((o, i) => `${i ? ", " : ""}${o.brand} ${o.grade} ${o.bag_kg}кг×${o.bags}`).join("")}</div>
+                      {canEdit && <div className="flex gap-2 mt-2"><Btn size="sm" onClick={() => markPaid(c, date, "Нал")}>💵 Оплатил нал</Btn><Btn size="sm" variant="secondary" onClick={() => markPaid(c, date, "Безнал")}>💳 Безнал</Btn></div>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1941,7 +2009,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
       {showAdd && (
         <Modal title="Отгрузка из Караганды" onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
-            <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} />
+            <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
             <div className="grid grid-cols-2 gap-3">
               <Inp label="Дата отправки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
               <Inp label="Примечание (фура)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. фура №2, Олжас" />
@@ -2038,13 +2106,21 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
     try {
       const parsed = await parseOrderWithAI(aiText, clients);
       setAiResult(parsed.map(p => {
-        const found = clients.find(c => c.name.toLowerCase().includes(p.clientName.toLowerCase()) || p.clientName.toLowerCase().includes(c.name.toLowerCase()));
-        return { ...p, trial: !!p.trial, clientId: found?.id || null, clientFound: found?.name || p.clientName, price_per_kg: p.trial ? 0 : (found ? priceFor(found, p.brand, p.grade, p.bag_kg) : null) };
+        const matches = clients.filter(c => c.name.toLowerCase().includes(p.clientName.toLowerCase()) || p.clientName.toLowerCase().includes(c.name.toLowerCase()));
+        const chosen = matches.length === 1 ? matches[0] : null; // если совпало несколько (тёзки) — пусть выберет вручную
+        return { ...p, trial: !!p.trial, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       }));
     } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
     setAiLoading(false);
   };
+  const chooseClient = (i, clientId) => setAiResult(prev => prev.map((it, idx) => {
+    if (idx !== i) return it;
+    const c = clients.find(x => x.id === clientId);
+    return { ...it, clientId, clientFound: c?.name || it.clientFound, price_per_kg: it.trial ? 0 : (c ? priceFor(c, it.brand, it.grade, it.bag_kg) : null) };
+  }));
   const confirmAI = async () => {
+    const ambiguous = aiResult.find(p => (p.matchOptions || []).length > 1 && !p.clientId);
+    if (ambiguous) { alert(`Выбери, какой именно клиент «${ambiguous.clientFound}» — их несколько с таким названием.`); return; }
     setSaving(true);
     try {
       for (const p of aiResult) await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: "", status: "новая" });
@@ -2110,8 +2186,17 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
           <div className="mt-3 border-t border-gray-100 pt-3 space-y-2">
             {aiResult.map((p, i) => (
               <div key={i} className="bg-gray-50 rounded-xl p-3 text-sm">
-                <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{!p.clientId && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
-                <div className="text-gray-600">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
+                <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{(p.matchOptions || []).length === 0 && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
+                {(p.matchOptions || []).length > 1 && (
+                  <div className="mt-1">
+                    <div className="text-xs text-orange-600 mb-1">⚠️ Несколько клиентов с таким названием — выбери нужного:</div>
+                    <select value={p.clientId || ""} onChange={e => chooseClient(i, e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
+                      <option value="">— выбери клиента —</option>
+                      {p.matchOptions.map(c => <option key={c.id} value={c.id}>{c.name}{c.org_name ? ` (${c.org_name})` : ""}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div className="text-gray-600 mt-1">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
                 <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">бесплатно</span> : (p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">цена не найдена</span>)}</div>
               </div>
             ))}
@@ -2189,7 +2274,7 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
           <div className="grid grid-cols-2 gap-3">
             {form.isSample
               ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
-              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name }))]} /></div>}
+              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
             <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
@@ -2306,6 +2391,7 @@ export default function App() {
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
+            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
