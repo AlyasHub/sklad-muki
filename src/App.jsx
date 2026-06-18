@@ -2150,19 +2150,35 @@ const CONTRACT_TEMPLATES = [
 ];
 
 function ContractsTab({ clients }) {
+  const [source, setSource] = useState("client"); // client | text
   const [clientId, setClientId] = useState("");
+  const [pasteText, setPasteText] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [parseErr, setParseErr] = useState("");
+  const [parsed, setParsed] = useState(null);
   const [tplKey, setTplKey] = useState("postoplata");
   const [template, setTemplate] = useState(CONTRACT_TEMPLATES[0].text);
   const [result, setResult] = useState("");
+
+  // Данные «Покупателя»: из выбранного клиента или из разобранного текста
   const c = clients.find(x => x.id === clientId);
+  const party = source === "client" ? c : parsed;
 
   const pickTemplate = key => { setTplKey(key); const t = CONTRACT_TEMPLATES.find(x => x.key === key); setTemplate(t ? t.text : ""); setResult(""); };
+  const doParse = async () => {
+    if (!pasteText.trim()) return;
+    setParsing(true); setParseErr(""); setParsed(null); setResult("");
+    try { setParsed(await parseClientWithAI(pasteText)); }
+    catch (e) { setParseErr(e.message); }
+    setParsing(false);
+  };
   const fill = () => {
-    if (!c) { alert("Сначала выбери клиента."); return; }
+    const P = party;
+    if (!P) { alert(source === "client" ? "Сначала выбери клиента." : "Сначала вставь текст и нажми «Разобрать»."); return; }
     const fields = {
-      "{{org}}": c.org_name || c.name || "", "{{bin}}": c.bin || "", "{{director}}": c.director || "",
-      "{{legal_address}}": c.legal_address || c.address || "", "{{phone}}": c.contact || "",
-      "{{email}}": c.email || "", "{{bank}}": c.bank || "", "{{iik}}": c.iik || "", "{{bik}}": c.bik || "",
+      "{{org}}": P.org_name || P.name || "", "{{bin}}": P.bin || "", "{{director}}": P.director || "",
+      "{{legal_address}}": P.legal_address || P.address || "", "{{phone}}": P.contact || "",
+      "{{email}}": P.email || "", "{{bank}}": P.bank || "", "{{iik}}": P.iik || "", "{{bik}}": P.bik || "",
     };
     let t = template;
     Object.entries(fields).forEach(([k, v]) => { t = t.split(k).join(v || "〔ВПИШИТЕ〕"); });
@@ -2178,27 +2194,42 @@ function ContractsTab({ clients }) {
     w.document.write(html); w.document.close(); w.focus();
     setTimeout(() => w.print(), 400);
   };
-  const requisites = c ? [
-    `Наименование: ${c.org_name || c.name || "—"}`, `БИН/ИИН: ${c.bin || "—"}`, `Директор: ${c.director || "—"}`,
-    `Юр. адрес: ${c.legal_address || c.address || "—"}`, `Телефон: ${c.contact || "—"}`, `Email: ${c.email || "—"}`,
-    `Банк: ${c.bank || "—"}`, `ИИК: ${c.iik || "—"}`, `БИК: ${c.bik || "—"}`,
+  const partyName = party ? (party.org_name || party.name || "клиент") : "клиент";
+  const requisites = party ? [
+    `Наименование: ${party.org_name || party.name || "—"}`, `БИН/ИИН: ${party.bin || "—"}`, `Директор: ${party.director || "—"}`,
+    `Юр. адрес: ${party.legal_address || party.address || "—"}`, `Телефон: ${party.contact || "—"}`, `Email: ${party.email || "—"}`,
+    `Банк: ${party.bank || "—"}`, `ИИК: ${party.iik || "—"}`, `БИК: ${party.bik || "—"}`,
   ].join("\n") : "";
 
   return (
     <div className="space-y-4">
-      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">📄 Выбери клиента и тип договора — данные Покупателя подставятся автоматически. Метки <b>〔…〕</b> — впиши вручную перед печатью (номер, дата, <b>пункт 2.2</b>). Чего нет в карточке клиента — тоже отметится 〔ВПИШИТЕ〕.</div>
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">📄 Данные Покупателя берутся из клиента или из вставленного текста. Метки <b>〔…〕</b> — впиши вручную перед печатью (номер, дата, <b>пункт 2.2</b>). Чего не нашлось — тоже отметится 〔ВПИШИТЕ〕.</div>
 
-      <Sel label="Клиент" value={clientId} onChange={e => { setClientId(e.target.value); setResult(""); }} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
+      <div className="flex gap-2">
+        <button onClick={() => { setSource("client"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${source === "client" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>👤 Из клиентов</button>
+        <button onClick={() => { setSource("text"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${source === "text" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📋 Вставить текст</button>
+      </div>
+
+      {source === "client"
+        ? <Sel label="Клиент" value={clientId} onChange={e => { setClientId(e.target.value); setResult(""); }} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
+        : (
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+            <div className="text-sm font-medium text-gray-700 mb-1">Вставь данные контрагента</div>
+            <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={3} placeholder="напр.: ТОО «Алтын Дән», БИН 123..., в лице директора Иванова И.И., адрес ..., Kaspi Bank, ИИК KZ..., БИК ..." className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
+            {parseErr && <div className="text-xs text-red-500 mt-1">{parseErr}</div>}
+            <button onClick={doParse} disabled={parsing || !pasteText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2 text-sm">{parsing ? "Разбираю..." : "✨ Разобрать"}</button>
+          </div>
+        )}
       <Sel label="Тип договора" value={tplKey} onChange={e => pickTemplate(e.target.value)} options={CONTRACT_TEMPLATES.map(t => ({ value: t.key, label: t.name }))} />
 
-      {c && (
+      {party && (
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
-          <div className="flex items-center justify-between mb-2"><div className="font-bold text-gray-800">Реквизиты клиента</div><Btn size="sm" variant="secondary" onClick={() => copyToClipboard(requisites)}>📋 Копировать</Btn></div>
+          <div className="flex items-center justify-between mb-2"><div className="font-bold text-gray-800">Реквизиты {source === "text" ? "(из текста)" : "клиента"}</div><Btn size="sm" variant="secondary" onClick={() => copyToClipboard(requisites)}>📋 Копировать</Btn></div>
           <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans">{requisites}</pre>
         </div>
       )}
 
-      <Btn onClick={fill} disabled={!c}>📄 Сформировать договор</Btn>
+      <Btn onClick={fill} disabled={!party}>📄 Сформировать договор</Btn>
 
       {result && (
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
@@ -2207,7 +2238,7 @@ function ContractsTab({ clients }) {
             <div className="flex gap-2 flex-wrap">
               <Btn size="sm" onClick={printContract}>🖨 Печать</Btn>
               <Btn size="sm" variant="secondary" onClick={() => copyToClipboard(result)}>📋 Копировать</Btn>
-              <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Договор_${(c.org_name || c.name || "клиент")}.txt`, result, "text/plain;charset=utf-8")}>⬇️ Скачать</Btn>
+              <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Договор_${partyName}.txt`, result, "text/plain;charset=utf-8")}>⬇️ Скачать</Btn>
             </div>
           </div>
           <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-2">Перед печатью заполни все метки 〔…〕 — особенно <b>пункт 2.2</b>, номер и дату договора.</div>
