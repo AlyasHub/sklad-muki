@@ -1654,17 +1654,25 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
 function TrucksTab({ trucks, reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
+  const [editItemIdx, setEditItemIdx] = useState(null);
   const [saving, setSaving] = useState(false);
   const [f, setF] = useState({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" });
   const [items, setItems] = useState([]);
   const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" });
 
   const itemKg = i => (i.kg != null && i.kg !== "") ? Number(i.kg) : Number(i.tonnes || 0) * 1000; // старые записи были в тоннах
-  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); };
-  const addItem = () => { if (!it.kg) return; setItems([...items, { brand: it.brand, grade: it.grade, bag_kg: Number(it.bag_kg), kg: Number(it.kg) }]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); };
-  const removeItem = i => setItems(items.filter((_, j) => j !== i));
+  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setEditItemIdx(null); };
+  const saveItem = () => {
+    if (!it.kg) return;
+    const ni = { brand: it.brand, grade: it.grade, bag_kg: Number(it.bag_kg), kg: Number(it.kg) };
+    if (editItemIdx != null) { setItems(items.map((p, j) => j === editItemIdx ? ni : p)); setEditItemIdx(null); }
+    else setItems([...items, ni]);
+    setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" });
+  };
+  const editItem = i => { const p = items[i]; setIt({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, kg: itemKg(p) }); setEditItemIdx(i); };
+  const removeItem = i => { setItems(items.filter((_, j) => j !== i)); if (editItemIdx === i) setEditItemIdx(null); };
   const openNew = () => { setEditId(null); reset(); setShowAdd(true); };
-  const openEdit = t => { setEditId(t.id); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
+  const openEdit = t => { setEditId(t.id); setEditItemIdx(null); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
 
   const saveTruck = async () => {
     if (items.length === 0) return;
@@ -1722,8 +1730,8 @@ function TrucksTab({ trucks, reload }) {
                 <Sel value={it.bag_kg} onChange={e => setIt({ ...it, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
                 <Inp type="number" placeholder="кг" value={it.kg} onChange={e => setIt({ ...it, kg: e.target.value })} />
               </div>
-              <Btn size="sm" variant="secondary" onClick={addItem}>+ Добавить позицию</Btn>
-              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm"><span>{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium">{fmt(itemKg(p))} кг</span><button className="text-red-400 hover:text-red-600" onClick={() => removeItem(i)}>✕</button></div>)}</div>}
+              <Btn size="sm" variant={editItemIdx != null ? "primary" : "secondary"} onClick={saveItem}>{editItemIdx != null ? "✓ Сохранить позицию" : "+ Добавить позицию"}</Btn>
+              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm gap-2 ${editItemIdx === i ? "bg-amber-100" : "bg-gray-50"}`}><span className="min-w-0">{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium ml-auto whitespace-nowrap">{fmt(itemKg(p))} кг</span><button className="text-gray-400 hover:text-amber-600 flex-shrink-0" title="Изменить" onClick={() => editItem(i)}>✏️</button><button className="text-red-400 hover:text-red-600 flex-shrink-0" title="Удалить" onClick={() => removeItem(i)}>✕</button></div>)}</div>}
             </div>
             <Inp label="Примечание" value={f.note} onChange={e => setF({ ...f, note: e.target.value })} />
           </div>
