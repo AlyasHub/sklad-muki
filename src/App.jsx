@@ -2188,11 +2188,17 @@ function ContractsTab({ clients }) {
     if (!result) return;
     const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const body = esc(result).replace(/(〔[^〕]*〕)/g, '<b style="background:#ffe9a8">$1</b>');
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Договор</title><style>@page{margin:18mm}body{font-family:'Times New Roman',serif;font-size:12pt;line-height:1.45;color:#000;white-space:pre-wrap;text-align:justify}</style></head><body>${body}</body></html>`;
-    const w = window.open("", "_blank");
-    if (!w) { alert("Разреши всплывающие окна в браузере, чтобы напечатать договор."); return; }
-    w.document.write(html); w.document.close(); w.focus();
-    setTimeout(() => w.print(), 400);
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Договор</title><style>@page{margin:18mm}body{font-family:'Times New Roman',serif;font-size:12pt;line-height:1.45;color:#000;white-space:pre-wrap;text-align:justify;margin:0}</style></head><body>${body}</body></html>`;
+    // Печать через скрытый фрейм — не открываем новую вкладку (иначе на айфоне из неё не выйти)
+    const old = document.getElementById("print-frame");
+    if (old) old.remove();
+    const iframe = document.createElement("iframe");
+    iframe.id = "print-frame";
+    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow.document;
+    doc.open(); doc.write(html); doc.close();
+    setTimeout(() => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) {} setTimeout(() => iframe.remove(), 3000); }, 400);
   };
   const partyName = party ? (party.org_name || party.name || "клиент") : "клиент";
   const requisites = party ? [
@@ -2241,8 +2247,8 @@ function ContractsTab({ clients }) {
               <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Договор_${partyName}.txt`, result, "text/plain;charset=utf-8")}>⬇️ Скачать</Btn>
             </div>
           </div>
-          <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-2">Перед печатью заполни все метки 〔…〕 — особенно <b>пункт 2.2</b>, номер и дату договора.</div>
-          <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans bg-gray-50 rounded-xl p-3">{result}</pre>
+          <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-2">Можно править прямо здесь: заполни метки 〔…〕 (особенно <b>пункт 2.2</b>, номер и дату) — изменения попадут в печать и копию.</div>
+          <textarea value={result} onChange={e => setResult(e.target.value)} rows={22} className="w-full text-sm text-gray-800 font-sans bg-gray-50 rounded-xl p-3 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap" }} />
         </div>
       )}
     </div>
