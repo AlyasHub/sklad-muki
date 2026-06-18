@@ -45,11 +45,26 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const clientTime = c => (c && ((c.delivery_from && c.delivery_to) ? `${c.delivery_from}–${c.delivery_to}` : c.delivery_time)) || "";
 
 // Текст для накладной (бухгалтеру) по заявке клиента
+// Суммируем одинаковые позиции (один бренд+сорт+фасовка) в одну строку: общий вес и сумма
+function mergedPositions(orders) {
+  const m = {};
+  orders.forEach(o => {
+    const k = `${o.brand}|${o.grade}|${o.bag_kg}`;
+    if (!m[k]) m[k] = { brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: 0, tg: 0, trial: false };
+    m[k].bags += Number(o.bags) || 0;
+    m[k].tg += (Number(o.bags) || 0) * o.bag_kg * (o.price_per_kg || 0);
+    if (o.trial) m[k].trial = true;
+  });
+  return Object.values(m);
+}
 function nakladnayaText(g, client) {
   const head = (client && client.org_name) || g.clientName || "Клиент";
   const billable = g.orders.filter(o => !o.trial && !o.isSample); // бесплатные пробы в накладную не идут
   if (!billable.length) return null;
-  const lines = billable.map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
+  // объединяем одинаковые сорта с одной ценой
+  const m = {};
+  billable.forEach(o => { const k = `${o.brand}|${o.grade}|${o.bag_kg}|${o.price_per_kg || 0}`; if (!m[k]) m[k] = { brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, price_per_kg: o.price_per_kg, bags: 0 }; m[k].bags += Number(o.bags) || 0; });
+  const lines = Object.values(m).map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
   return head + ":\n" + lines.join("\n");
 }
 function copyToClipboard(text) {
@@ -504,12 +519,12 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
                   <div className="mt-1 space-y-1">
-                    {g.orders.map(o => (
-                      <div key={o.id} className="text-gray-600 flex items-center gap-2 flex-wrap">
-                        <span>• {o.brand} {o.grade}</span>
-                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
-                        <span>= <b>{fmt(o.bags * o.bag_kg)} кг</b></span>
-                        {o.trial ? <span className="text-orange-600 font-medium">🎁 на пробу</span> : (showPrices && o.price_per_kg ? <span className="text-gray-400">· {fmt(o.bags * o.bag_kg * o.price_per_kg)} тг</span> : null)}
+                    {mergedPositions(g.orders).map((m, mi) => (
+                      <div key={mi} className="text-gray-600 flex items-center gap-2 flex-wrap">
+                        <span>• {m.brand} {m.grade}</span>
+                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {m.bags} меш. × {m.bag_kg} кг</span>
+                        <span>= <b>{fmt(m.bags * m.bag_kg)} кг</b></span>
+                        {m.trial ? <span className="text-orange-600 font-medium">🎁 на пробу</span> : (showPrices && m.tg ? <span className="text-gray-400">· {fmt(m.tg)} тг</span> : null)}
                       </div>
                     ))}
                   </div>
@@ -2170,6 +2185,7 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
   };
   // Перенести доставку на другую дату (если сегодня не получилось отгрузить)
   const rescheduleGroup = async (g, date) => { if (!date) return; try { for (const o of g.orders) await dbUpsert("orders", { ...o, date }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const deleteGroup = async g => { if (!confirm(`Удалить заявку «${g.clientName || "Клиент"}» на сегодня (${g.orders.length} поз.)?`)) return; try { for (const o of g.orders) await dbDelete("orders", o.id); await reload("orders"); } catch (e) { notifyErr(e); } };
 
   // Добавить заявку вручную (форма та же, что была в «Заявках»)
   const addManual = async () => {
@@ -2252,19 +2268,20 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
                   </div>
                   <div className="space-y-1">
-                    {g.orders.map(o => (
-                      <div key={o.id} className="flex items-center gap-2 flex-wrap text-sm">
-                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
-                        <span className="text-gray-600">= <b>{fmt(o.bags * o.bag_kg)} кг</b> · {o.brand} {o.grade}</span>
+                    {mergedPositions(g.orders).map((m, mi) => (
+                      <div key={mi} className="flex items-center gap-2 flex-wrap text-sm">
+                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {m.bags} меш. × {m.bag_kg} кг</span>
+                        <span className="text-gray-600">= <b>{fmt(m.bags * m.bag_kg)} кг</b> · {m.brand} {m.grade}{m.trial ? " · 🎁 на пробу" : ""}</span>
                       </div>
                     ))}
                   </div>
                   {canEdit && (
                     <div className="mt-3 space-y-2">
-                      <div className="flex gap-2 flex-wrap">
+                      <div className="flex gap-2 flex-wrap items-center">
                         {allNew && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
                         {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
                         {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>}
+                        <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>🗑</Btn>
                       </div>
                       {!shipped && (
                         <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap pt-1 border-t border-gray-50">
