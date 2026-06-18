@@ -339,6 +339,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
         if (o.status === status) continue;
         const kg = o.bags * o.bag_kg;
         await dbUpsert("orders", { ...o, status });
+        if (o.fromKaraganda) continue; // карагандинские отгрузки склад Астаны не трогают
         if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
         else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
       }
@@ -630,8 +631,15 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
                     </div>
                     <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-2 flex-wrap">
                       {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
-                      <span className="text-orange-600">🏬 фура из Караганды · статус меняется на странице «Караганда»</span>
+                      <span className="text-orange-600">🏬 фура из Караганды</span>
                     </div>
+                    {canEdit && (
+                      <div className="flex gap-2 mt-2">
+                        {shipped
+                          ? <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ В путь</Btn>
+                          : <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Отгружено</Btn>}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2425,6 +2433,7 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
         if (o.status === status) continue;
         const kg = o.bags * o.bag_kg;
         await dbUpsert("orders", { ...o, status });
+        if (o.fromKaraganda) continue; // карагандинские отгрузки склад Астаны не трогают
         if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
         else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
       }
