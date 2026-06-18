@@ -91,7 +91,7 @@ async function sha256(str) {
 const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reports", "debts", "supply", "karaganda", "drivers", "expenses", "access"],
+  director: ["today", "calendar", "stock", "clients", "reports", "debts", "contracts", "supply", "karaganda", "drivers", "expenses", "access"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
@@ -101,8 +101,8 @@ const PRIMARY_NAV = {
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", debts: "💰", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", debts: "Долги", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", debts: "💰", contracts: "📄", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", debts: "Долги", contracts: "Договоры", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -266,7 +266,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "debts", label: "💰 Долги" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
+const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "debts", label: "💰 Долги" }, { id: "contracts", label: "📄 Договоры" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
 
 function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -1953,6 +1953,85 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
   );
 }
 
+const DEFAULT_CONTRACT = `ДОГОВОР ПОСТАВКИ № ___
+г. Астана                                  {{date}}
+
+ТОО «Дарад» (Поставщик) и {{org}} (Покупатель), в лице {{director}}, заключили настоящий договор о поставке муки.
+
+Адрес поставки: {{address}}
+
+РЕКВИЗИТЫ ПОКУПАТЕЛЯ:
+Наименование: {{org}}
+БИН/ИИН: {{bin}}
+Юридический адрес: {{legal_address}}
+Телефон: {{phone}}
+Email: {{email}}
+Банк: {{bank}}
+ИИК: {{iik}}
+БИК: {{bik}}
+
+Покупатель: {{director}} _______________`;
+
+function ContractsTab({ clients }) {
+  const [clientId, setClientId] = useState("");
+  const [template, setTemplate] = useState(() => (typeof localStorage !== "undefined" && localStorage.getItem("darad_contract_template")) || DEFAULT_CONTRACT);
+  const [result, setResult] = useState("");
+  const c = clients.find(x => x.id === clientId);
+
+  const onTemplate = v => { setTemplate(v); try { localStorage.setItem("darad_contract_template", v); } catch {} };
+  const fields = c ? {
+    "{{name}}": c.name || "", "{{org}}": c.org_name || c.name || "", "{{bin}}": c.bin || "", "{{director}}": c.director || "",
+    "{{address}}": c.address || "", "{{legal_address}}": c.legal_address || c.address || "", "{{phone}}": c.contact || "",
+    "{{email}}": c.email || "", "{{bank}}": c.bank || "", "{{iik}}": c.iik || "", "{{bik}}": c.bik || "", "{{date}}": new Date().toLocaleDateString("ru-RU"),
+  } : {};
+  const fill = () => {
+    if (!c) { alert("Сначала выбери клиента."); return; }
+    let t = template;
+    Object.entries(fields).forEach(([k, v]) => { t = t.split(k).join(v || "—"); });
+    setResult(t);
+  };
+  const requisites = c ? [
+    `Наименование: ${c.org_name || c.name || "—"}`, `БИН/ИИН: ${c.bin || "—"}`, `Директор: ${c.director || "—"}`,
+    `Юр. адрес: ${c.legal_address || c.address || "—"}`, `Телефон: ${c.contact || "—"}`, `Email: ${c.email || "—"}`,
+    `Банк: ${c.bank || "—"}`, `ИИК: ${c.iik || "—"}`, `БИК: ${c.bik || "—"}`,
+  ].join("\n") : "";
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">📄 Выбери клиента — его данные подставятся в шаблон. Шаблон можно отредактировать (метки вида <b>{`{{org}}`}</b> заменяются автоматически). Свои шаблоны пришлёшь — добавлю готовыми.</div>
+
+      <Sel label="Клиент" value={clientId} onChange={e => { setClientId(e.target.value); setResult(""); }} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
+
+      {c && (
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+          <div className="flex items-center justify-between mb-2"><div className="font-bold text-gray-800">Реквизиты клиента</div><Btn size="sm" variant="secondary" onClick={() => copyToClipboard(requisites)}>📋 Копировать</Btn></div>
+          <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans">{requisites}</pre>
+        </div>
+      )}
+
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+        <div className="font-bold text-gray-800 mb-2">Шаблон договора</div>
+        <textarea value={template} onChange={e => onTemplate(e.target.value)} rows={10} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-300" />
+        <div className="text-xs text-gray-400 mt-1">Метки: {`{{org}} {{bin}} {{director}} {{address}} {{legal_address}} {{phone}} {{email}} {{bank}} {{iik}} {{bik}} {{date}}`}</div>
+        <Btn onClick={fill} disabled={!c} >📄 Сформировать договор</Btn>
+      </div>
+
+      {result && (
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-bold text-gray-800">Готовый договор</div>
+            <div className="flex gap-2">
+              <Btn size="sm" variant="secondary" onClick={() => copyToClipboard(result)}>📋 Копировать</Btn>
+              <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Договор_${(c.name || "клиент")}.txt`, result, "text/plain;charset=utf-8")}>⬇️ Скачать</Btn>
+            </div>
+          </div>
+          <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans bg-gray-50 rounded-xl p-3">{result}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DebtsTab({ orders, clients, reload, canEdit = true }) {
   const [open, setOpen] = useState({});
   // долг = отгружено и не оплачено (новые/в пути в долг НЕ идут)
@@ -2538,6 +2617,7 @@ export default function App() {
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
+            {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
