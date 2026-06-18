@@ -2166,6 +2166,9 @@ function ContractsTab({ clients }) {
   const c = clients.find(x => x.id === clientId);
   const party = source === "client" ? c : parsed;
 
+  // Поле договора растягивается под весь текст (без внутренней прокрутки) — чтобы подсветка не отставала
+  useEffect(() => { const ta = taRef.current; if (ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; } }, [result]);
+
   const pickTemplate = key => { setTplKey(key); const t = CONTRACT_TEMPLATES.find(x => x.key === key); setTemplate(t ? t.text : ""); setResult(""); };
   const doParse = async () => {
     if (!pasteText.trim()) return;
@@ -2251,8 +2254,8 @@ function ContractsTab({ clients }) {
           </div>
           <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-2">Можно править прямо здесь: <mark style={{ background: "#fde68a" }}>жёлтым</mark> подсвечены метки 〔…〕, которые нужно заполнить (особенно <b>пункт 2.2</b>, номер и дату). В печать подсветка не идёт.</div>
           <div className="relative bg-gray-50 rounded-xl">
-            <div ref={backRef} aria-hidden="true" className="absolute inset-0 overflow-hidden rounded-xl p-3 text-sm font-sans pointer-events-none" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: "1.5", color: "transparent", border: "1px solid transparent", boxSizing: "border-box" }} dangerouslySetInnerHTML={{ __html: result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/(〔[^〕]*〕)/g, '<mark style="background:#fde68a;color:transparent;border-radius:3px">$1</mark>') + "\n" }} />
-            <textarea ref={taRef} value={result} onChange={e => setResult(e.target.value)} onScroll={() => { if (backRef.current && taRef.current) { backRef.current.scrollTop = taRef.current.scrollTop; backRef.current.scrollLeft = taRef.current.scrollLeft; } }} rows={22} className="relative w-full text-sm text-gray-800 font-sans bg-transparent rounded-xl p-3 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: "1.5", boxSizing: "border-box" }} />
+            <div ref={backRef} aria-hidden="true" className="absolute inset-0 rounded-xl p-3 text-sm font-sans pointer-events-none" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: "1.5", color: "transparent", border: "1px solid transparent", boxSizing: "border-box", overflow: "hidden" }} dangerouslySetInnerHTML={{ __html: result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/(〔[^〕]*〕)/g, '<mark style="background:#fde68a;color:transparent;border-radius:3px">$1</mark>') + "\n" }} />
+            <textarea ref={taRef} value={result} onChange={e => setResult(e.target.value)} rows={4} className="relative w-full text-sm text-gray-800 font-sans bg-transparent rounded-xl p-3 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: "1.5", boxSizing: "border-box", overflow: "hidden", resize: "none" }} />
           </div>
         </div>
       )}
