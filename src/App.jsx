@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
 // Прямого ключа к базе в браузере больше нет.
@@ -2150,6 +2150,8 @@ const CONTRACT_TEMPLATES = [
 ];
 
 function ContractsTab({ clients }) {
+  const taRef = useRef(null);
+  const backRef = useRef(null);
   const [source, setSource] = useState("client"); // client | text
   const [clientId, setClientId] = useState("");
   const [pasteText, setPasteText] = useState("");
@@ -2187,7 +2189,7 @@ function ContractsTab({ clients }) {
   const printContract = () => {
     if (!result) return;
     const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const body = esc(result).replace(/(〔[^〕]*〕)/g, '<b style="background:#ffe9a8">$1</b>');
+    const body = esc(result); // в печати — обычный текст, без подсветки
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Договор</title><style>@page{margin:18mm}body{font-family:'Times New Roman',serif;font-size:12pt;line-height:1.45;color:#000;white-space:pre-wrap;text-align:justify;margin:0}</style></head><body>${body}</body></html>`;
     // Печать через скрытый фрейм — не открываем новую вкладку (иначе на айфоне из неё не выйти)
     const old = document.getElementById("print-frame");
@@ -2247,8 +2249,11 @@ function ContractsTab({ clients }) {
               <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Договор_${partyName}.txt`, result, "text/plain;charset=utf-8")}>⬇️ Скачать</Btn>
             </div>
           </div>
-          <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-2">Можно править прямо здесь: заполни метки 〔…〕 (особенно <b>пункт 2.2</b>, номер и дату) — изменения попадут в печать и копию.</div>
-          <textarea value={result} onChange={e => setResult(e.target.value)} rows={22} className="w-full text-sm text-gray-800 font-sans bg-gray-50 rounded-xl p-3 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap" }} />
+          <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-2">Можно править прямо здесь: <mark style={{ background: "#fde68a" }}>жёлтым</mark> подсвечены метки 〔…〕, которые нужно заполнить (особенно <b>пункт 2.2</b>, номер и дату). В печать подсветка не идёт.</div>
+          <div className="relative bg-gray-50 rounded-xl">
+            <div ref={backRef} aria-hidden="true" className="absolute inset-0 overflow-hidden rounded-xl p-3 text-sm font-sans pointer-events-none" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: "1.5", color: "transparent", border: "1px solid transparent", boxSizing: "border-box" }} dangerouslySetInnerHTML={{ __html: result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/(〔[^〕]*〕)/g, '<mark style="background:#fde68a;color:transparent;border-radius:3px">$1</mark>') + "\n" }} />
+            <textarea ref={taRef} value={result} onChange={e => setResult(e.target.value)} onScroll={() => { if (backRef.current && taRef.current) { backRef.current.scrollTop = taRef.current.scrollTop; backRef.current.scrollLeft = taRef.current.scrollLeft; } }} rows={22} className="relative w-full text-sm text-gray-800 font-sans bg-transparent rounded-xl p-3 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: "1.5", boxSizing: "border-box" }} />
+          </div>
         </div>
       )}
     </div>
