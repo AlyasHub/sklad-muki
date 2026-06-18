@@ -223,6 +223,13 @@ async function parseOrderWithAI(text, clients) {
   return JSON.parse(data.raw);
 }
 
+async function parseClientWithAI(text) {
+  const res = await fetch("/api/parse-client", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Не удалось разобрать данные клиента");
+  return JSON.parse(data.raw);
+}
+
 function Badge({ color, children }) {
   const c = { green: "bg-emerald-100 text-emerald-800", yellow: "bg-amber-100 text-amber-800", blue: "bg-blue-100 text-blue-800", red: "bg-red-100 text-red-800", gray: "bg-gray-100 text-gray-600" };
   return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c[color]}`}>{children}</span>;
@@ -1010,6 +1017,19 @@ function ClientsTab({ clients, orders = [], reload }) {
   const [staleOnly, setStaleOnly] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
+  const [clientText, setClientText] = useState("");
+  const [parsingClient, setParsingClient] = useState(false);
+  const [clientParseErr, setClientParseErr] = useState("");
+
+  const handleParseClient = async () => {
+    if (!clientText.trim()) return;
+    setParsingClient(true); setClientParseErr("");
+    try {
+      const d = await parseClientWithAI(clientText);
+      setForm(f => ({ ...f, name: d.name || f.name, org_name: d.org_name || f.org_name, bin: d.bin || f.bin, director: d.director || f.director, contact_name: d.contact_name || f.contact_name, contact: d.contact || f.contact, email: d.email || f.email, address: d.address || f.address, legal_address: d.legal_address || f.legal_address, bank: d.bank || f.bank, iik: d.iik || f.iik, bik: d.bik || f.bik }));
+    } catch (e) { setClientParseErr(e.message); }
+    setParsingClient(false);
+  };
 
   // Долг клиента = отгружено и не оплачено
   const clientDebt = c => orders.filter(o => o.clientId === c.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
@@ -1021,8 +1041,8 @@ function ClientsTab({ clients, orders = [], reload }) {
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [] }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [] }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -1071,11 +1091,31 @@ function ClientsTab({ clients, orders = [], reload }) {
       {showAdd && (
         <Modal title={editId ? "Редактировать" : "Новый клиент"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
+            <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+              <div className="text-sm font-medium text-gray-700 mb-1">📋 Вставь все данные — разберу по полям</div>
+              <textarea value={clientText} onChange={e => setClientText(e.target.value)} rows={3} placeholder="напр.: ИП Салават, БИН 880101300123, тел +7 701 234 5678, адрес Астана, ул. Абая 10, Kaspi Bank, ИИК KZ12..., БИК CASPKZKA" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
+              {clientParseErr && <div className="text-xs text-red-500 mt-1">{clientParseErr}</div>}
+              <button onClick={handleParseClient} disabled={parsingClient || !clientText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2 text-sm">{parsingClient ? "Разбираю..." : "✨ Разобрать и заполнить"}</button>
+            </div>
             <Inp label="Название заведения" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Мамыр" />
             <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
             <Inp label="Адрес доставки" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-            <Inp label="WhatsApp" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
+            <Inp label="WhatsApp / телефон" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
+            <div className="border-t border-gray-100 pt-3">
+              <p className="text-sm font-medium text-gray-700 mb-2">Реквизиты (для договоров)</p>
+              <div className="space-y-3">
+                <Inp label="БИН / ИИН" value={form.bin || ""} onChange={e => setForm({ ...form, bin: e.target.value })} placeholder="12 цифр" />
+                <Inp label="Директор / в лице" value={form.director || ""} onChange={e => setForm({ ...form, director: e.target.value })} placeholder="Салават Б." />
+                <Inp label="Юридический адрес" value={form.legal_address || ""} onChange={e => setForm({ ...form, legal_address: e.target.value })} />
+                <Inp label="Email" value={form.email || ""} onChange={e => setForm({ ...form, email: e.target.value })} />
+                <Inp label="Банк" value={form.bank || ""} onChange={e => setForm({ ...form, bank: e.target.value })} placeholder="Kaspi Bank" />
+                <div className="grid grid-cols-2 gap-3">
+                  <Inp label="ИИК (счёт)" value={form.iik || ""} onChange={e => setForm({ ...form, iik: e.target.value })} placeholder="KZ..." />
+                  <Inp label="БИК" value={form.bik || ""} onChange={e => setForm({ ...form, bik: e.target.value })} />
+                </div>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <Sel label="Фасовка по умолчанию" value={form.default_bag_kg} onChange={e => setForm({ ...form, default_bag_kg: Number(e.target.value) })} options={[{ value: "", label: "— не указана —" }, ...WEIGHTS.map(w => ({ value: w, label: w + " кг" }))]} />
               <Sel label="Бренд по умолчанию" value={form.default_brand} onChange={e => setForm({ ...form, default_brand: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...BRANDS.map(b => ({ value: b, label: b }))]} />
