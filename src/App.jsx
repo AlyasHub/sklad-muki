@@ -266,6 +266,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
   const [photoView, setPhotoView] = useState(null);
+  const [editGroup, setEditGroup] = useState(null);
 
   // Отгрузки из Караганды идут напрямую клиенту — в логистику/маршруты Астаны не показываем
   const local = orders.filter(o => !o.fromKaraganda);
@@ -534,6 +535,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                     {(() => { const co = client && (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)); return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
                     {!driverMode && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                    {!driverMode && canEdit && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
                   {gPhotos.length > 0 && (
@@ -636,6 +638,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
           <button className="absolute top-4 right-4 text-white text-3xl" onClick={() => setPhotoView(null)}>&times;</button>
         </div>
       )}
+      {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} />}
     </div>
   );
 }
@@ -2109,6 +2112,64 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   );
 }
 
+// Форма редактирования позиций заявки (клиент+дата). Меняем сорт/кол-во/цену, удаляем и добавляем позиции.
+function EditGroupModal({ group, clients, reload, onClose }) {
+  const base = group.orders[0];
+  const [positions, setPositions] = useState(group.orders.map(o => ({ id: o.id, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags, price_per_kg: o.price_per_kg ?? "", trial: !!o.trial })));
+  const [saving, setSaving] = useState(false);
+  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
+  const upd = (i, f, v) => setPositions(ps => ps.map((p, idx) => idx === i ? { ...p, [f]: v } : p));
+  const add = () => setPositions(ps => [...ps, { id: null, brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", trial: false }]);
+  const rm = i => setPositions(ps => ps.filter((_, idx) => idx !== i));
+  const save = async () => {
+    const valid = positions.filter(p => Number(p.bags) > 0);
+    if (valid.length === 0) { alert("Оставь хотя бы одну позицию (или закрой и удали заявку целиком)."); return; }
+    setSaving(true);
+    const client = clients.find(c => c.id === base.clientId);
+    try {
+      for (const p of valid) {
+        const price = p.trial ? 0 : (p.price_per_kg !== "" && p.price_per_kg != null ? Number(p.price_per_kg) : (priceFor(client, p.brand, p.grade, Number(p.bag_kg)) || 0));
+        if (p.id) {
+          const orig = group.orders.find(o => o.id === p.id);
+          await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price });
+        } else {
+          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: base.driverId || "", trial: !!p.trial, fromKaraganda: !!base.fromKaraganda });
+        }
+      }
+      const keep = new Set(valid.filter(p => p.id).map(p => p.id));
+      for (const o of group.orders) if (!keep.has(o.id)) await dbDelete("orders", o.id);
+      onClose(); await reload("orders");
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
+  return (
+    <Modal title={`✏️ ${group.clientName || "Заявка"}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="text-xs text-gray-500">Измени сорт/количество/цену, удали лишнюю позицию (✕) или добавь новую.</div>
+        {positions.map((p, i) => (
+          <div key={i} className="border border-gray-200 rounded-xl p-3 relative">
+            <button onClick={() => rm(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600 text-lg leading-none" title="Удалить позицию">✕</button>
+            <div className="grid grid-cols-2 gap-2">
+              <Sel label="Бренд" value={p.brand} onChange={e => upd(i, "brand", e.target.value)} options={BRANDS} />
+              <Sel label="Сорт" value={p.grade} onChange={e => upd(i, "grade", e.target.value)} options={GRADES} />
+              <Sel label="Фасовка" value={p.bag_kg} onChange={e => upd(i, "bag_kg", e.target.value)} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+              <Inp label="Мешков" type="number" value={p.bags} onChange={e => upd(i, "bags", e.target.value)} />
+              {p.trial
+                ? <div className="col-span-2 text-xs text-orange-600 font-medium">🎁 на пробу (бесплатно)</div>
+                : <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={p.price_per_kg || ""} onChange={e => upd(i, "price_per_kg", e.target.value)} /></div>}
+            </div>
+          </div>
+        ))}
+        <button onClick={add} className="w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm font-medium text-gray-500 hover:bg-gray-50">+ ещё позиция</button>
+      </div>
+      <div className="flex gap-2 mt-4">
+        <Btn onClick={save} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
+        <Btn variant="secondary" onClick={onClose}>Отмена</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, canEdit = true, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -2117,6 +2178,7 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
   const [saving, setSaving] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
+  const [editGroup, setEditGroup] = useState(null);
   const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false });
   // Открыть форму заявки по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
@@ -2281,6 +2343,7 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
                         {allNew && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
                         {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
                         {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>}
+                        <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}>✏️ Изменить</Btn>
                         <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>🗑</Btn>
                       </div>
                       {!shipped && (
@@ -2331,6 +2394,7 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
           </div>
         </Modal>
       )}
+      {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} />}
     </div>
   );
 }
