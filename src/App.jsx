@@ -2168,6 +2168,16 @@ function ContractsTab({ clients }) {
     Object.entries(fields).forEach(([k, v]) => { t = t.split(k).join(v || "〔ВПИШИТЕ〕"); });
     setResult(t);
   };
+  const printContract = () => {
+    if (!result) return;
+    const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const body = esc(result).replace(/(〔[^〕]*〕)/g, '<b style="background:#ffe9a8">$1</b>');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Договор</title><style>@page{margin:18mm}body{font-family:'Times New Roman',serif;font-size:12pt;line-height:1.45;color:#000;white-space:pre-wrap;text-align:justify}</style></head><body>${body}</body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) { alert("Разреши всплывающие окна в браузере, чтобы напечатать договор."); return; }
+    w.document.write(html); w.document.close(); w.focus();
+    setTimeout(() => w.print(), 400);
+  };
   const requisites = c ? [
     `Наименование: ${c.org_name || c.name || "—"}`, `БИН/ИИН: ${c.bin || "—"}`, `Директор: ${c.director || "—"}`,
     `Юр. адрес: ${c.legal_address || c.address || "—"}`, `Телефон: ${c.contact || "—"}`, `Email: ${c.email || "—"}`,
@@ -2194,7 +2204,8 @@ function ContractsTab({ clients }) {
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
           <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
             <div className="font-bold text-gray-800">Готовый договор</div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
+              <Btn size="sm" onClick={printContract}>🖨 Печать</Btn>
               <Btn size="sm" variant="secondary" onClick={() => copyToClipboard(result)}>📋 Копировать</Btn>
               <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Договор_${(c.org_name || c.name || "клиент")}.txt`, result, "text/plain;charset=utf-8")}>⬇️ Скачать</Btn>
             </div>
