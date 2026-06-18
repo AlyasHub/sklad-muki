@@ -275,10 +275,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
   const [photoView, setPhotoView] = useState(null);
   const [editGroup, setEditGroup] = useState(null);
 
-  // Отгрузки из Караганды идут напрямую клиенту — в логистику/маршруты Астаны не показываем
+  // Отгрузки из Караганды идут напрямую клиенту — в маршруты Астаны не лезут, но в календаре видны отдельным блоком
   const local = orders.filter(o => !o.fromKaraganda);
   // Водитель видит только свои отгрузки
   const vis = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
+  const karagandaVis = driverFilter != null ? [] : orders.filter(o => o.fromKaraganda); // только директор/бухгалтер
 
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
 
@@ -368,7 +369,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
   const kgByDate = {};
   const countByDate = {};
   const seenByDate = {}; // считаем заявки по клиентам, а не по позициям
-  vis.forEach(o => {
+  [...vis, ...karagandaVis].forEach(o => {
     kgByDate[o.date] = (kgByDate[o.date] || 0) + o.bags * o.bag_kg;
     const key = o.clientId || ("nm:" + (o.clientName || ""));
     if (!seenByDate[o.date]) seenByDate[o.date] = new Set();
@@ -398,6 +399,18 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
     });
     return Object.values(m);
   })();
+
+  // Карагандинские отгрузки этого дня — отдельным блоком (фура напрямую клиенту)
+  const karagandaDayGroups = (() => {
+    const m = {};
+    karagandaVis.filter(o => o.date === selected).forEach(o => {
+      const key = o.clientId || ("nm:" + (o.clientName || ""));
+      if (!m[key]) m[key] = { key: "kg:" + key, clientId: o.clientId, clientName: o.clientName, orders: [] };
+      m[key].orders.push(o);
+    });
+    return Object.values(m);
+  })();
+  const allDayGroups = [...dayGroups, ...karagandaDayGroups]; // для кнопки «Все накладные»
 
   // Письменный отчёт за выбранный день
   const buildReport = () => {
@@ -442,7 +455,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
     const bal = {};
     stock.forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; bal[k] = (bal[k] || 0) + Number(s.bags || 0); });
     const need = {};
-    orders.filter(o => o.status === "новая" || o.status === "в пути").forEach(o => { const k = `${o.brand}|${o.grade}|${o.bag_kg}`; need[k] = (need[k] || 0) + Number(o.bags || 0); });
+    orders.filter(o => (o.status === "новая" || o.status === "в пути") && !o.fromKaraganda).forEach(o => { const k = `${o.brand}|${o.grade}|${o.bag_kg}`; need[k] = (need[k] || 0) + Number(o.bags || 0); });
     const out = [];
     Object.entries(need).forEach(([k, n]) => { const have = Math.max(0, bal[k] || 0); if (n > have) { const [brand, grade, bag_kg] = k.split("|"); out.push({ brand, grade, bag_kg, need: n, have, lack: n - have }); } });
     return out.sort((a, b) => b.lack - a.lack);
@@ -502,7 +515,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
             <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Склад_${selected}.csv`, buildCsv(), "text/csv;charset=utf-8")}>📊 Excel</Btn>
           </div>
         )}
-        {dayOrders.length === 0 ? (
+        {dayOrders.length === 0 && karagandaDayGroups.length === 0 ? (
           <div className="text-center py-10 text-gray-400">На это число отгрузок нет</div>
         ) : (
           <div className="space-y-2">
@@ -584,9 +597,45 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
             })}
           </div>
         )}
-        {!driverMode && dayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length > 0 && (
+        {!driverMode && allDayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length > 0 && (
           <div className="mt-3">
-            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + dayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}>📋 Скопировать все накладные ({dayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
+            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + allDayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}>📋 Скопировать все накладные ({allDayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
+          </div>
+        )}
+
+        {karagandaDayGroups.length > 0 && (
+          <div className="mt-5">
+            <h4 className="font-semibold text-gray-700 mb-2">🏬 Из Караганды (напрямую клиентам)</h4>
+            <div className="space-y-2">
+              {karagandaDayGroups.map(g => {
+                const statuses = [...new Set(g.orders.map(o => o.status))];
+                const st = statuses.length === 1 ? statuses[0] : "частично";
+                const shipped = st === "отгружена";
+                const client = clients.find(c => c.id === g.clientId);
+                return (
+                  <div key={g.key} className={`rounded-xl px-4 py-3 text-sm border ${shipped ? "bg-emerald-50 border-emerald-200" : "bg-orange-50 border-orange-100"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600">✓</span>}{g.clientName || "Клиент"}</span>
+                      {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-2.5 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color="yellow">в пути</Badge>}
+                    </div>
+                    <div className="mt-1 space-y-1">
+                      {mergedPositions(g.orders).map((m, mi) => (
+                        <div key={mi} className="text-gray-600 flex items-center gap-2 flex-wrap">
+                          <span>• {m.brand} {m.grade}</span>
+                          <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {m.bags} меш. × {m.bag_kg} кг</span>
+                          <span>= <b>{fmt(m.bags * m.bag_kg)} кг</b></span>
+                          {showPrices && m.tg ? <span className="text-gray-400">· {fmt(m.tg)} тг</span> : null}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-2 flex-wrap">
+                      {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                      <span className="text-orange-600">🏬 фура из Караганды · статус меняется на странице «Караганда»</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -908,7 +957,7 @@ function StockTab({ stock, orders = [], reload }) {
   // Сколько мешков «забронировано» заявками, которые ещё НЕ отгружены (новая + в пути).
   // При отгрузке склад списывается автоматически, поэтому здесь только будущий спрос.
   const reserved = {};
-  orders.filter(o => o.status === "новая" || o.status === "в пути").forEach(o => {
+  orders.filter(o => (o.status === "новая" || o.status === "в пути") && !o.fromKaraganda).forEach(o => {
     const k = `${o.brand}|${o.grade}|${o.bag_kg}`;
     reserved[k] = (reserved[k] || 0) + Number(o.bags || 0);
   });
