@@ -1653,20 +1653,27 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
 
 function TrucksTab({ trucks, reload }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [f, setF] = useState({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" });
   const [items, setItems] = useState([]);
-  const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" });
+  const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" });
 
-  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" }); };
-  const addItem = () => { if (!it.tonnes) return; setItems([...items, { ...it, bag_kg: Number(it.bag_kg), tonnes: Number(it.tonnes) }]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, tonnes: "" }); };
+  const itemKg = i => (i.kg != null && i.kg !== "") ? Number(i.kg) : Number(i.tonnes || 0) * 1000; // старые записи были в тоннах
+  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); };
+  const addItem = () => { if (!it.kg) return; setItems([...items, { brand: it.brand, grade: it.grade, bag_kg: Number(it.bag_kg), kg: Number(it.kg) }]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); };
   const removeItem = i => setItems(items.filter((_, j) => j !== i));
+  const openNew = () => { setEditId(null); reset(); setShowAdd(true); };
+  const openEdit = t => { setEditId(t.id); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
 
   const saveTruck = async () => {
     if (items.length === 0) return;
     setSaving(true);
-    try { await dbUpsert("trucks", { id: uid(), ...f, price: Number(f.price) || 0, items, status: "запланирована" }); setShowAdd(false); reset(); await reload("trucks"); }
-    catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    try {
+      const existing = trucks.find(t => t.id === editId);
+      await dbUpsert("trucks", { ...(existing || {}), id: editId || uid(), ...f, price: Number(f.price) || 0, items, status: existing?.status || "запланирована" });
+      setShowAdd(false); setEditId(null); reset(); await reload("trucks");
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
 
@@ -1676,7 +1683,7 @@ function TrucksTab({ trucks, reload }) {
     setSaving(true);
     try {
       if (status === "принята" && t.status !== "принята") {
-        for (const item of t.items) { const weight_kg = item.tonnes * 1000; const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` }); }
+        for (const item of t.items) { const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` }); }
         if (t.price) await dbUpsert("expenses", { id: uid(), date: TODAY(), category: "Фура/Поставка", amount: Number(t.price), note: `Фура от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}` });
         await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
         await reload("stock"); await reload("expenses");
@@ -1689,15 +1696,15 @@ function TrucksTab({ trucks, reload }) {
   };
   const deleteTruck = async id => { if (!confirm("Удалить фуру?")) return; await dbDelete("trucks", id); await reload("trucks"); };
 
-  const totalTonnes = t => t.items.reduce((s, i) => s + i.tonnes, 0);
+  const totalKg = t => (t.items || []).reduce((s, i) => s + itemKg(i), 0);
   const sorted = [...trucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
   const waLink = n => "https://wa.me/" + String(n || "").replace(/\D/g, "");
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Поставки (фуры)</h3><Btn onClick={() => { reset(); setShowAdd(true); }}>+ Запланировать фуру</Btn></div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Поставки (фуры)</h3><Btn onClick={openNew}>+ Запланировать фуру</Btn></div>
       {showAdd && (
-        <Modal title="Новая фура" onClose={() => setShowAdd(false)}>
+        <Modal title={editId ? "Изменить фуру" : "Новая фура"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
             <Inp label="Дата прихода" type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
             <div className="grid grid-cols-2 gap-2">
@@ -1713,15 +1720,15 @@ function TrucksTab({ trucks, reload }) {
                 <Sel value={it.brand} onChange={e => setIt({ ...it, brand: e.target.value })} options={BRANDS} />
                 <Sel value={it.grade} onChange={e => setIt({ ...it, grade: e.target.value })} options={GRADES} />
                 <Sel value={it.bag_kg} onChange={e => setIt({ ...it, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
-                <Inp type="number" placeholder="тонн" value={it.tonnes} onChange={e => setIt({ ...it, tonnes: e.target.value })} />
+                <Inp type="number" placeholder="кг" value={it.kg} onChange={e => setIt({ ...it, kg: e.target.value })} />
               </div>
               <Btn size="sm" variant="secondary" onClick={addItem}>+ Добавить позицию</Btn>
-              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm"><span>{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium">{fmt(p.tonnes)} т</span><button className="text-red-400 hover:text-red-600" onClick={() => removeItem(i)}>✕</button></div>)}</div>}
+              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm"><span>{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium">{fmt(itemKg(p))} кг</span><button className="text-red-400 hover:text-red-600" onClick={() => removeItem(i)}>✕</button></div>)}</div>}
             </div>
             <Inp label="Примечание" value={f.note} onChange={e => setF({ ...f, note: e.target.value })} />
           </div>
           <div className="flex gap-2 mt-4">
-            <Btn onClick={saveTruck} disabled={saving || items.length === 0}>{saving ? "Сохраняю..." : "Запланировать"}</Btn>
+            <Btn onClick={saveTruck} disabled={saving || items.length === 0}>{saving ? "Сохраняю..." : (editId ? "Сохранить" : "Запланировать")}</Btn>
             <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
           </div>
         </Modal>
@@ -1731,11 +1738,11 @@ function TrucksTab({ trucks, reload }) {
         {sorted.map(t => (
           <div key={t.id} className={`rounded-2xl p-4 border ${t.status === "принята" ? "bg-white border-gray-100 shadow-sm" : "bg-amber-50 border-amber-200"}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className="font-bold text-gray-900">🚚 Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalTonnes(t))} т{t.price ? ` · ${fmt(t.price)} тг` : ""}</span></div>
+              <div className="font-bold text-gray-900">🚚 Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalKg(t))} кг{t.price ? ` · ${fmt(t.price)} тг` : ""}</span></div>
               <Badge color={t.status === "принята" ? "green" : t.status === "в пути" ? "yellow" : "blue"}>{t.status}</Badge>
             </div>
             <div className="space-y-1 text-sm text-gray-600">
-              {t.items.map((p, i) => <div key={i}>• {p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.tonnes)} т ({fmt(Math.round(p.tonnes * 1000 / p.bag_kg))} мешков)</div>)}
+              {t.items.map((p, i) => <div key={i}>• {p.brand} {p.grade} {p.bag_kg}кг — {fmt(itemKg(p))} кг ({fmt(p.bag_kg > 0 ? Math.round(itemKg(p) / p.bag_kg) : 0)} мешков)</div>)}
             </div>
             {(t.driver_name || t.car_number || t.whatsapp || t.logist_phone) && (
               <div className="text-xs text-gray-500 mt-2 space-y-0.5">
@@ -1752,7 +1759,10 @@ function TrucksTab({ trucks, reload }) {
                 <Btn size="sm" onClick={() => setTruckStatus(t, "принята")} disabled={saving}>✓ Принять на склад</Btn>
               </div>
             )}
-            <div className="mt-2"><Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn></div>
+            <div className="mt-2 flex gap-2">
+              {t.status !== "принята" && <Btn size="sm" variant="secondary" onClick={() => openEdit(t)}>✏️ Изменить</Btn>}
+              <Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn>
+            </div>
           </div>
         ))}
       </div>
