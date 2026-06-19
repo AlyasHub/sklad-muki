@@ -2476,6 +2476,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
     if (valid.length === 0) { alert("Оставь хотя бы одну позицию (или закрой и удали заявку целиком)."); return; }
     setSaving(true);
     const client = clients.find(c => c.id === base.clientId);
+    const grpDriver = group.orders.find(o => o.driverId)?.driverId || ""; // водитель заявки (с любой позиции)
     try {
       for (const p of valid) {
         const price = p.trial ? 0 : (p.price_per_kg !== "" && p.price_per_kg != null ? Number(p.price_per_kg) : (priceFor(client, p.brand, p.grade, Number(p.bag_kg)) || 0));
@@ -2483,7 +2484,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
           const orig = group.orders.find(o => o.id === p.id);
           await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price });
         } else {
-          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: base.driverId || "", trial: !!p.trial, fromKaraganda: !!base.fromKaraganda });
+          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda });
         }
       }
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
@@ -2575,7 +2576,10 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
     if (ambiguous) { alert(`Выбери, какой именно клиент «${ambiguous.clientFound}» — их несколько с таким названием.`); return; }
     setSaving(true);
     try {
-      for (const p of aiResult) await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: "", status: "новая" });
+      for (const p of aiResult) {
+        const inheritedDriver = p.clientId ? (orders.find(o => o.clientId === p.clientId && o.date === p.date && o.driverId)?.driverId || "") : "";
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: inheritedDriver, status: "новая" });
+      }
       setAiResult(null); setAiText(""); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + (e && e.message ? e.message : e)); }
     setSaving(false);
@@ -2607,10 +2611,12 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
     setSavingManual(true);
     const client = form.isSample ? null : clients.find(c => c.id === form.clientId);
     const price = (form.isSample || isTrial) ? 0 : (form.price_per_kg || (client ? priceFor(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
+    // если у клиента на эту дату уже назначен водитель — наследуем его (чтобы новая позиция не «потерялась» у водителя)
+    const inheritedDriver = (!form.isSample && form.clientId) ? (orders.find(o => o.clientId === form.clientId && o.date === form.date && o.driverId)?.driverId || "") : "";
     try {
       await dbUpsert("orders", {
         id: uid(), date: form.date, brand: form.brand, grade: form.grade,
-        bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId,
+        bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId || inheritedDriver,
         price_per_kg: Number(price), status: "новая",
         isSample: form.isSample, trial: isTrial,
         clientId: form.isSample ? null : form.clientId,
