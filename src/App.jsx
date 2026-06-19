@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 
 // Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
 // Прямого ключа к базе в браузере больше нет.
@@ -521,7 +521,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
           <div className="text-center py-10 text-gray-400">На это число отгрузок нет</div>
         ) : (
           <div className="space-y-2">
-            {dayGroups.map(g => {
+            {dayGroups.map((g, gi, arr) => {
               const client = clients.find(c => c.id === g.clientId);
               const driver = drivers.find(d => d.id === g.orders[0].driverId);
               const statuses = [...new Set(g.orders.map(o => o.status))];
@@ -534,8 +534,12 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
               const allConfirmed = g.orders.every(o => o.confirmed);
               const allShipped = g.orders.every(o => o.status === "отгружена");
               const firstId = g.orders[0].id;
+              const prevShipped = gi > 0 && arr[gi - 1].orders.every(o => o.status === "отгружена");
+              const shippedCount = arr.filter(x => x.orders.every(o => o.status === "отгружена")).length;
               return (
-                <div key={g.key} className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
+                <Fragment key={g.key}>
+                {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
+                <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
@@ -595,6 +599,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
                     <div className="text-xs text-gray-400 mt-1">{driver ? `🚛 ${driver.name}` : ""}</div>
                   )}
                 </div>
+                </Fragment>
               );
             })}
           </div>
@@ -2678,14 +2683,18 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
           <div className="text-center py-8 text-gray-400 bg-white border border-gray-100 rounded-2xl">На сегодня доставок нет.</div>
         ) : (
           <div className="space-y-2">
-            {todayGroups.map(g => {
+            {todayGroups.map((g, gi, arr) => {
               const statuses = [...new Set(g.orders.map(o => o.status))];
               const st = statuses.length === 1 ? statuses[0] : "частично";
               const shipped = st === "отгружена";
               const allNew = g.orders.every(o => o.status === "новая");
               const allRoute = g.orders.every(o => o.status === "в пути");
+              const prevShipped = gi > 0 && arr[gi - 1].orders.every(o => o.status === "отгружена");
+              const shippedCount = arr.filter(x => x.orders.every(o => o.status === "отгружена")).length;
               return (
-                <div key={g.key} className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
+                <Fragment key={g.key}>
+                {shipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
+                <div className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}</span>
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
@@ -2717,6 +2726,7 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
                     </div>
                   )}
                 </div>
+                </Fragment>
               );
             })}
           </div>
