@@ -398,7 +398,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
       if (o.isSample) m[key].isSample = true;
       if (o.trial) m[key].isTrial = true;
     });
-    return Object.values(m);
+    // Отвезённые (всё отгружено) — вниз списка, неотвезённые — сверху
+    return Object.values(m).sort((a, b) => (a.orders.every(o => o.status === "отгружена") ? 1 : 0) - (b.orders.every(o => o.status === "отгружена") ? 1 : 0));
   })();
 
   // Карагандинские отгрузки этого дня — отдельным блоком (фура напрямую клиенту)
@@ -649,10 +650,12 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
       </div>
 
       {dayOrders.length > 0 && (() => {
+        // Маршрут строим только по НЕотвезённым точкам — отгруженные уходят с маршрута (можно везти в несколько заходов)
+        const pending = dayOrders.filter(o => o.status !== "отгружена");
         // одна точка на клиента (без дублей, даже если у него несколько позиций)
         const seen = new Set();
         const points = [];
-        dayOrders.forEach(o => {
+        pending.forEach(o => {
           const client = clients.find(c => c.id === o.clientId);
           if (!client || seen.has(client.id)) return;
           const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
@@ -663,7 +666,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
 
         if (points.length === 0) return (
           <div className="bg-gray-50 border border-dashed border-gray-200 rounded-2xl p-4 text-sm text-gray-400 text-center">
-            Добавь координаты клиентам чтобы строить маршрут 🗺️
+            {pending.length === 0 ? "✓ Все доставки за день отгружены" : "Добавь координаты клиентам чтобы строить маршрут 🗺️"}
           </div>
         );
 
@@ -676,7 +679,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
             <div className="flex items-center justify-between mb-3">
               <div>
                 <div className="font-bold text-gray-800">🗺️ Маршрут на {selected.split("-").reverse().join(".")}</div>
-                <div className="text-xs text-gray-500">{points.length} точек · ~{Math.round(totalDist)} км</div>
+                <div className="text-xs text-gray-500">{points.length} точек осталось · ~{Math.round(totalDist)} км</div>
               </div>
               <a href={routeUrl} target="_blank" rel="noreferrer"
                 className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all">
@@ -2547,7 +2550,8 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
       if (!m[k]) m[k] = { key: k, clientId: o.clientId, clientName: o.clientName, isTrial: false, orders: [] };
       m[k].orders.push(o); if (o.trial) m[k].isTrial = true;
     });
-    return Object.values(m);
+    // Отвезённые — вниз, неотвезённые — сверху
+    return Object.values(m).sort((a, b) => (a.orders.every(o => o.status === "отгружена") ? 1 : 0) - (b.orders.every(o => o.status === "отгружена") ? 1 : 0));
   })();
 
   const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red", "частично": "gray" };
