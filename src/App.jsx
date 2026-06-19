@@ -1650,12 +1650,12 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
             )}
             {restock.length > 0 && (
               <div>
-                <div className="text-xs font-semibold text-gray-500 mb-1">Ожидается на неделю vs склад</div>
+                <div className="text-xs font-semibold text-gray-500 mb-1">Ожидается на неделю vs склад (в кг)</div>
                 <div className="space-y-0.5 text-sm">
                   {restock.map(x => { const need = x.exp - x.st; return (
                     <div key={x.p} className="flex items-center justify-between">
                       <span>{x.p}</span>
-                      <span className={need > 0 ? "text-red-600 font-medium" : "text-gray-500"}>ожид. ~{fmt(x.exp)} · склад {fmt(x.st)}{need > 0 ? ` → докупить ~${fmt(need)} кг` : " ✓"}</span>
+                      <span className={need > 0 ? "text-red-600 font-medium" : "text-gray-500"}>ожид. ~{fmt(x.exp)} кг · склад {fmt(x.st)} кг{need > 0 ? ` → докупить ~${fmt(need)} кг` : " ✓"}</span>
                     </div>
                   ); })}
                 </div>
