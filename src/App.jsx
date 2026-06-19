@@ -574,9 +574,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
 
                   {driverMode ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
-                      {allDelivered
-                        ? <Btn size="sm" variant="secondary" onClick={() => driverMarkGroup(g, false)}>↩ Отменить «доставил»</Btn>
-                        : <Btn size="sm" onClick={() => driverMarkGroup(g, true)}>✓ Доставил</Btn>}
+                      {allShipped
+                        ? <span className="text-sm font-bold text-emerald-700">✓ Доставка подтверждена</span>
+                        : (allDelivered
+                          ? <Btn size="sm" variant="secondary" onClick={() => driverMarkGroup(g, false)}>↩ Отменить «доставил»</Btn>
+                          : <Btn size="sm" onClick={() => driverMarkGroup(g, true)}>✓ Доставил</Btn>)}
                       <label className={`cursor-pointer text-xs rounded-lg px-3 py-1.5 font-medium ${uploadingId === firstId ? "bg-gray-200 text-gray-400" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
                         {uploadingId === firstId ? "Загрузка..." : "📷 Фото"}
                         <input type="file" accept="image/*" capture="environment" hidden disabled={uploadingId === firstId} onChange={e => { addPhoto(g.orders[0], e.target.files[0]); e.target.value = ""; }} />

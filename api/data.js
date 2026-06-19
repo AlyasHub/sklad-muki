@@ -59,6 +59,11 @@ async function upsertFor(u, table, item) {
     } else if (!existing) {
       item = { ...item, created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString() };
     }
+    // Поля водителя (отметка доставки и фото) принадлежат водителю — директорская запись их НЕ затирает,
+    // берём актуальные значения с сервера (защита от гонки, когда водитель отметил «доставил» одновременно).
+    if (table === "orders" && existing) {
+      item = { ...item, delivered_by_driver: existing.delivered_by_driver, delivered_at: existing.delivered_at, photos: existing.photos ?? item.photos };
+    }
     return dbUpsert(table, item);
   }
   if (u.role === "driver" && table === "orders") {
