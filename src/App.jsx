@@ -268,7 +268,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
 
 const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "debts", label: "💰 Долги" }, { id: "contracts", label: "📄 Договоры" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
 
-function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
+function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
@@ -292,9 +292,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
     setUploadingId(o.id);
     try {
       const url = await uploadPhoto(o.id, file);
+      applyLocal("orders", os => os.map(x => x.id === o.id ? { ...x, photos: [...(x.photos || []), url] } : x));
       await dbUpsert("orders", { ...o, photos: [...(o.photos || []), url] });
-      await reload("orders");
-    } catch (e) { alert("⚠️ Не удалось загрузить фото: " + e.message + "\nПроверь интернет и попробуй ещё раз."); }
+    } catch (e) { alert("⚠️ Не удалось загрузить фото: " + e.message + "\nПроверь интернет и попробуй ещё раз."); reload("orders"); }
     setUploadingId(null);
   };
   // Директор подтверждает доставку → списание со склада
@@ -330,33 +330,51 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, canEdit = t
   const assignDriver = async (o, driverId) => { try { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
   const deleteOrder = async (id) => { try { await dbDelete("orders", id); await reload("orders"); } catch (e) { notifyErr(e); } };
 
-  // Действия на всю заявку клиента (несколько позиций сразу)
-  const assignDriverGroup = async (g, driverId) => { try { for (const o of g.orders) await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
-  const deleteGroup = async g => { if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return; try { for (const o of g.orders) await dbDelete("orders", o.id); await reload("orders"); } catch (e) { notifyErr(e); } };
+  // Действия на всю заявку клиента (несколько позиций). Оптимистично: экран меняется сразу, запись — в фоне.
+  const assignDriverGroup = async (g, driverId) => {
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, driverId } : o));
+    try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, driverId }))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
+  const deleteGroup = async g => {
+    if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return;
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.filter(o => !ids.has(o.id)));
+    try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
   const setGroupStatus = async (g, status) => {
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, status } : o));
     try {
-      for (const o of g.orders) {
-        if (o.status === status) continue;
+      await Promise.all(g.orders.map(async o => {
+        if (o.status === status) return;
         const kg = o.bags * o.bag_kg;
         await dbUpsert("orders", { ...o, status });
-        if (o.fromKaraganda) continue; // карагандинские отгрузки склад Астаны не трогают
+        if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
         if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
         else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
-      }
-      await reload("stock"); await reload("orders");
-    } catch (e) { notifyErr(e); }
+      }));
+      reload("stock"); // склад подтянем в фоне (не блокируя экран)
+    } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
   };
   const confirmGroup = async g => {
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, confirmed: true, status: "отгружена" } : o));
     try {
-      for (const o of g.orders) {
-        if (o.confirmed && o.status === "отгружена") continue;
+      await Promise.all(g.orders.map(async o => {
+        if (o.confirmed && o.status === "отгружена") return;
         await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
-        if (o.status !== "отгружена") { const kg = o.bags * o.bag_kg; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` }); }
-      }
-      await reload("stock"); await reload("orders");
-    } catch (e) { notifyErr(e); }
+        if (o.status !== "отгружена" && !o.fromKaraganda) { const kg = o.bags * o.bag_kg; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` }); }
+      }));
+      reload("stock");
+    } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
   };
-  const driverMarkGroup = async (g, val) => { try { for (const o of g.orders) await dbUpsert("orders", { ...o, delivered_by_driver: val, delivered_at: val ? new Date().toISOString() : o.delivered_at }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const driverMarkGroup = async (g, val) => {
+    const ids = new Set(g.orders.map(o => o.id));
+    const at = new Date().toISOString();
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, delivered_by_driver: val, delivered_at: val ? at : o.delivered_at } : o));
+    try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, delivered_by_driver: val, delivered_at: val ? at : o.delivered_at }))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -2531,7 +2549,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
   );
 }
 
-function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, canEdit = true, openSignal = 0 }) {
+function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -2596,24 +2614,36 @@ function TodayTab({ orders, clients, drivers = [], reload, driverFilter = null, 
     setSaving(false);
   };
 
-  // Смена статуса доставки — со списанием/возвратом склада, как в Календаре
+  // Смена статуса доставки — оптимистично (экран сразу), запись в фоне
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
   const setGroupStatus = async (g, status) => {
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, status } : o));
     try {
-      for (const o of g.orders) {
-        if (o.status === status) continue;
+      await Promise.all(g.orders.map(async o => {
+        if (o.status === status) return;
         const kg = o.bags * o.bag_kg;
         await dbUpsert("orders", { ...o, status });
-        if (o.fromKaraganda) continue; // карагандинские отгрузки склад Астаны не трогают
+        if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
         if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
         else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
-      }
-      await reload("stock"); await reload("orders");
-    } catch (e) { notifyErr(e); }
+      }));
+      reload("stock");
+    } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
   };
   // Перенести доставку на другую дату (если сегодня не получилось отгрузить)
-  const rescheduleGroup = async (g, date) => { if (!date) return; try { for (const o of g.orders) await dbUpsert("orders", { ...o, date }); await reload("orders"); } catch (e) { notifyErr(e); } };
-  const deleteGroup = async g => { if (!confirm(`Удалить заявку «${g.clientName || "Клиент"}» на сегодня (${g.orders.length} поз.)?`)) return; try { for (const o of g.orders) await dbDelete("orders", o.id); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const rescheduleGroup = async (g, date) => {
+    if (!date) return;
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, date } : o));
+    try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, date }))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
+  const deleteGroup = async g => {
+    if (!confirm(`Удалить заявку «${g.clientName || "Клиент"}» на сегодня (${g.orders.length} поз.)?`)) return;
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.filter(o => !ids.has(o.id)));
+    try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
 
   // Добавить заявку вручную (форма та же, что была в «Заявках»)
   const addManual = async () => {
@@ -2789,6 +2819,8 @@ export default function App() {
     try { const rows = await dbGetAll(table); setData(prev => ({ ...prev, [table]: rows })); setLastSync(new Date().toLocaleTimeString("ru-RU")); }
     catch (e) { setError("Ошибка: " + e.message); }
   }, []);
+  // Мгновенное локальное обновление (оптимистично) — экран меняется сразу, не дожидаясь сервера
+  const applyLocal = useCallback((table, fn) => setData(prev => ({ ...prev, [table]: fn(prev[table] || []) })), []);
 
   const reloadAll = useCallback(async (showSpinner = false) => {
     if (!authToken) { if (showSpinner) setLoading(false); return; }
@@ -2865,8 +2897,8 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} reload={reload} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
