@@ -546,7 +546,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
               const gStatus = statuses.length === 1 ? statuses[0] : "частично";
               const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
               const gSum = g.orders.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
-              const gPhotos = g.orders.flatMap(o => o.photos || []);
+              const gPhotos = [...new Set(g.orders.flatMap(o => o.photos || []))];
               const allDelivered = g.orders.every(o => o.delivered_by_driver);
               const anyClaim = g.orders.some(o => o.delivered_by_driver);
               const allConfirmed = g.orders.every(o => o.confirmed);
@@ -2505,14 +2505,20 @@ function EditGroupModal({ group, clients, reload, onClose }) {
     setSaving(true);
     const client = clients.find(c => c.id === base.clientId);
     const grpDriver = group.orders.find(o => o.driverId)?.driverId || ""; // водитель заявки (с любой позиции)
+    // Фото (накладные) и отметку доставки собираем со всей заявки и переносим на первую позицию — чтобы не потерять при удалении позиции
+    const allPhotos = [...new Set(group.orders.flatMap(o => o.photos || []))];
+    const anyDelivered = group.orders.some(o => o.delivered_by_driver);
+    let carried = false;
     try {
       for (const p of valid) {
         const price = p.trial ? 0 : (p.price_per_kg !== "" && p.price_per_kg != null ? Number(p.price_per_kg) : (priceFor(client, p.brand, p.grade, Number(p.bag_kg)) || 0));
+        const carry = !carried ? { photos: allPhotos, delivered_by_driver: anyDelivered } : {};
+        carried = true;
         if (p.id) {
           const orig = group.orders.find(o => o.id === p.id);
-          await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price });
+          await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, ...carry });
         } else {
-          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda });
+          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, ...carry });
         }
       }
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
