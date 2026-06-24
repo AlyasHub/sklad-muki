@@ -375,6 +375,13 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, delivered_by_driver: val, delivered_at: val ? at : o.delivered_at } : o));
     try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, delivered_by_driver: val, delivered_at: val ? at : o.delivered_at }))); } catch (e) { notifyErr(e); reload("orders"); }
   };
+  // Отметка «загрузил в машину» (чтобы не путаться при загрузке нескольких заявок)
+  const loadGroup = async (g, val) => {
+    if (val && !confirm(`Точно загрузили товар «${g.clientName || "клиента"}» в машину?`)) return;
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, loaded: val } : o));
+    try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, loaded: val }))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -573,6 +580,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
               const anyClaim = g.orders.some(o => o.delivered_by_driver);
               const allConfirmed = g.orders.every(o => o.confirmed);
               const allShipped = g.orders.every(o => o.status === "отгружена");
+              const allLoaded = g.orders.every(o => o.loaded);
               const firstId = g.orders[0].id;
               const prevShipped = gi > 0 && arr[gi - 1].orders.every(o => o.status === "отгружена");
               const shippedCount = arr.filter(x => x.orders.every(o => o.status === "отгружена")).length;
@@ -581,7 +589,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
@@ -614,6 +622,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
 
                   {driverMode ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
+                      {!allShipped && (allLoaded
+                        ? <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, false)}>↩ Не загружен</Btn>
+                        : <Btn size="sm" onClick={() => loadGroup(g, true)}>📦 Загрузил</Btn>)}
                       {allShipped
                         ? <span className="text-sm font-bold text-emerald-700">✓ Доставка подтверждена</span>
                         : (allDelivered
@@ -630,6 +641,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                         <option value="">🚛 Водитель</option>
                         {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                       </select>
+                      {!allShipped && (allLoaded
+                        ? <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, false)}>↩ Не загружен</Btn>
+                        : <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, true)}>📦 Загрузил</Btn>)}
                       {anyClaim && !allConfirmed
                         ? <Btn size="sm" onClick={() => confirmGroup(g)}>✓ Подтвердить</Btn>
                         : (!allShipped

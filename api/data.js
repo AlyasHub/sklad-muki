@@ -70,11 +70,12 @@ async function upsertFor(u, table, item) {
   if (u.role === "driver" && table === "orders") {
     const existing = (await dbList("orders")).find(o => o.id === item.id);
     if (!existing || existing.driverId !== u.driverId) throw new Error("Нет доступа к этой отгрузке");
-    // водителю можно менять только отметку доставки и фото
+    // водителю можно менять только отметку доставки, отметку загрузки в машину и фото
     const merged = {
       ...existing,
       delivered_by_driver: !!item.delivered_by_driver,
       delivered_at: item.delivered_at ?? existing.delivered_at,
+      loaded: typeof item.loaded === "boolean" ? item.loaded : existing.loaded,
       photos: Array.isArray(item.photos) ? item.photos : existing.photos,
     };
     return dbUpsert("orders", merged);
