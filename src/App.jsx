@@ -438,11 +438,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
       if (o.isSample) m[key].isSample = true;
       if (o.trial) m[key].isTrial = true;
     });
-    // Отвезённые — вниз; неотвезённые — в порядке маршрута (как грузить машину)
+    // Порядок: 0 — не загружены, 1 — в машине, 2 — отвезены. Внутри — по очерёдности маршрута.
+    const tierOf = g => g.orders.every(o => o.status === "отгружена") ? 2 : (g.orders.every(o => o.loaded) ? 1 : 0);
     return Object.values(m).sort((a, b) => {
-      const sa = a.orders.every(o => o.status === "отгружена") ? 1 : 0;
-      const sb = b.orders.every(o => o.status === "отгружена") ? 1 : 0;
-      if (sa !== sb) return sa - sb;
+      const ta = tierOf(a), tb = tierOf(b);
+      if (ta !== tb) return ta - tb;
       const ra = routeIndex[a.clientId] ?? 9999, rb = routeIndex[b.clientId] ?? 9999;
       if (ra !== rb) return ra - rb;
       return (a.clientName || "").localeCompare(b.clientName || "");
@@ -587,7 +587,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
               return (
                 <Fragment key={g.key}>
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
-                <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
+                <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
