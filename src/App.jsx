@@ -1325,7 +1325,8 @@ function DriversTab({ drivers, orders, expenses = [], reload }) {
   const [payDriver, setPayDriver] = useState(null);
   const [payAmount, setPayAmount] = useState("");
   const [payDate, setPayDate] = useState(TODAY());
-  const [historyDriver, setHistoryDriver] = useState(null);
+  const [payExtra, setPayExtra] = useState(false);
+  const [detailDriver, setDetailDriver] = useState(null);
 
   const saveDriver = async () => {
     setSaving(true);
@@ -1334,17 +1335,19 @@ function DriversTab({ drivers, orders, expenses = [], reload }) {
   };
   const deleteDriver = async id => { if (!confirm("Удалить водителя?")) return; await dbDelete("drivers", id); await reload("drivers"); };
 
-  // Заработал (по доставленным × ставка) и выплачено (расходы кат. «Водители» с этим driverId)
+  // Заработок «за развоз» (доставлено × ставка)
   const earnings = {};
   orders.filter(o => o.status === "отгружена" && o.driverId).forEach(o => { const d = drivers.find(x => x.id === o.driverId); if (d) earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * (d.rate_per_kg || 0); });
-  const paidByDriver = {};
-  expenses.filter(x => x.driverId).forEach(x => { paidByDriver[x.driverId] = (paidByDriver[x.driverId] || 0) + (x.amount || 0); });
+  // Выплаты: за развоз (уменьшают долг) и доплаты за доп. работу (НЕ уменьшают долг)
+  const wagePaid = {}, extraPaid = {};
+  expenses.filter(x => x.driverId).forEach(x => { const m = x.extra ? extraPaid : wagePaid; m[x.driverId] = (m[x.driverId] || 0) + (x.amount || 0); });
+  const remainingOf = id => Math.max(0, Math.round((earnings[id] || 0) - (wagePaid[id] || 0)));
 
-  const openPay = d => { setPayDriver(d); setPayAmount(String(Math.max(0, Math.round((earnings[d.id] || 0) - (paidByDriver[d.id] || 0))))); setPayDate(TODAY()); };
+  const openPay = (d, extra = false) => { setPayDriver(d); setPayExtra(extra); setPayAmount(extra ? "" : String(remainingOf(d.id))); setPayDate(TODAY()); };
   const doPay = async () => {
     if (!payAmount) return;
     setSaving(true);
-    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), note: `Оплата водителю ${payDriver.name}` }); setPayDriver(null); await reload("expenses"); }
+    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note: `${payExtra ? "Доплата (доп. работа)" : "Оплата за развоз"} — ${payDriver.name}` }); setPayDriver(null); await reload("expenses"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
@@ -1358,20 +1361,42 @@ function DriversTab({ drivers, orders, expenses = [], reload }) {
       </Modal>)}
       {payDriver && (<Modal title={`Выплата: ${payDriver.name}`} onClose={() => setPayDriver(null)}>
         <div className="space-y-3">
-          <div className="text-sm bg-gray-50 rounded-xl p-3">Заработал: <b>{fmt(earnings[payDriver.id] || 0)} тг</b> · Выплачено: {fmt(paidByDriver[payDriver.id] || 0)} тг · Осталось: <b className="text-red-600">{fmt(Math.max(0, (earnings[payDriver.id] || 0) - (paidByDriver[payDriver.id] || 0)))} тг</b></div>
+          <div className="flex gap-2">
+            <button onClick={() => { setPayExtra(false); setPayAmount(String(remainingOf(payDriver.id))); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${!payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>За развоз</button>
+            <button onClick={() => { setPayExtra(true); setPayAmount(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Доплата (доп. работа)</button>
+          </div>
+          {payExtra
+            ? <div className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">Доплата НЕ уменьшает остаток за развоз — это оплата за дополнительную работу.</div>
+            : <div className="text-sm bg-gray-50 rounded-xl p-3">Заработал за развоз: <b>{fmt(earnings[payDriver.id] || 0)} тг</b> · выплачено: {fmt(wagePaid[payDriver.id] || 0)} тг · осталось: <b className="text-red-600">{fmt(remainingOf(payDriver.id))} тг</b></div>}
           <Inp label="Дата" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
           <Inp label="Сумма выплаты, тг" type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} />
         </div>
         <div className="flex gap-2 mt-4"><Btn onClick={doPay} disabled={saving || !payAmount}>{saving ? "Сохраняю..." : "💵 Выплатить"}</Btn><Btn variant="secondary" onClick={() => setPayDriver(null)}>Отмена</Btn></div>
       </Modal>)}
-      {historyDriver && (() => {
-        const pays = expenses.filter(x => x.driverId === historyDriver.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-        const total = pays.reduce((s, x) => s + (x.amount || 0), 0);
-        return (<Modal title={`Выплаты: ${historyDriver.name}`} onClose={() => setHistoryDriver(null)}>
-          <div className="text-sm mb-3 bg-gray-50 rounded-xl p-3">Всего выплачено: <b>{fmt(total)} тг</b></div>
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {pays.length === 0 && <div className="text-gray-400 text-center py-6">Выплат ещё не было</div>}
-            {pays.map(x => <div key={x.id} className="flex items-center justify-between border border-gray-100 rounded-xl px-3 py-2 text-sm"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
+      {detailDriver && (() => {
+        const d = detailDriver;
+        const byDate = {};
+        orders.filter(o => o.driverId === d.id && o.status === "отгружена").forEach(o => { (byDate[o.date] = byDate[o.date] || { kg: 0 }).kg += o.bags * o.bag_kg; });
+        const days = Object.entries(byDate).map(([date, v]) => ({ date, kg: v.kg, owed: Math.round(v.kg * (d.rate_per_kg || 0)) })).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const pays = expenses.filter(x => x.driverId === d.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        return (<Modal title={`🚛 ${d.name} — детали`} onClose={() => setDetailDriver(null)}>
+          <div className="space-y-4">
+            <div>
+              <div className="font-semibold text-gray-700 mb-1">По дням (развоз)</div>
+              {days.length === 0 ? <div className="text-gray-400 text-sm">Доставок ещё не было</div> : (
+                <div className="space-y-1 max-h-60 overflow-y-auto">
+                  {days.map(x => <div key={x.date} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2"><span>{x.date.split("-").reverse().join(".")} · {fmt(x.kg)} кг</span><span className="font-medium">должны {fmt(x.owed)} тг</span></div>)}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="font-semibold text-gray-700 mb-1">Выплаты</div>
+              {pays.length === 0 ? <div className="text-gray-400 text-sm">Выплат ещё не было</div> : (
+                <div className="space-y-1 max-h-60 overflow-y-auto">
+                  {pays.map(x => <div key={x.id} className="flex items-center justify-between text-sm border border-gray-100 rounded-lg px-3 py-2"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}{x.extra ? <span className="text-amber-700"> · доплата</span> : <span className="text-emerald-600"> · за развоз</span>}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
+                </div>
+              )}
+            </div>
           </div>
         </Modal>);
       })()}
@@ -1380,22 +1405,25 @@ function DriversTab({ drivers, orders, expenses = [], reload }) {
         {drivers.map(d => {
           const kg = orders.filter(o => o.driverId === d.id && o.status === "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
           const earned = earnings[d.id] || 0;
-          const paid = paidByDriver[d.id] || 0;
-          const left = earned - paid;
+          const wage = wagePaid[d.id] || 0;
+          const extra = extraPaid[d.id] || 0;
+          const left = remainingOf(d.id);
           return (
             <div key={d.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <div className="flex items-start justify-between">
                 <div>
                   <div className="font-bold text-gray-900">🚛 {d.name}</div>
                   <div className="text-sm text-gray-500">Ставка: {fmt(d.rate_per_kg)} тг/кг · доставлено {fmt(kg)} кг</div>
-                  <div className="text-sm mt-1">Заработал: <b>{fmt(earned)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(paid)} тг</span></div>
-                  <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось: {fmt(Math.max(0, left))} тг</div>
+                  <div className="text-sm mt-1">Заработал за развоз: <b>{fmt(earned)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(wage)} тг</span></div>
+                  <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось за развоз: {fmt(left)} тг</div>
+                  {extra > 0 && <div className="text-xs text-amber-700 mt-0.5">Доплаты (доп. работа): {fmt(extra)} тг</div>}
                 </div>
                 <Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn>
               </div>
-              <div className="flex gap-2 mt-3">
-                <Btn size="sm" onClick={() => openPay(d)}>💵 Выплатить</Btn>
-                <Btn size="sm" variant="secondary" onClick={() => setHistoryDriver(d)}>📋 История выплат</Btn>
+              <div className="flex gap-2 mt-3 flex-wrap">
+                <Btn size="sm" onClick={() => openPay(d, false)}>💵 За развоз</Btn>
+                <Btn size="sm" variant="secondary" onClick={() => openPay(d, true)}>+ Доплата</Btn>
+                <Btn size="sm" variant="secondary" onClick={() => setDetailDriver(d)}>📋 Детали</Btn>
               </div>
             </div>
           );
