@@ -1,0 +1,77 @@
+// «Что взять в фуру» — ИИ распределяет заданную вместимость фуры (кг) по сортам/фасовкам
+// на основе спроса и текущих остатков. Считает данные на сервере, ключ Anthropic — там же.
+import { verifyToken, dbList, configured } from "./_lib.js";
+
+const fmt = n => Math.round(Number(n) || 0).toLocaleString("ru-RU");
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  if (!configured()) return res.status(500).json({ error: "Сервер не настроен" });
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return res.status(500).json({ error: "Нет ANTHROPIC_API_KEY" });
+
+  const body = req.body || {};
+  const u = verifyToken(body.token);
+  if (!u || u.role !== "director") return res.status(403).json({ error: "Только для директора" });
+  const capacity = Math.round(Number(body.capacity_kg) || 0);
+  if (capacity <= 0) return res.status(400).json({ error: "Укажи вместимость фуры в кг" });
+
+  try {
+    const [orders, stock] = await Promise.all([dbList("orders"), dbList("stock")]);
+    const now = new Date();
+    const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 56);
+    const weeks = 8;
+    // только свой склад (карагандинские прямые отгрузки не с нашего склада)
+    const recent = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && new Date(o.date) >= cutoff);
+
+    // спрос за период по продукту (бренд+сорт) и по фасовке
+    const soldProduct = {}, soldByPack = {};
+    recent.forEach(o => {
+      const kg = o.bags * o.bag_kg;
+      const p = `${o.brand} ${o.grade}`;
+      soldProduct[p] = (soldProduct[p] || 0) + kg;
+      const pk = `${o.brand} ${o.grade} ${o.bag_kg}кг`;
+      soldByPack[pk] = (soldByPack[pk] || 0) + kg;
+    });
+    // ожидаемый спрос на неделю по продукту (по дням недели)
+    const demandWD = {};
+    recent.forEach(o => { const wd = new Date(o.date).getDay(); const p = `${o.brand} ${o.grade}`; (demandWD[wd] = demandWD[wd] || {})[p] = (demandWD[wd][p] || 0) + o.bags * o.bag_kg; });
+    const expected = {};
+    for (let i = 1; i <= 7; i++) { const d = new Date(now); d.setDate(d.getDate() + i); const m = demandWD[d.getDay()] || {}; Object.entries(m).forEach(([p, kg]) => { expected[p] = (expected[p] || 0) + kg / weeks; }); }
+    // остатки по продукту
+    const stockByProduct = {};
+    stock.forEach(s => { const p = `${s.brand} ${s.grade}`; stockByProduct[p] = (stockByProduct[p] || 0) + s.weight_kg; });
+
+    if (recent.length === 0) return res.status(200).json({ advice: "Пока мало данных о продажах — рекомендация появится, когда накопится статистика за 2–4 недели." });
+
+    const prompt = `Ты аналитик склада муки в Астане. Нужно загрузить фуру вместимостью ${fmt(capacity)} кг. Распредели ВЕСЬ этот объём по сортам/брендам и фасовкам так, чтобы покрыть спрос и не было дефицита. Сумма по позициям должна примерно равняться ${fmt(capacity)} кг.
+Бренды: ДАРАД, ДАЛА НАН. Сорта: Высший сорт, Первый сорт. Фасовки: 5,10,25,50 кг.
+Приоритет: сначала то, чего на складе меньше ожидаемого спроса; затем — самое ходовое.
+
+Продажи за 8 недель (продукт — кг):
+${Object.entries(soldProduct).sort((a, b) => b[1] - a[1]).map(([p, kg]) => `${p}: ${fmt(kg)} кг`).join("\n") || "нет данных"}
+
+Ходовые фасовки (за 8 недель):
+${Object.entries(soldByPack).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([p, kg]) => `${p}: ${fmt(kg)} кг`).join("\n") || "нет данных"}
+
+Ожидаемый спрос на ближайшую неделю (продукт — кг):
+${Object.entries(expected).map(([p, kg]) => `${p}: ~${fmt(kg)} кг`).join("\n") || "нет данных"}
+
+Текущие остатки (продукт — кг):
+${Object.entries(stockByProduct).map(([p, kg]) => `${p}: ${fmt(kg)} кг`).join("\n") || "пусто"}
+
+Ответ на русском, кратко, маркированным списком: «Бренд Сорт Фасовка — N кг (≈M мешков)». В конце строкой «Итого: ${fmt(capacity)} кг». Без вступлений.`;
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 700, messages: [{ role: "user", content: prompt }] }),
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Ошибка Anthropic API" });
+    const advice = (data.content || []).map(b => b.text || "").join("").trim();
+    return res.status(200).json({ advice });
+  } catch (e) {
+    return res.status(500).json({ error: String(e.message || e) });
+  }
+}

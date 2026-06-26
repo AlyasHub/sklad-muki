@@ -1475,6 +1475,23 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
     } catch (e) { setAdvice("⚠️ Не удалось получить совет: " + e.message); }
     setAdviceLoading(false);
   };
+  // «Что взять в фуру» — ИИ по вместимости
+  const [truckCap, setTruckCap] = useState("");
+  const [truckUnit, setTruckUnit] = useState("т"); // т / кг
+  const [truckAdvice, setTruckAdvice] = useState("");
+  const [truckLoading, setTruckLoading] = useState(false);
+  const getTruckAdvice = async () => {
+    const kg = Math.round((Number(truckCap) || 0) * (truckUnit === "т" ? 1000 : 1));
+    if (kg <= 0) { setTruckAdvice("Укажи вместимость фуры."); return; }
+    setTruckLoading(true); setTruckAdvice("");
+    try {
+      const r = await fetch("/api/advice-truck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken, capacity_kg: kg }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Ошибка");
+      setTruckAdvice(d.advice || "Нет рекомендации");
+    } catch (e) { setTruckAdvice("⚠️ Не удалось получить совет: " + e.message); }
+    setTruckLoading(false);
+  };
   const now = new Date();
   const filterFn = o => {
     const d = new Date(o.date);
@@ -1747,6 +1764,18 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
         <div className="mt-3 pt-3 border-t border-violet-100">
           <Btn size="sm" onClick={getAdvice} disabled={adviceLoading}>{adviceLoading ? "Думаю..." : "🤖 Совет на неделю"}</Btn>
           {advice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{advice}</div>}
+        </div>
+        <div className="mt-3 pt-3 border-t border-violet-100">
+          <div className="font-medium text-gray-800 mb-2">🚚 Что взять в фуру</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input type="number" value={truckCap} onChange={e => setTruckCap(e.target.value)} placeholder="вместимость" className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
+            <div className="flex">
+              <button onClick={() => setTruckUnit("т")} className={`px-3 py-2 text-sm rounded-l-lg ${truckUnit === "т" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>тонн</button>
+              <button onClick={() => setTruckUnit("кг")} className={`px-3 py-2 text-sm rounded-r-lg ${truckUnit === "кг" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>кг</button>
+            </div>
+            <Btn size="sm" onClick={getTruckAdvice} disabled={truckLoading}>{truckLoading ? "Думаю..." : "Подобрать"}</Btn>
+          </div>
+          {truckAdvice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{truckAdvice}</div>}
         </div>
       </div>
 
