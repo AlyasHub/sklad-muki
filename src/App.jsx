@@ -230,6 +230,15 @@ async function parseClientWithAI(text) {
   return JSON.parse(data.raw);
 }
 
+// Чистим ответ ИИ от markdown (звёздочки, заголовки, таблицы, линии) — чтобы показывался простым текстом
+function cleanAdvice(t) {
+  return (t || "")
+    .replace(/\*\*/g, "").replace(/`/g, "")
+    .replace(/^#{1,6}\s*/gm, "")
+    .split("\n").filter(l => !/^\s*\|.*\|\s*$/.test(l) && !/^\s*-{3,}\s*$/.test(l)).join("\n")
+    .replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function Badge({ color, children }) {
   const c = { green: "bg-emerald-100 text-emerald-800", yellow: "bg-amber-100 text-amber-800", blue: "bg-blue-100 text-blue-800", red: "bg-red-100 text-red-800", gray: "bg-gray-100 text-gray-600" };
   return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c[color]}`}>{children}</span>;
@@ -1764,7 +1773,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
         )}
         <div className="mt-3 pt-3 border-t border-violet-100">
           <Btn size="sm" onClick={getAdvice} disabled={adviceLoading}>{adviceLoading ? "Думаю..." : "🤖 Совет на неделю"}</Btn>
-          {advice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{advice}</div>}
+          {advice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{cleanAdvice(advice)}</div>}
         </div>
         <div className="mt-3 pt-3 border-t border-violet-100">
           <div className="font-medium text-gray-800 mb-2">🚚 Что взять в фуру</div>
@@ -1776,7 +1785,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
             </div>
             <Btn size="sm" onClick={getTruckAdvice} disabled={truckLoading}>{truckLoading ? "Думаю..." : "Подобрать"}</Btn>
           </div>
-          {truckAdvice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{truckAdvice}</div>}
+          {truckAdvice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{cleanAdvice(truckAdvice)}</div>}
         </div>
       </div>
 
