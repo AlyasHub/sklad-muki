@@ -577,7 +577,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
               const gSum = g.orders.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
               const gPhotos = [...new Set(g.orders.flatMap(o => o.photos || []))];
               const allDelivered = g.orders.every(o => o.delivered_by_driver);
-              const anyClaim = g.orders.some(o => o.delivered_by_driver);
+              // Считаем «заявкой на подтверждение» отметку водителя ИЛИ прикреплённое им фото (накладную)
+              const anyClaim = g.orders.some(o => o.delivered_by_driver) || gPhotos.length > 0;
               const allConfirmed = g.orders.every(o => o.confirmed);
               const allShipped = g.orders.every(o => o.status === "отгружена");
               const allLoaded = g.orders.every(o => o.loaded);
