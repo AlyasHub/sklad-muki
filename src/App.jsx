@@ -91,7 +91,7 @@ async function sha256(str) {
 const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reports", "debts", "contracts", "supply", "karaganda", "drivers", "expenses", "access"],
+  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "supply", "karaganda", "drivers", "expenses", "access"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
@@ -101,8 +101,8 @@ const PRIMARY_NAV = {
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reports: "📊", debts: "💰", contracts: "📄", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reports: "Отчёты", debts: "Долги", contracts: "Договоры", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -266,7 +266,7 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
   return <div className="flex items-center gap-2 w-full"><div className="flex-1 bg-gray-100 rounded-full h-2.5 overflow-hidden"><div className={`${color} h-2.5 rounded-full`} style={{ width: pct + "%" }} /></div><span className="text-xs text-gray-500 w-8 text-right">{pct}%</span></div>;
 }
 
-const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reports", label: "📊 Отчёты" }, { id: "debts", label: "💰 Долги" }, { id: "contracts", label: "📄 Договоры" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
+const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reactivate", label: "🔔 Напомнить" }, { id: "reports", label: "📊 Отчёты" }, { id: "debts", label: "💰 Долги" }, { id: "contracts", label: "📄 Договоры" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
 
 function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -2374,6 +2374,54 @@ function ContractsTab({ clients }) {
   );
 }
 
+function ReactivateTab({ clients, orders }) {
+  const today = Date.now();
+  const rows = [];
+  clients.forEach(c => {
+    // клиента с активной заявкой не дёргаем — он уже в работе
+    if (orders.some(o => o.clientId === c.id && (o.status === "новая" || o.status === "в пути"))) return;
+    const dates = [...new Set(orders.filter(o => o.clientId === c.id && o.status === "отгружена").map(o => o.date))].sort();
+    if (dates.length < 3) return; // мало истории — график не определить
+    const ms = dates.map(d => new Date(d).getTime());
+    let sum = 0; for (let i = 1; i < ms.length; i++) sum += ms[i] - ms[i - 1];
+    const avgDays = sum / (ms.length - 1) / 86400000;
+    const last = dates[dates.length - 1];
+    const daysSince = Math.floor((today - ms[ms.length - 1]) / 86400000);
+    // выбился из графика: молчит дольше, чем в ~1.5 раза против своего интервала
+    if (avgDays > 0 && daysSince > avgDays * 1.5 && daysSince >= Math.max(Math.round(avgDays) + 2, 4)) {
+      rows.push({ c, avgDays: Math.max(1, Math.round(avgDays)), daysSince, last, ratio: daysSince / avgDays, count: dates.length });
+    }
+  });
+  rows.sort((a, b) => b.ratio - a.ratio);
+  const waLink = c => "https://wa.me/" + String(c.contact || "").replace(/\D/g, "") + "?text=" + encodeURIComponent(`Здравствуйте${c.contact_name ? ", " + c.contact_name : ""}! Давно не заказывали муку — подготовить вам заявку?`);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">🔔 Клиенты, которые брали муку регулярно, но сейчас задержались <b>дольше своего обычного графика</b>. Можно напомнить и предложить заявку. Те, у кого уже есть активная заявка, сюда не попадают.</div>
+      {rows.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">Никто не выбивается из своего графика 👍</div>
+      ) : rows.map(({ c, avgDays, daysSince, last, count }) => (
+        <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="font-bold text-gray-900">{c.name}{c.org_name ? <span className="text-sm text-gray-500 font-normal"> · {c.org_name}</span> : ""}</div>
+              <div className="text-sm text-gray-600 mt-0.5">Обычно берёт <b>~раз в {avgDays} дн.</b> (за {count} заказов)</div>
+              <div className="text-sm text-gray-600">Последний заказ: {last.split("-").reverse().join(".")} — <span className="text-red-600 font-medium">{daysSince} дн. назад</span></div>
+            </div>
+            <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-1 rounded-full whitespace-nowrap">+{Math.max(0, daysSince - avgDays)} дн.</span>
+          </div>
+          {c.contact && (
+            <div className="flex gap-2 mt-3 items-center flex-wrap">
+              <a href={waLink(c)} target="_blank" rel="noreferrer" className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-4 py-2 rounded-lg">📲 Написать в WhatsApp</a>
+              <span className="text-xs text-gray-400">📱 {c.contact}</span>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DebtsTab({ orders, clients, reload, canEdit = true }) {
   const [open, setOpen] = useState({});
   // долг = отгружено и не оплачено (новые/в пути в долг НЕ идут)
@@ -2993,6 +3041,7 @@ export default function App() {
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
+            {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
