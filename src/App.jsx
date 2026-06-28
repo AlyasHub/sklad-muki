@@ -1468,7 +1468,7 @@ function DriversTab({ drivers, orders, expenses = [], reload }) {
   );
 }
 
-function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
+function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () => {} }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   const [from, setFrom] = useState(TODAY());
@@ -1489,18 +1489,29 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
   const [truckCap, setTruckCap] = useState("");
   const [truckUnit, setTruckUnit] = useState("т"); // т / кг
   const [truckAdvice, setTruckAdvice] = useState("");
+  const [truckItems, setTruckItems] = useState([]);
+  const [truckPlanned, setTruckPlanned] = useState(false);
   const [truckLoading, setTruckLoading] = useState(false);
   const getTruckAdvice = async () => {
     const kg = Math.round((Number(truckCap) || 0) * (truckUnit === "т" ? 1000 : 1));
     if (kg <= 0) { setTruckAdvice("Укажи вместимость фуры."); return; }
-    setTruckLoading(true); setTruckAdvice("");
+    setTruckLoading(true); setTruckAdvice(""); setTruckItems([]); setTruckPlanned(false);
     try {
       const r = await fetch("/api/advice-truck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken, capacity_kg: kg }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "Ошибка");
       setTruckAdvice(d.advice || "Нет рекомендации");
+      setTruckItems(Array.isArray(d.items) ? d.items : []);
     } catch (e) { setTruckAdvice("⚠️ Не удалось получить совет: " + e.message); }
     setTruckLoading(false);
+  };
+  const planTruck = async () => {
+    if (!truckItems.length) return;
+    try {
+      await dbUpsert("trucks", { id: uid(), date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: 0, note: "Из совета ИИ", items: truckItems.map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: Number(i.kg) })), status: "запланирована" });
+      await reload("trucks");
+      setTruckPlanned(true);
+    } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
   const now = new Date();
   const filterFn = o => {
@@ -1786,6 +1797,9 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [] }) {
             <Btn size="sm" onClick={getTruckAdvice} disabled={truckLoading}>{truckLoading ? "Думаю..." : "Подобрать"}</Btn>
           </div>
           {truckAdvice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{cleanAdvice(truckAdvice)}</div>}
+          {truckItems.length > 0 && (truckPlanned
+            ? <div className="mt-2 text-sm text-emerald-700 font-medium">✓ Фура запланирована — поправь дату/фуриста/цену в разделе «Поставки».</div>
+            : <div className="mt-2"><Btn size="sm" onClick={planTruck}>🚚 Запланировать эту фуру</Btn></div>)}
         </div>
       </div>
 
@@ -3054,7 +3068,7 @@ export default function App() {
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} reload={reload} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
           </>
         )}

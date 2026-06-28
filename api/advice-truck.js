@@ -66,7 +66,8 @@ ${Object.entries(stockByProduct).map(([p, kg]) => `${p}: ${fmt(kg)} кг`).join(
 - Затем каждая позиция с новой строки ровно так: «Бренд Сорт, фасовка N кг — X кг (Y мешков)».
 - Предпоследняя строка: «Итого: ${fmt(capacity)} кг».
 - Последняя строка: одно короткое предложение — что в приоритете и почему.
-- Больше ничего: без вступлений, без таблиц анализа.`;
+- Без вступлений, без таблиц анализа.
+- В САМОМ конце с новой строки выведи «===ITEMS===» и сразу JSON-массив тех же позиций (без markdown): [{"brand":"ДАЛА НАН","grade":"Высший сорт","bag_kg":25,"kg":2750}]. brand только ДАРАД или ДАЛА НАН; grade только «Высший сорт» или «Первый сорт»; bag_kg одно из 5,10,25,50; kg — число.`;
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -75,8 +76,19 @@ ${Object.entries(stockByProduct).map(([p, kg]) => `${p}: ${fmt(kg)} кг`).join(
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Ошибка Anthropic API" });
-    const advice = (data.content || []).map(b => b.text || "").join("").trim();
-    return res.status(200).json({ advice });
+    let advice = (data.content || []).map(b => b.text || "").join("").trim();
+    // Отделяем структурированные позиции для кнопки «Запланировать фуру»
+    let items = [];
+    const idx = advice.indexOf("===ITEMS===");
+    if (idx >= 0) {
+      const jsonPart = advice.slice(idx + 11).replace(/```json|```/g, "").trim();
+      advice = advice.slice(0, idx).trim();
+      try {
+        const arr = JSON.parse(jsonPart);
+        if (Array.isArray(arr)) items = arr.filter(x => x && x.brand && x.grade && x.bag_kg && x.kg).map(x => ({ brand: String(x.brand), grade: String(x.grade), bag_kg: Number(x.bag_kg), kg: Math.round(Number(x.kg)) }));
+      } catch {}
+    }
+    return res.status(200).json({ advice, items });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });
   }
