@@ -721,40 +721,71 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
       </div>
 
       {dayOrders.length > 0 && (() => {
-        // Маршрут — те же неотвезённые точки в той же очерёдности, что и порядок карточек выше
         const pending = dayOrders.filter(o => o.status !== "отгружена");
-        const optimized = dayRoute;
-
-        if (optimized.length === 0) return (
+        const buildRoute = list => {
+          const seen = new Set(); const pts = [];
+          list.forEach(o => {
+            const client = clients.find(c => c.id === o.clientId);
+            if (!client || seen.has(client.id)) return;
+            const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
+            if (!coords) return;
+            seen.add(client.id);
+            pts.push({ ...coords, name: o.clientName, delivery_time: clientTime(client) });
+          });
+          if (!pts.length) return null;
+          const optimized = optimizeRoute(pts);
+          return { optimized, url: buildGisRouteUrl(optimized), dist: [WAREHOUSE, ...optimized].reduce((a, p, i, arr) => i === 0 ? 0 : a + distKm(arr[i - 1], p), 0) };
+        };
+        const all = buildRoute(pending);
+        if (!all) return (
           <div className="bg-gray-50 border border-dashed border-gray-200 rounded-2xl p-4 text-sm text-gray-400 text-center">
             {pending.length === 0 ? "✓ Все доставки за день отгружены" : "Добавь координаты клиентам чтобы строить маршрут 🗺️"}
           </div>
         );
-
-        const routeUrl = buildGisRouteUrl(optimized);
-        const totalDist = [WAREHOUSE, ...optimized].reduce((acc, p, i, arr) => i === 0 ? 0 : acc + distKm(arr[i - 1], p), 0);
+        // маршруты по водителям
+        const byDriver = {};
+        pending.forEach(o => { const k = o.driverId || ""; (byDriver[k] = byDriver[k] || []).push(o); });
+        const driverBlocks = Object.entries(byDriver).map(([did, list]) => ({ did, name: did ? (drivers.find(d => d.id === did)?.name || "Водитель") : "Без водителя", route: buildRoute(list) })).filter(x => x.route);
 
         return (
-          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <div className="font-bold text-gray-800">🗺️ Маршрут на {selected.split("-").reverse().join(".")}</div>
-                <div className="text-xs text-gray-500">{optimized.length} точек осталось · ~{Math.round(totalDist)} км</div>
-              </div>
-              <a href={routeUrl} target="_blank" rel="noreferrer"
-                className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-xl transition-all">
-                Открыть в 2ГИС →
-              </a>
-            </div>
-            <div className="space-y-1">
-              {[{ name: "📦 Best Mill (склад)", delivery_time: "" }, ...optimized].map((p, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm">
-                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0">{i}</span>
-                  <span className="text-gray-700">{p.name}</span>
-                  {p.delivery_time && <span className="text-xs text-blue-600 ml-auto">⏰ {p.delivery_time}</span>}
+          <div className="space-y-3">
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+                <div>
+                  <div className="font-bold text-gray-800">🗺️ Весь маршрут на {selected.split("-").reverse().join(".")}</div>
+                  <div className="text-xs text-gray-500">{all.optimized.length} точек · ~{Math.round(all.dist)} км</div>
                 </div>
-              ))}
+                <div className="flex gap-2">
+                  <a href={all.url} target="_blank" rel="noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-2 rounded-xl">Открыть →</a>
+                  <button onClick={() => copyToClipboard(all.url)} className="bg-white border border-blue-200 text-blue-700 text-sm font-medium px-3 py-2 rounded-xl">📋 Ссылка</button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                {[{ name: "📦 Best Mill (склад)", delivery_time: "" }, ...all.optimized].map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm">
+                    <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0">{i}</span>
+                    <span className="text-gray-700">{p.name}</span>
+                    {p.delivery_time && <span className="text-xs text-blue-600 ml-auto">⏰ {p.delivery_time}</span>}
+                  </div>
+                ))}
+              </div>
+              <div className="text-xs text-gray-400 mt-2">«📋 Ссылка» — скопировать маршрут в 2ГИС и отправить водителю (в т.ч. разовому, не заводя в систему).</div>
             </div>
+
+            {driverBlocks.length > 1 && driverBlocks.map(b => (
+              <div key={b.did || "none"} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                  <div className="font-bold text-gray-800">🚛 {b.name} <span className="text-xs font-normal text-gray-500">· {b.route.optimized.length} точек · ~{Math.round(b.route.dist)} км</span></div>
+                  <div className="flex gap-2">
+                    <a href={b.route.url} target="_blank" rel="noreferrer" className="bg-blue-50 text-blue-700 text-xs font-medium px-3 py-1.5 rounded-lg">Открыть →</a>
+                    <button onClick={() => copyToClipboard(b.route.url)} className="bg-gray-100 text-gray-700 text-xs font-medium px-3 py-1.5 rounded-lg">📋 Ссылка</button>
+                  </div>
+                </div>
+                <div className="text-xs text-gray-600 space-y-0.5">
+                  {b.route.optimized.map((p, i) => <div key={i}>{i + 1}. {p.name}{p.delivery_time ? ` · ⏰ ${p.delivery_time}` : ""}</div>)}
+                </div>
+              </div>
+            ))}
           </div>
         );
       })()}
@@ -1133,6 +1164,9 @@ function ClientsTab({ clients, orders = [], reload }) {
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState("");
   const [historyClient, setHistoryClient] = useState(null);
+  const [histPeriod, setHistPeriod] = useState("all");
+  const [histFrom, setHistFrom] = useState(TODAY());
+  const [histTo, setHistTo] = useState(TODAY());
   const [search, setSearch] = useState("");
   const [staleOnly, setStaleOnly] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
@@ -1309,21 +1343,44 @@ function ClientsTab({ clients, orders = [], reload }) {
       </div>
 
       {historyClient && (() => {
-        const co = orders.filter(o => o.clientId === historyClient.id).sort((a, b) => b.date.localeCompare(a.date));
+        const nowH = new Date();
+        const inPeriod = o => {
+          if (histPeriod === "all") return true;
+          const d = new Date(o.date);
+          if (histPeriod === "day") return o.date === TODAY();
+          if (histPeriod === "week") { const w = new Date(nowH); w.setDate(w.getDate() - 7); return d >= w; }
+          if (histPeriod === "month") return d.getMonth() === nowH.getMonth() && d.getFullYear() === nowH.getFullYear();
+          if (histPeriod === "3month") { const m = new Date(nowH); m.setMonth(m.getMonth() - 3); return d >= m; }
+          if (histPeriod === "custom") return o.date >= histFrom && o.date <= histTo;
+          return true;
+        };
+        const co = orders.filter(o => o.clientId === historyClient.id && inPeriod(o)).sort((a, b) => b.date.localeCompare(a.date));
         const byDate = {};
         co.forEach(o => { (byDate[o.date] = byDate[o.date] || []).push(o); });
         const delivered = co.filter(o => o.status === "отгружена");
+        const totalKg = delivered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
         const totalDelivered = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
         const totalPaid = delivered.filter(o => o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
-        const debt = totalDelivered - totalPaid;
+        const debtAll = orders.filter(o => o.clientId === historyClient.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+        const periods = [["day", "День"], ["week", "Неделя"], ["month", "Месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
         return (
           <Modal title={`📋 ${historyClient.name}`} onClose={() => setHistoryClient(null)}>
-            <div className="text-sm mb-3 space-y-0.5 bg-gray-50 rounded-xl p-3">
-              <div>Отгружено всего: <b>{fmt(totalDelivered)} тг</b></div>
-              <div className="text-emerald-600">Оплачено: {fmt(totalPaid)} тг</div>
-              <div className={debt > 0 ? "text-red-600 font-bold" : "text-gray-500"}>Долг: {fmt(debt)} тг</div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {periods.map(([v, l]) => <button key={v} onClick={() => setHistPeriod(v)} className={`text-xs px-2.5 py-1 rounded-full font-medium ${histPeriod === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{l}</button>)}
             </div>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
+            {histPeriod === "custom" && (
+              <div className="flex items-center gap-2 mb-2 text-sm">
+                <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={histFrom} onChange={e => setHistFrom(e.target.value)} />
+                <span className="text-gray-400">—</span>
+                <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={histTo} onChange={e => setHistTo(e.target.value)} />
+              </div>
+            )}
+            <div className="text-sm mb-3 space-y-0.5 bg-gray-50 rounded-xl p-3">
+              <div>Отгружено за период: <b>{fmt(totalKg)} кг</b> · <b>{fmt(totalDelivered)} тг</b></div>
+              <div className="text-emerald-600">Оплачено за период: {fmt(totalPaid)} тг</div>
+              <div className={debtAll > 0 ? "text-red-600 font-bold" : "text-gray-500"}>Текущий долг (всего): {fmt(debtAll)} тг</div>
+            </div>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
               {Object.entries(byDate).map(([date, list]) => {
                 const sum = list.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
                 const kg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
@@ -1344,7 +1401,7 @@ function ClientsTab({ clients, orders = [], reload }) {
                   </div>
                 );
               })}
-              {co.length === 0 && <div className="text-gray-400 text-center py-6">Отгрузок ещё не было</div>}
+              {co.length === 0 && <div className="text-gray-400 text-center py-6">Нет отгрузок за этот период</div>}
             </div>
           </Modal>
         );
