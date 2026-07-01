@@ -1410,7 +1410,7 @@ function ClientsTab({ clients, orders = [], reload }) {
   );
 }
 
-function DriversTab({ drivers, orders, expenses = [], reload }) {
+function DriversTab({ drivers, orders, expenses = [], users = [], reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", rate_per_kg: "" });
@@ -1425,7 +1425,15 @@ function DriversTab({ drivers, orders, expenses = [], reload }) {
     try { await dbUpsert("drivers", { id: uid(), name: form.name, rate_per_kg: Number(form.rate_per_kg) }); setShowAdd(false); setForm({ name: "", rate_per_kg: "" }); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
-  const deleteDriver = async id => { if (!confirm("Удалить водителя?")) return; await dbDelete("drivers", id); await reload("drivers"); };
+  const deleteDriver = async id => {
+    const linked = (users || []).filter(u => u.driverId === id);
+    if (!confirm(`Удалить водителя${linked.length ? " и его логин? Он больше не сможет войти и его выкинет из приложения." : "?"}`)) return;
+    try {
+      await dbDelete("drivers", id);
+      for (const u of linked) await dbDelete("users", u.id); // закрываем вход
+      await reload("drivers"); if (linked.length) await reload("users");
+    } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
+  };
 
   // Заработок «за развоз» (доставлено × ставка)
   const earnings = {};
@@ -3049,7 +3057,11 @@ export default function App() {
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData({ clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [] });
       setLastSync(new Date().toLocaleTimeString("ru-RU"));
-    } catch (e) { setError("Нет связи с базой: " + e.message); }
+    } catch (e) {
+      // apiData сбрасывает токен на 401 (сессия истекла / доступ закрыт) → выкидываем на экран входа
+      if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; }
+      setError("Нет связи с базой: " + e.message);
+    }
     if (showSpinner) setLoading(false);
   }, []);
 
@@ -3123,7 +3135,7 @@ export default function App() {
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
-            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} reload={reload} />}
+            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} reload={reload} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}

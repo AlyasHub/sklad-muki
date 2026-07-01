@@ -11,6 +11,9 @@ export default async function handler(req, res) {
   if (!u) return res.status(401).json({ error: "Сессия истекла — войдите заново" });
 
   try {
+    // Пользователь удалён в «Доступе» → доступ закрыт сразу (при ближайшем запросе выкинет на вход)
+    const allUsers = await dbList("users");
+    if (!allUsers.some(x => x.id === u.uid)) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
       const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"];
