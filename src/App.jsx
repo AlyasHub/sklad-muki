@@ -88,16 +88,18 @@ async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-const ROLES = { director: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
+const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
   director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "supply", "karaganda", "drivers", "expenses", "access"],
+  viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
 // Что показываем в нижней панели (остальное — под «Ещё»)
 const PRIMARY_NAV = {
   director: ["today", "calendar", "stock", "clients", "reports"],
+  viewer: ["today", "calendar", "stock", "clients", "reports"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
@@ -1020,7 +1022,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   );
 }
 
-function StockTab({ stock, orders = [], reload }) {
+function StockTab({ stock, orders = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1078,8 +1080,8 @@ function StockTab({ stock, orders = [], reload }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3><Btn onClick={openNew}>+ Операция</Btn></div>
-      <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3>{canEdit && <Btn onClick={openNew}>+ Операция</Btn>}</div>
+      {canEdit && <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>}
       {shortages.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
           <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
@@ -1147,8 +1149,8 @@ function StockTab({ stock, orders = [], reload }) {
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <div className="text-right"><div className="font-medium">{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)} кг</div><div className="text-gray-400 text-xs">{s.date}</div></div>
-                <button onClick={() => openEdit(s)} className="text-gray-400 hover:text-gray-700" title="Изменить">✏️</button>
-                <button onClick={() => deleteMovement(s.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>
+                {canEdit && <button onClick={() => openEdit(s)} className="text-gray-400 hover:text-gray-700" title="Изменить">✏️</button>}
+                {canEdit && <button onClick={() => deleteMovement(s.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}
               </div>
             </div>
           ))}
@@ -1158,7 +1160,7 @@ function StockTab({ stock, orders = [], reload }) {
   );
 }
 
-function ClientsTab({ clients, orders = [], reload }) {
+function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1236,7 +1238,7 @@ function ClientsTab({ clients, orders = [], reload }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3><Btn onClick={openNew}>+ Новый клиент</Btn></div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3>{canEdit && <Btn onClick={openNew}>+ Новый клиент</Btn>}</div>
       <div className="space-y-2">
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Поиск по имени, организации, телефону" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
         {staleCount > 0 && (
@@ -1335,7 +1337,7 @@ function ClientsTab({ clients, orders = [], reload }) {
                 {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">📦 {c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
                 {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
               </div>
-              <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}>✕</Btn></div>
+              {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}>✕</Btn></div>}
             </div>
             <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
           </div>
@@ -1396,8 +1398,10 @@ function ClientsTab({ clients, orders = [], reload }) {
                     {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} — {o.status}</div>)}
                     <div className="mt-2">
                       {allPaid
-                        ? <div className="flex items-center gap-2 flex-wrap"><span className="text-emerald-700 font-medium text-xs">✓ Оплачено{method ? ` · ${method}` : ""}</span><Btn size="sm" variant="ghost" onClick={() => markPaid(historyClient.id, date, false)}>отменить</Btn></div>
-                        : <div className="flex gap-2 flex-wrap"><Btn size="sm" onClick={() => markPaid(historyClient.id, date, true, "Нал")}>💵 Нал</Btn><Btn size="sm" variant="secondary" onClick={() => markPaid(historyClient.id, date, true, "Безнал")}>💳 Безнал</Btn></div>}
+                        ? <div className="flex items-center gap-2 flex-wrap"><span className="text-emerald-700 font-medium text-xs">✓ Оплачено{method ? ` · ${method}` : ""}</span>{canEdit && <Btn size="sm" variant="ghost" onClick={() => markPaid(historyClient.id, date, false)}>отменить</Btn>}</div>
+                        : (canEdit
+                          ? <div className="flex gap-2 flex-wrap"><Btn size="sm" onClick={() => markPaid(historyClient.id, date, true, "Нал")}>💵 Нал</Btn><Btn size="sm" variant="secondary" onClick={() => markPaid(historyClient.id, date, true, "Безнал")}>💳 Безнал</Btn></div>
+                          : <span className="text-amber-700 font-medium text-xs">● Не оплачено</span>)}
                     </div>
                   </div>
                 );
@@ -1411,7 +1415,7 @@ function ClientsTab({ clients, orders = [], reload }) {
   );
 }
 
-function DriversTab({ drivers, orders, expenses = [], users = [], reload }) {
+function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", rate_per_kg: "" });
@@ -1455,7 +1459,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Водители</h3><Btn onClick={() => setShowAdd(true)}>+ Водитель</Btn></div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Водители</h3>{canEdit && <Btn onClick={() => setShowAdd(true)}>+ Водитель</Btn>}</div>
       {showAdd && (<Modal title="Новый водитель" onClose={() => setShowAdd(false)}>
         <div className="space-y-3"><Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /><Inp label="Ставка тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} /></div>
         <div className="flex gap-2 mt-4"><Btn onClick={saveDriver} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
@@ -1519,11 +1523,11 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload }) {
                   <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось за развоз: {fmt(left)} тг</div>
                   {extra > 0 && <div className="text-xs text-amber-700 mt-0.5">Доплаты (доп. работа): {fmt(extra)} тг</div>}
                 </div>
-                <Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn>
+                {canEdit && <Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn>}
               </div>
               <div className="flex gap-2 mt-3 flex-wrap">
-                <Btn size="sm" onClick={() => openPay(d, false)}>💵 За развоз</Btn>
-                <Btn size="sm" variant="secondary" onClick={() => openPay(d, true)}>+ Доплата</Btn>
+                {canEdit && <Btn size="sm" onClick={() => openPay(d, false)}>💵 За развоз</Btn>}
+                {canEdit && <Btn size="sm" variant="secondary" onClick={() => openPay(d, true)}>+ Доплата</Btn>}
                 <Btn size="sm" variant="secondary" onClick={() => setDetailDriver(d)}>📋 Детали</Btn>
               </div>
             </div>
@@ -1534,7 +1538,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload }) {
   );
 }
 
-function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () => {} }) {
+function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () => {}, canEdit = true }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   const [from, setFrom] = useState(TODAY());
@@ -1863,7 +1867,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
             <Btn size="sm" onClick={getTruckAdvice} disabled={truckLoading}>{truckLoading ? "Думаю..." : "Подобрать"}</Btn>
           </div>
           {truckAdvice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{cleanAdvice(truckAdvice)}</div>}
-          {truckItems.length > 0 && (truckPlanned
+          {canEdit && truckItems.length > 0 && (truckPlanned
             ? <div className="mt-2 text-sm text-emerald-700 font-medium">✓ Фура запланирована — поправь дату/фуриста/цену в разделе «Поставки».</div>
             : <div className="mt-2"><Btn size="sm" onClick={planTruck}>🚚 Запланировать эту фуру</Btn></div>)}
         </div>
@@ -1908,7 +1912,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
   );
 }
 
-function TrucksTab({ trucks, reload }) {
+function TrucksTab({ trucks, reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [editItemIdx, setEditItemIdx] = useState(null);
@@ -1967,7 +1971,7 @@ function TrucksTab({ trucks, reload }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Поставки (фуры)</h3><Btn onClick={openNew}>+ Запланировать фуру</Btn></div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Поставки (фуры)</h3>{canEdit && <Btn onClick={openNew}>+ Запланировать фуру</Btn>}</div>
       {showAdd && (
         <Modal title={editId ? "Изменить фуру" : "Новая фура"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
@@ -2017,17 +2021,19 @@ function TrucksTab({ trucks, reload }) {
               </div>
             )}
             {t.note && <div className="text-xs text-gray-400 mt-1">{t.note}</div>}
-            {t.status !== "принята" && (
+            {canEdit && t.status !== "принята" && (
               <div className="flex gap-1 flex-wrap mt-3 items-center">
                 <span className="text-xs text-gray-400">Статус:</span>
                 {["грузится", "в пути", "разгрузка"].map(s => <button key={s} onClick={() => setTruckStatus(t, s)} className={`text-xs px-2 py-1 rounded-lg ${t.status === s ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{s}</button>)}
                 <Btn size="sm" onClick={() => setTruckStatus(t, "принята")} disabled={saving}>✓ Принять на склад</Btn>
               </div>
             )}
-            <div className="mt-2 flex gap-2">
-              {t.status !== "принята" && <Btn size="sm" variant="secondary" onClick={() => openEdit(t)}>✏️ Изменить</Btn>}
-              <Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn>
-            </div>
+            {canEdit && (
+              <div className="mt-2 flex gap-2">
+                {t.status !== "принята" && <Btn size="sm" variant="secondary" onClick={() => openEdit(t)}>✏️ Изменить</Btn>}
+                <Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -2035,7 +2041,7 @@ function TrucksTab({ trucks, reload }) {
   );
 }
 
-function UsersTab({ users, drivers, reload, currentUser }) {
+function UsersTab({ users, drivers, logins = [], reload, currentUser }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -2073,7 +2079,7 @@ function UsersTab({ users, drivers, reload, currentUser }) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Пользователи</h3><Btn onClick={openNew}>+ Добавить</Btn></div>
-      <p className="text-sm text-gray-500">Директор — всё. Бухгалтер — просмотр календаря и отчётов с ценами/реквизитами для накладных. Водитель — видит только свои отгрузки (день, что, куда, объём), без цен.</p>
+      <p className="text-sm text-gray-500">Администратор — всё (создаёт заявки, вносит данные). Директор — видит всё (заявки, аналитику, отчёты, отгрузки, расходы), но НЕ может ничего менять или добавлять. Бухгалтер — просмотр календаря и отчётов с ценами/реквизитами для накладных. Водитель — видит только свои отгрузки (день, что, куда, объём), без цен.</p>
       {showAdd && (
         <Modal title={editId ? "Редактировать пользователя" : "Новый пользователь"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
@@ -2110,6 +2116,42 @@ function UsersTab({ users, drivers, reload, currentUser }) {
           );
         })}
       </div>
+
+      <LoginLog logins={logins} />
+    </div>
+  );
+}
+
+// Журнал входов: кто и когда заходил в приложение (для администратора)
+function LoginLog({ logins }) {
+  const [open, setOpen] = useState(false);
+  const sorted = [...(logins || [])].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+  const fmt = iso => {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso || "";
+    return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  };
+  return (
+    <div className="pt-2">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-3">
+        <span className="font-bold text-gray-800">🕐 Кто когда заходил</span>
+        <span className="text-sm text-gray-400">{sorted.length} · {open ? "скрыть" : "показать"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-1">
+          {sorted.length === 0 && <p className="text-sm text-gray-400 px-1">Пока нет записей о входах.</p>}
+          {sorted.slice(0, 200).map(l => (
+            <div key={l.id} className="bg-white border border-gray-100 rounded-lg px-3 py-2 flex items-center justify-between text-sm">
+              <div>
+                <span className="font-medium text-gray-900">{l.name || l.username}</span>
+                <span className="text-xs text-gray-400 ml-1">· {ROLES[l.role] || l.role}</span>
+              </div>
+              <span className="text-gray-500">{fmt(l.at)}</span>
+            </div>
+          ))}
+          {sorted.length > 200 && <p className="text-xs text-gray-400 px-1">Показаны последние 200 входов.</p>}
+        </div>
+      )}
     </div>
   );
 }
@@ -2170,7 +2212,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function ExpensesTab({ expenses, reload, openSignal = 0 }) {
+function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -2196,7 +2238,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Расходы</h3><Btn onClick={openNew}>+ Расход</Btn></div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Расходы</h3>{canEdit && <Btn onClick={openNew}>+ Расход</Btn>}</div>
       <div className="bg-gradient-to-br from-rose-50 to-red-50 rounded-2xl p-4"><div className="text-xs text-red-700 font-medium">Расходы за текущий месяц</div><div className="text-2xl font-bold text-red-700">{fmt(monthTotal)} тг</div></div>
       {showAdd && (
         <Modal title={editId ? "Изменить расход" : "Новый расход"} onClose={() => setShowAdd(false)}>
@@ -2220,7 +2262,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0 }) {
               <div className="font-medium text-gray-900">{x.category} — {fmt(x.amount)} тг</div>
               <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}</div>
             </div>
-            <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}>✕</Btn></div>
+            {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}>✕</Btn></div>}
           </div>
         ))}
       </div>
@@ -2903,6 +2945,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">На завтра</div><div className="text-3xl font-black text-gray-900">{groupCount(tomorrowList)}</div></div>
       </div>
 
+      {canEdit && (
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
         <div className="font-semibold text-gray-800 mb-2">📲 Разобрать заявку из WhatsApp</div>
         <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={3} placeholder="Вставь сюда сообщение из WhatsApp, напр.: Сегафредо 500 кг высший сорт на завтра" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
@@ -2937,6 +2980,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
           </div>
         )}
       </div>
+      )}
 
       <div>
         <h4 className="font-semibold text-gray-700 mb-2">Доставки сегодня</h4>
@@ -3036,7 +3080,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -3061,7 +3105,7 @@ export default function App() {
       // Все таблицы одним запросом (быстрее, особенно на «холодном» старте)
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
-      setData({ clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [] });
+      setData({ clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [] });
       setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) {
       // apiData сбрасывает токен на 401 (сессия истекла / доступ закрыт) → выкидываем на экран входа
@@ -3097,7 +3141,7 @@ export default function App() {
     if (!allowed.includes(tab)) setTab(allowed[0] || "calendar");
   }, [user]);
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -3134,17 +3178,17 @@ export default function App() {
           <>
             {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
-            {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} />}
-            {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} />}
+            {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} canEdit={isDirector} />}
+            {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
-            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} />}
-            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} />}
-            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} reload={reload} />}
-            {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} reload={reload} currentUser={user} />}
+            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} canEdit={isDirector} />}
+            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
+            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
+            {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} reload={reload} currentUser={user} />}
           </>
         )}
       </div>

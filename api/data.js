@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     if (!allUsers.some(x => x.id === u.uid)) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
-      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"];
+      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins"];
       const out = {};
       await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
       return res.status(200).json({ data: out });
@@ -33,6 +33,11 @@ export default async function handler(req, res) {
 async function listFor(u, table) {
   if (u.role === "director") {
     if (table === "users") return (await dbList("users")).map(({ passhash, ...rest }) => rest); // не отдаём хэши в браузер
+    return await dbList(table);
+  }
+  if (u.role === "viewer") {
+    // Директор-просмотрщик: видит все данные, но НЕ логины/пароли и НЕ журнал входов
+    if (table === "users" || table === "logins") return [];
     return await dbList(table);
   }
   if (u.role === "accountant") {

@@ -31,6 +31,8 @@ export default async function handler(req, res) {
 
     const u = users.find(x => (x.username || "").toLowerCase() === username.trim().toLowerCase() && x.passhash === hash);
     if (!u) return res.status(401).json({ error: "Неверный логин или пароль" });
+    // Журнал входов (для админа: кто и когда заходил)
+    try { await dbUpsert("logins", { id: uid(), userId: u.id, name: u.name, username: u.username, role: u.role, at: new Date().toISOString() }); } catch {}
     return res.status(200).json({ token: makeToken(u), user: pub(u) });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });
