@@ -215,7 +215,7 @@ async function parseOrderWithAI(text, clients) {
       today: TODAY(),
       tomorrow: TOMORROW(),
       weekday: TODAY_WEEKDAY(),
-      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand })),
+      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand, products: (c.prices || []).map(p => ({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg })) })),
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -614,6 +614,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     ))}
                   </div>
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
+                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
                     {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
@@ -2713,6 +2714,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
 function EditGroupModal({ group, clients, reload, onClose }) {
   const base = group.orders[0];
   const [positions, setPositions] = useState(group.orders.map(o => ({ id: o.id, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags, price_per_kg: o.price_per_kg ?? "", trial: !!o.trial })));
+  const [note, setNote] = useState(group.orders.map(o => o.note).find(Boolean) || "");
   const [saving, setSaving] = useState(false);
   const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
   const upd = (i, f, v) => setPositions(ps => ps.map((p, idx) => idx === i ? { ...p, [f]: v } : p));
@@ -2735,9 +2737,9 @@ function EditGroupModal({ group, clients, reload, onClose }) {
         carried = true;
         if (p.id) {
           const orig = group.orders.find(o => o.id === p.id);
-          await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, ...carry });
+          await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
         } else {
-          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, ...carry });
+          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
         }
       }
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
@@ -2765,6 +2767,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
           </div>
         ))}
         <button onClick={add} className="w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm font-medium text-gray-500 hover:bg-gray-50">+ ещё позиция</button>
+        <Inp label="Заметка (видит водитель)" value={note} onChange={e => setNote(e.target.value)} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" />
       </div>
       <div className="flex gap-2 mt-4">
         <Btn onClick={save} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
@@ -2783,7 +2786,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [editGroup, setEditGroup] = useState(null);
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false });
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "" });
   // Открыть форму заявки по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
@@ -2832,7 +2835,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
     try {
       for (const p of aiResult) {
         const inheritedDriver = p.clientId ? (orders.find(o => o.clientId === p.clientId && o.date === p.date && o.driverId)?.driverId || "") : "";
-        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: inheritedDriver, status: "новая" });
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", driverId: inheritedDriver, status: "новая" });
       }
       setAiResult(null); setAiText(""); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + (e && e.message ? e.message : e)); }
@@ -2884,11 +2887,11 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
         id: uid(), date: form.date, brand: form.brand, grade: form.grade,
         bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId || inheritedDriver,
         price_per_kg: Number(price), status: "новая",
-        isSample: form.isSample, trial: isTrial,
+        isSample: form.isSample, trial: isTrial, note: form.note || "",
         clientId: form.isSample ? null : form.clientId,
         clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
       });
-      setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "" })); await reload("orders");
+      setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "" })); await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSavingManual(false);
   };
@@ -2924,6 +2927,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                 )}
                 <div className="text-gray-600 mt-1">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
                 <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">бесплатно</span> : (p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">цена не найдена</span>)}</div>
+                {p.note && <div className="text-amber-800 bg-amber-50 rounded px-2 py-1 mt-1 text-xs">📝 {p.note}</div>}
               </div>
             ))}
             <div className="flex gap-2">
@@ -2964,6 +2968,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                       </div>
                     ))}
                   </div>
+                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
                   {canEdit && (
                     <div className="mt-3 space-y-2">
                       <div className="flex gap-2 flex-wrap items-center">
@@ -3015,6 +3020,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
             {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
             <Inp label="Дата доставки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             <div className="col-span-2"><Sel label="Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
+            <div className="col-span-2"><Inp label="Заметка (видит водитель)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
           <div className="flex gap-2 mt-4">
             <Btn onClick={addManual} disabled={savingManual}>{savingManual ? "Сохраняю..." : "Добавить"}</Btn>
