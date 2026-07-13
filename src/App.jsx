@@ -672,6 +672,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
               const client = clients.find(c => c.id === g.clientId);
               const driver = drivers.find(d => d.id === g.orders[0].driverId);
               const isPickup = g.orders.some(o => o.pickup);
+              const isOneOff = g.orders.some(o => o.oneOff);
               const worker = isPickup ? drivers.find(d => d.id === g.orders.find(o => o.loaderId)?.loaderId) : driver;
               const statuses = [...new Set(g.orders.map(o => o.status))];
               const gStatus = statuses.length === 1 ? statuses[0] : "частично";
@@ -692,7 +693,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && <Badge color="blue">🚶 Самовывоз</Badge>}{!isPickup && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && <Badge color="blue">🚶 Самовывоз</Badge>}{isOneOff && <Badge color="green">💰 разовая</Badge>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
@@ -740,12 +741,14 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                       </label>
                     </div>
                   ) : canEdit ? (
-                    isPickup ? (
+                    (isPickup || isOneOff) ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
-                      <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].loaderId || ""} onChange={e => assignLoaderGroup(g, e.target.value)}>
-                        <option value="">📦 Грузчик</option>
-                        {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                      </select>
+                      {isPickup && (
+                        <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].loaderId || ""} onChange={e => assignLoaderGroup(g, e.target.value)}>
+                          <option value="">📦 Грузчик</option>
+                          {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                      )}
                       {!allShipped
                         ? <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Отгрузить</Btn>
                         : <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "новая")}>↩ Отменить</Btn>}
@@ -2970,7 +2973,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [editGroup, setEditGroup] = useState(null);
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "", pickup: false, loaderId: "" });
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "", pickup: false, loaderId: "", oneOff: false, oneOffName: "", payMethod: "Нал" });
   // Открыть форму заявки по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
@@ -3061,6 +3064,27 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
 
   // Добавить заявку вручную (форма та же, что была в «Заявках»)
   const addManual = async () => {
+    // Единичная реализация: разовый покупатель не из базы, забрал сам и оплатил — сразу отгружено, склад списывается
+    if (form.oneOff) {
+      if (!form.bags) { alert("Укажи, сколько мешков."); return; }
+      if (!form.price_per_kg) { alert("Укажи цену тг/кг — реализация идёт за деньги."); return; }
+      setSavingManual(true);
+      const kg = Number(form.bags) * Number(form.bag_kg);
+      const buyer = form.oneOffName.trim() || "Разовый покупатель";
+      try {
+        await dbUpsert("orders", {
+          id: uid(), date: form.date, brand: form.brand, grade: form.grade,
+          bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: "",
+          price_per_kg: Number(form.price_per_kg), status: "отгружена",
+          oneOff: true, paid: true, pay_method: form.payMethod, note: form.note || "",
+          clientId: null, clientName: buyer,
+        });
+        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: form.brand, grade: form.grade, weight_kg: -kg, bags: -Number(form.bags), bag_kg: Number(form.bag_kg), note: `Реализация: ${buyer}` });
+        setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "" })); await reload("orders"); await reload("stock");
+      } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+      setSavingManual(false);
+      return;
+    }
     const isTrial = form.trial && !form.isSample;
     if (isTrial && !form.clientId) { alert("Выбери клиента для пробы."); return; }
     setSavingManual(true);
@@ -3156,13 +3180,14 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
               const prevShipped = gi > 0 && arr[gi - 1].orders.every(o => o.status === "отгружена");
               const shippedCount = arr.filter(x => x.orders.every(o => o.status === "отгружена")).length;
               const isPickup = g.orders.some(o => o.pickup);
+              const isOneOff = g.orders.some(o => o.oneOff);
               const worker = drivers.find(d => d.id === (isPickup ? g.orders.find(o => o.loaderId)?.loaderId : g.orders.find(o => o.driverId)?.driverId));
               return (
                 <Fragment key={g.key}>
                 {shipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚶 Самовывоз</span>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚶 Самовывоз</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">💰 разовая</span>}</span>
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
                   </div>
                   <div className="space-y-1">
@@ -3174,13 +3199,13 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                     ))}
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
-                  <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>
+                  {!isOneOff && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
                   {canEdit && (
                     <div className="mt-3 space-y-2">
                       <div className="flex gap-2 flex-wrap items-center">
-                        {allNew && !isPickup && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
+                        {allNew && !isPickup && !isOneOff && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
                         {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>{isPickup ? "✓ Отгрузить" : "✓ Доставлено"}</Btn>}
-                        {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, isPickup ? "новая" : "в пути")}>↩ {isPickup ? "Отменить" : "Не доставлено"}</Btn>}
+                        {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, (isPickup || isOneOff) ? "новая" : "в пути")}>↩ {(isPickup || isOneOff) ? "Отменить" : "Не доставлено"}</Btn>}
                         <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}>✏️ Изменить</Btn>
                         <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>🗑</Btn>
                       </div>
@@ -3202,39 +3227,56 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
       </div>
 
       {showManual && (
-        <Modal title={form.isSample ? "🧪 Пробник" : form.trial ? "🎁 На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
-          {!form.isSample && (
+        <Modal title={form.oneOff ? "💰 Единичная реализация" : form.isSample ? "🧪 Пробник" : form.trial ? "🎁 На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
+          {!form.isSample && !form.oneOff && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.trial} onChange={e => setForm({ ...form, trial: e.target.checked })} className="w-4 h-4 accent-orange-500" />
               <span className="text-sm font-medium text-gray-700">🎁 На пробу — клиенту из базы (бесплатно, маршрут строится, без накладной)</span>
             </label>
           )}
-          {!form.trial && (
-            <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
+          {!form.trial && !form.oneOff && (
+            <label className="flex items-center gap-2 mb-2 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
               <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно, без маршрута)</span>
             </label>
           )}
-          {!form.isSample && (
+          {!form.trial && !form.isSample && (
+            <label className="flex items-center gap-2 mb-2 cursor-pointer bg-emerald-50 rounded-lg px-3 py-2">
+              <input type="checkbox" checked={form.oneOff} onChange={e => setForm({ ...form, oneOff: e.target.checked, pickup: false, driverId: "", clientId: "", date: TODAY() })} className="w-4 h-4 accent-emerald-500" />
+              <span className="text-sm font-medium text-gray-700">💰 Единичная реализация — покупатель не из базы, забрал и оплатил сразу (склад спишется)</span>
+            </label>
+          )}
+          {!form.isSample && !form.oneOff && (
             <label className="flex items-center gap-2 mb-3 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.pickup} onChange={e => setForm({ ...form, pickup: e.target.checked, driverId: "" })} className="w-4 h-4 accent-sky-500" />
               <span className="text-sm font-medium text-gray-700">🚶 Самовывоз — клиент забирает сам (вместо водителя выбери грузчика)</span>
             </label>
           )}
           <div className="grid grid-cols-2 gap-3">
-            {form.isSample
-              ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
-              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
+            {form.oneOff
+              ? <div className="col-span-2"><Inp label="Покупатель (можно не заполнять)" value={form.oneOffName} onChange={e => setForm({ ...form, oneOffName: e.target.value })} placeholder="Разовый покупатель" /></div>
+              : form.isSample
+                ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
+                : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
             <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
-            <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-            {form.pickup
+            {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder={form.oneOff ? "обязательно" : "авто из базы"} value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
+            <Inp label={form.pickup || form.oneOff ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            {form.oneOff && (
+              <div className="col-span-2">
+                <label className="text-sm font-medium text-gray-700">Оплата</label>
+                <div className="flex gap-2 mt-1">
+                  <button onClick={() => setForm({ ...form, payMethod: "Нал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Нал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>💵 Нал</button>
+                  <button onClick={() => setForm({ ...form, payMethod: "Безнал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Безнал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>💳 Безнал</button>
+                </div>
+              </div>
+            )}
+            {!form.oneOff && (form.pickup
               ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
-              : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>}
-            <div className="col-span-2"><Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
+              : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>)}
+            <div className="col-span-2"><Inp label={form.oneOff ? "Заметка" : form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
           <div className="flex gap-2 mt-4">
             <Btn onClick={addManual} disabled={savingManual}>{savingManual ? "Сохраняю..." : "Добавить"}</Btn>
