@@ -2909,6 +2909,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
+  const [aiDriver, setAiDriver] = useState(""); // водитель для разобранной заявки — обязателен перед подтверждением
   const [aiError, setAiError] = useState("");
   const [saving, setSaving] = useState(false);
   const [showManual, setShowManual] = useState(false);
@@ -2943,11 +2944,14 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
     setAiLoading(true); setAiError(""); setAiResult(null);
     try {
       const parsed = await parseOrderWithAI(aiText, clients);
-      setAiResult(parsed.map(p => {
+      const mapped = parsed.map(p => {
         const matches = clients.filter(c => c.name.toLowerCase().includes(p.clientName.toLowerCase()) || p.clientName.toLowerCase().includes(c.name.toLowerCase()));
         const chosen = matches.length === 1 ? matches[0] : null; // если совпало несколько (тёзки) — пусть выберет вручную
         return { ...p, trial: !!p.trial, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
-      }));
+      });
+      setAiResult(mapped);
+      // Подставляем водителя, если у этого клиента на эту дату уже есть назначенный (можно поменять)
+      setAiDriver(mapped.map(p => p.clientId ? (orders.find(o => o.clientId === p.clientId && o.date === p.date && o.driverId)?.driverId || "") : "").find(Boolean) || "");
     } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
     setAiLoading(false);
   };
@@ -2959,13 +2963,13 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
   const confirmAI = async () => {
     const ambiguous = aiResult.find(p => (p.matchOptions || []).length > 1 && !p.clientId);
     if (ambiguous) { alert(`Выбери, какой именно клиент «${ambiguous.clientFound}» — их несколько с таким названием.`); return; }
+    if (!aiDriver) { alert("Сначала выбери водителя — кто повезёт эту заявку."); return; }
     setSaving(true);
     try {
       for (const p of aiResult) {
-        const inheritedDriver = p.clientId ? (orders.find(o => o.clientId === p.clientId && o.date === p.date && o.driverId)?.driverId || "") : "";
-        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", driverId: inheritedDriver, status: "новая" });
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", driverId: aiDriver, status: "новая" });
       }
-      setAiResult(null); setAiText(""); await reload("orders");
+      setAiResult(null); setAiText(""); setAiDriver(""); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + (e && e.message ? e.message : e)); }
     setSaving(false);
   };
@@ -3059,9 +3063,16 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                 {p.note && <div className="text-amber-800 bg-amber-50 rounded px-2 py-1 mt-1 text-xs">📝 {p.note}</div>}
               </div>
             ))}
+            <div className={`rounded-xl p-3 border ${aiDriver ? "bg-gray-50 border-gray-100" : "bg-orange-50 border-orange-200"}`}>
+              <div className={`text-sm font-medium mb-1 ${aiDriver ? "text-gray-700" : "text-orange-700"}`}>🚛 Кто повезёт? {!aiDriver && "— выбери водителя перед подтверждением"}</div>
+              <select value={aiDriver} onChange={e => setAiDriver(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300">
+                <option value="">— выбери водителя —</option>
+                {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
             <div className="flex gap-2">
-              <button onClick={confirmAI} disabled={saving} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{saving ? "Сохраняю..." : "Добавить все"}</button>
-              <button onClick={() => setAiResult(null)} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-4 py-2.5 text-sm">Отмена</button>
+              <button onClick={confirmAI} disabled={saving || !aiDriver} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{saving ? "Сохраняю..." : aiDriver ? "Добавить все" : "Сначала выбери водителя"}</button>
+              <button onClick={() => { setAiResult(null); setAiDriver(""); }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-4 py-2.5 text-sm">Отмена</button>
             </div>
           </div>
         )}
