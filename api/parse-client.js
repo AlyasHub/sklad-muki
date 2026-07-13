@@ -15,6 +15,7 @@ export default async function handler(req, res) {
 - org_name: полное юр. наименование (ИП «Фамилия» или ТОО «Название»)
 - bin: БИН или ИИН (12 цифр)
 - director: ФИО директора / в лице кого действует
+- basis: на основании чего действует руководитель (напр. "Устава", "Свидетельства о гос. регистрации", "Доверенности №5"). Если в тексте об этом ничего нет — строго пустая строка "", НЕ выдумывай.
 - contact_name: контактное лицо
 - contact: телефон или WhatsApp (формат +7...)
 - email: электронная почта
@@ -23,7 +24,7 @@ export default async function handler(req, res) {
 - bank: наименование банка (напр. Kaspi Bank, Halyk Bank)
 - iik: ИИК / расчётный счёт (обычно начинается с KZ)
 - bik: БИК банка
-Верни строго JSON: {"name":"","org_name":"","bin":"","director":"","contact_name":"","contact":"","email":"","address":"","legal_address":"","bank":"","iik":"","bik":""}
+Верни строго JSON: {"name":"","org_name":"","bin":"","director":"","basis":"","contact_name":"","contact":"","email":"","address":"","legal_address":"","bank":"","iik":"","bik":""}
 Только JSON.`;
 
   try {

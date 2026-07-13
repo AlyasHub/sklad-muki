@@ -131,7 +131,13 @@ function downloadDocx(name, text) {
   };
   const lines = String(text).split("\n");
   const firstNonEmpty = lines.findIndex(l => l.trim() !== ""); // заголовок договора — по центру, жирным
-  const paraFor = (line, idx) => mkPara(line, { bold: idx === firstNonEmpty, jc: idx === firstNonEmpty ? "center" : "both" });
+  // Строка «г. Город … дата»: город прижат к левому краю, дата — к правому (таб по правому краю страницы)
+  const cityDatePara = line => {
+    const m = line.match(/^(г\..*?)\s{2,}(\S.*)$/);
+    if (!m) return null;
+    return `<w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="10092"/></w:tabs><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="left"/><w:rPr>${rpr}</w:rPr></w:pPr><w:r><w:rPr>${rpr}</w:rPr><w:t xml:space="preserve">${esc(m[1])}</w:t></w:r><w:r><w:rPr>${rpr}</w:rPr><w:tab/><w:t xml:space="preserve">${esc(m[2])}</w:t></w:r></w:p>`;
+  };
+  const paraFor = (line, idx) => cityDatePara(line) || mkPara(line, { bold: idx === firstNonEmpty, jc: idx === firstNonEmpty ? "center" : "both" });
   const trimEnd = arr => { const a = [...arr]; while (a.length && a[a.length - 1].trim() === "") a.pop(); return a; };
   const supIdx = lines.findIndex(l => l.trim().startsWith("«ПОСТАВЩИК»"));
   const buyIdx = lines.findIndex(l => l.trim().startsWith("«ПОКУПАТЕЛЬ»"));
@@ -1289,7 +1295,7 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
     setParsingClient(true); setClientParseErr("");
     try {
       const d = await parseClientWithAI(clientText);
-      setForm(f => ({ ...f, name: d.name || f.name, org_name: d.org_name || f.org_name, bin: d.bin || f.bin, director: d.director || f.director, contact_name: d.contact_name || f.contact_name, contact: d.contact || f.contact, email: d.email || f.email, address: d.address || f.address, legal_address: d.legal_address || f.legal_address, bank: d.bank || f.bank, iik: d.iik || f.iik, bik: d.bik || f.bik }));
+      setForm(f => ({ ...f, name: d.name || f.name, org_name: d.org_name || f.org_name, bin: d.bin || f.bin, director: d.director || f.director, basis: d.basis || f.basis, contact_name: d.contact_name || f.contact_name, contact: d.contact || f.contact, email: d.email || f.email, address: d.address || f.address, legal_address: d.legal_address || f.legal_address, bank: d.bank || f.bank, iik: d.iik || f.iik, bik: d.bik || f.bik }));
     } catch (e) { setClientParseErr(e.message); }
     setParsingClient(false);
   };
@@ -1304,8 +1310,8 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [] }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [] }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -1370,6 +1376,7 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
               <div className="space-y-3">
                 <Inp label="БИН / ИИН" value={form.bin || ""} onChange={e => setForm({ ...form, bin: e.target.value })} placeholder="12 цифр" />
                 <Inp label="Директор / в лице" value={form.director || ""} onChange={e => setForm({ ...form, director: e.target.value })} placeholder="Салават Б." />
+                <Inp label="Действует на основании (для договора)" value={form.basis || ""} onChange={e => setForm({ ...form, basis: e.target.value })} placeholder="Устава / Свидетельства — пусто, если неизвестно" />
                 <Inp label="Юридический адрес" value={form.legal_address || ""} onChange={e => setForm({ ...form, legal_address: e.target.value })} />
                 <Inp label="Email" value={form.email || ""} onChange={e => setForm({ ...form, email: e.target.value })} />
                 <Inp label="Банк" value={form.bank || ""} onChange={e => setForm({ ...form, bank: e.target.value })} placeholder="Kaspi Bank" />
@@ -2552,13 +2559,21 @@ function ContractsTab({ clients }) {
     };
     let t = template;
     Object.entries(fields).forEach(([k, v]) => { t = t.split(k).join(v || "〔ВПИШИТЕ〕"); });
+    // «действующего на основании …» у Покупателя: если основание неизвестно — убираем фразу целиком
+    const basis = (P.basis || "").trim();
+    t = t.split(", действующего на основании 〔ВПИШИТЕ: Устава / Свидетельства〕").join(basis ? `, действующего на основании ${basis}` : "");
     setResult(t);
   };
   const printContract = () => {
     if (!result) return;
     const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const body = esc(result); // в печати — обычный текст, без подсветки
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Договор</title><style>@page{margin:18mm}body{font-family:'Times New Roman',serif;font-size:12pt;line-height:1.45;color:#000;white-space:pre-wrap;text-align:justify;margin:0}</style></head><body>${body}</body></html>`;
+    // Каждая строка — свой блок; «г. Город … дата» разводим по краям (город слева, дата справа)
+    const body = result.split("\n").map(l => {
+      const m = l.match(/^(г\..*?)\s{2,}(\S.*)$/);
+      if (m) return `<div style="display:flex;justify-content:space-between"><span>${esc(m[1])}</span><span>${esc(m[2])}</span></div>`;
+      return `<div>${esc(l) || "&nbsp;"}</div>`;
+    }).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Договор</title><style>@page{margin:18mm}body{font-family:'Times New Roman',serif;font-size:11pt;line-height:1.45;color:#000;text-align:justify;margin:0}</style></head><body>${body}</body></html>`;
     // Печать через скрытый фрейм — не открываем новую вкладку (иначе на айфоне из неё не выйти)
     const old = document.getElementById("print-frame");
     if (old) old.remove();
