@@ -1058,6 +1058,9 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
     if (!balances[k]) balances[k] = { brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, kg: 0, bags: 0 };
     balances[k].kg += s.weight_kg; balances[k].bags += s.bags;
   });
+  // Общий остаток всей муки на складе (только положительные позиции)
+  const totalKg = Object.values(balances).reduce((s, b) => s + Math.max(0, b.kg), 0);
+  const totalBags = Object.values(balances).reduce((s, b) => s + Math.max(0, b.bags), 0);
 
   // Сколько мешков «забронировано» заявками, которые ещё НЕ отгружены (новая + в пути).
   // При отгрузке склад списывается автоматически, поэтому здесь только будущий спрос.
@@ -1082,6 +1085,11 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3>{canEdit && <Btn onClick={openNew}>+ Операция</Btn>}</div>
       {canEdit && <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>}
+      <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl p-5 text-white shadow-sm">
+        <div className="text-sm font-medium text-amber-100">🌾 Всего муки на складе</div>
+        <div className="text-4xl font-black mt-1">{fmt(totalKg)} кг</div>
+        <div className="text-sm text-amber-100 mt-1">≈ {fmt(Math.round(totalKg / 100) / 10)} т · {fmt(totalBags)} мешков · {Object.values(balances).filter(b => b.kg > 0).length} видов</div>
+      </div>
       {shortages.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
           <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
