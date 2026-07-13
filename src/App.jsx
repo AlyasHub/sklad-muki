@@ -182,7 +182,7 @@ const PRIMARY_NAV = {
   driver: ["calendar"],
 };
 const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Водители", expenses: "Расходы", access: "Доступ" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Рабочие", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -425,6 +425,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, driverId } : o));
     try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, driverId }))); } catch (e) { notifyErr(e); reload("orders"); }
   };
+  const assignLoaderGroup = async (g, loaderId) => { // грузчик для самовывоза
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, loaderId } : o));
+    try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, loaderId }))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
   const deleteGroup = async g => {
     if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return;
     const ids = new Set(g.orders.map(o => o.id));
@@ -505,7 +510,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
   // Оптимальный маршрут на день (по неотвезённым с координатами) — используется и для блока маршрута, и для порядка карточек
   const dayRoute = (() => {
     const seen = new Set(); const pts = [];
-    dayOrders.filter(o => o.status !== "отгружена").forEach(o => {
+    dayOrders.filter(o => o.status !== "отгружена" && !o.pickup).forEach(o => { // самовывоз в маршрут доставки не идёт
       const client = clients.find(c => c.id === o.clientId);
       if (!client || seen.has(client.id)) return;
       const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
@@ -660,6 +665,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
             {dayGroups.map((g, gi, arr) => {
               const client = clients.find(c => c.id === g.clientId);
               const driver = drivers.find(d => d.id === g.orders[0].driverId);
+              const isPickup = g.orders.some(o => o.pickup);
+              const worker = isPickup ? drivers.find(d => d.id === g.orders.find(o => o.loaderId)?.loaderId) : driver;
               const statuses = [...new Set(g.orders.map(o => o.status))];
               const gStatus = statuses.length === 1 ? statuses[0] : "частично";
               const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
@@ -679,7 +686,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && <Badge color="blue">🚶 Самовывоз</Badge>}{!isPickup && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
@@ -727,6 +734,18 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                       </label>
                     </div>
                   ) : canEdit ? (
+                    isPickup ? (
+                    <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
+                      <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].loaderId || ""} onChange={e => assignLoaderGroup(g, e.target.value)}>
+                        <option value="">📦 Грузчик</option>
+                        {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                      {!allShipped
+                        ? <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Отгрузить</Btn>
+                        : <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "новая")}>↩ Отменить</Btn>}
+                      <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
+                    </div>
+                    ) : (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}>
                         <option value="">🚛 Водитель</option>
@@ -742,8 +761,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                           : <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>)}
                       <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
                     </div>
+                    )
                   ) : (
-                    <div className="text-xs text-gray-400 mt-1">{driver ? `🚛 ${driver.name}` : ""}</div>
+                    <div className="text-xs text-gray-400 mt-1">{worker ? `${isPickup ? "📦" : "🚛"} ${worker.name}` : ""}</div>
                   )}
                 </div>
                 </Fragment>
@@ -1503,22 +1523,25 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
 
 function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: "", rate_per_kg: "" });
+  const [form, setForm] = useState({ name: "", rate_per_kg: "", load_rate_per_kg: "" });
   const [payDriver, setPayDriver] = useState(null);
   const [payAmount, setPayAmount] = useState("");
   const [payDate, setPayDate] = useState(TODAY());
   const [payExtra, setPayExtra] = useState(false);
   const [detailDriver, setDetailDriver] = useState(null);
 
+  const openNew = () => { setEditId(null); setForm({ name: "", rate_per_kg: "", load_rate_per_kg: "" }); setShowAdd(true); };
+  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.load_rate_per_kg ?? "" }); setShowAdd(true); };
   const saveDriver = async () => {
     setSaving(true);
-    try { await dbUpsert("drivers", { id: uid(), name: form.name, rate_per_kg: Number(form.rate_per_kg) }); setShowAdd(false); setForm({ name: "", rate_per_kg: "" }); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    try { await dbUpsert("drivers", { id: editId || uid(), name: form.name, rate_per_kg: Number(form.rate_per_kg) || 0, load_rate_per_kg: Number(form.load_rate_per_kg) || 0 }); setShowAdd(false); setEditId(null); setForm({ name: "", rate_per_kg: "", load_rate_per_kg: "" }); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
   const deleteDriver = async id => {
     const linked = (users || []).filter(u => u.driverId === id);
-    if (!confirm(`Удалить водителя${linked.length ? " и его логин? Он больше не сможет войти и его выкинет из приложения." : "?"}`)) return;
+    if (!confirm(`Удалить рабочего${linked.length ? " и его логин? Он больше не сможет войти и его выкинет из приложения." : "?"}`)) return;
     try {
       await dbDelete("drivers", id);
       for (const u of linked) await dbDelete("users", u.id); // закрываем вход
@@ -1526,39 +1549,48 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
     } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
   };
 
-  // Заработок «за развоз» (доставлено × ставка)
-  const earnings = {};
-  orders.filter(o => o.status === "отгружена" && o.driverId).forEach(o => { const d = drivers.find(x => x.id === o.driverId); if (d) earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * (d.rate_per_kg || 0); });
-  // Выплаты: за развоз (уменьшают долг) и доплаты за доп. работу (НЕ уменьшают долг)
+  // Заработок: развоз (доставка × ставка водителя) и отгрузка (самовывоз × ставка грузчика)
+  const earnings = {}, loadEarn = {};
+  orders.filter(o => o.status === "отгружена").forEach(o => {
+    if (o.driverId && !o.pickup) { const d = drivers.find(x => x.id === o.driverId); if (d) earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * (d.rate_per_kg || 0); }
+    if (o.pickup && o.loaderId) { const d = drivers.find(x => x.id === o.loaderId); if (d) loadEarn[o.loaderId] = (loadEarn[o.loaderId] || 0) + o.bags * o.bag_kg * (d.load_rate_per_kg || 0); }
+  });
+  const totalEarned = id => (earnings[id] || 0) + (loadEarn[id] || 0);
+  // Выплаты: зарплата (уменьшает долг) и доплаты за доп. работу (НЕ уменьшают долг)
   const wagePaid = {}, extraPaid = {};
   expenses.filter(x => x.driverId).forEach(x => { const m = x.extra ? extraPaid : wagePaid; m[x.driverId] = (m[x.driverId] || 0) + (x.amount || 0); });
-  const remainingOf = id => Math.max(0, Math.round((earnings[id] || 0) - (wagePaid[id] || 0)));
+  const remainingOf = id => Math.max(0, Math.round(totalEarned(id) - (wagePaid[id] || 0)));
 
   const openPay = (d, extra = false) => { setPayDriver(d); setPayExtra(extra); setPayAmount(extra ? "" : String(remainingOf(d.id))); setPayDate(TODAY()); };
   const doPay = async () => {
     if (!payAmount) return;
     setSaving(true);
-    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note: `${payExtra ? "Доплата (доп. работа)" : "Оплата за развоз"} — ${payDriver.name}` }); setPayDriver(null); await reload("expenses"); }
+    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note: `${payExtra ? "Доплата (доп. работа)" : "Зарплата (развоз+отгрузка)"} — ${payDriver.name}` }); setPayDriver(null); await reload("expenses"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Водители</h3>{canEdit && <Btn onClick={() => setShowAdd(true)}>+ Водитель</Btn>}</div>
-      {showAdd && (<Modal title="Новый водитель" onClose={() => setShowAdd(false)}>
-        <div className="space-y-3"><Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /><Inp label="Ставка тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} /></div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Рабочие</h3>{canEdit && <Btn onClick={openNew}>+ Рабочий</Btn>}</div>
+      <p className="text-sm text-gray-500">Один рабочий может и возить, и грузить. Ставка за развоз — за доставку клиенту (водитель). Ставка за отгрузку — за погрузку в машину клиента при самовывозе (грузчик).</p>
+      {showAdd && (<Modal title={editId ? "Изменить рабочего" : "Новый рабочий"} onClose={() => setShowAdd(false)}>
+        <div className="space-y-3">
+          <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+          <Inp label="🚚 Ставка за развоз (водитель), тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} placeholder="напр. 3" />
+          <Inp label="📦 Ставка за отгрузку (грузчик), тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2" />
+        </div>
         <div className="flex gap-2 mt-4"><Btn onClick={saveDriver} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
       </Modal>)}
       {payDriver && (<Modal title={`Выплата: ${payDriver.name}`} onClose={() => setPayDriver(null)}>
         <div className="space-y-3">
           <div className="flex gap-2">
-            <button onClick={() => { setPayExtra(false); setPayAmount(String(remainingOf(payDriver.id))); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${!payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>За развоз</button>
+            <button onClick={() => { setPayExtra(false); setPayAmount(String(remainingOf(payDriver.id))); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${!payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Зарплата</button>
             <button onClick={() => { setPayExtra(true); setPayAmount(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Доплата (доп. работа)</button>
           </div>
           {payExtra
-            ? <div className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">Доплата НЕ уменьшает остаток за развоз — это оплата за дополнительную работу.</div>
-            : <div className="text-sm bg-gray-50 rounded-xl p-3">Заработал за развоз: <b>{fmt(earnings[payDriver.id] || 0)} тг</b> · выплачено: {fmt(wagePaid[payDriver.id] || 0)} тг · осталось: <b className="text-red-600">{fmt(remainingOf(payDriver.id))} тг</b></div>}
+            ? <div className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">Доплата НЕ уменьшает остаток по зарплате — это оплата за дополнительную работу.</div>
+            : <div className="text-sm bg-gray-50 rounded-xl p-3">Заработал (развоз {fmt(earnings[payDriver.id] || 0)} + отгрузка {fmt(loadEarn[payDriver.id] || 0)}): <b>{fmt(totalEarned(payDriver.id))} тг</b> · выплачено: {fmt(wagePaid[payDriver.id] || 0)} тг · осталось: <b className="text-red-600">{fmt(remainingOf(payDriver.id))} тг</b></div>}
           <Inp label="Дата" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
           <Inp label="Сумма выплаты, тг" type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} />
         </div>
@@ -1567,16 +1599,19 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
       {detailDriver && (() => {
         const d = detailDriver;
         const byDate = {};
-        orders.filter(o => o.driverId === d.id && o.status === "отгружена").forEach(o => { (byDate[o.date] = byDate[o.date] || { kg: 0 }).kg += o.bags * o.bag_kg; });
-        const days = Object.entries(byDate).map(([date, v]) => ({ date, kg: v.kg, owed: Math.round(v.kg * (d.rate_per_kg || 0)) })).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        orders.filter(o => o.status === "отгружена" && ((o.driverId === d.id && !o.pickup) || (o.pickup && o.loaderId === d.id))).forEach(o => {
+          const rec = byDate[o.date] = byDate[o.date] || { delivKg: 0, loadKg: 0 };
+          if (o.pickup) rec.loadKg += o.bags * o.bag_kg; else rec.delivKg += o.bags * o.bag_kg;
+        });
+        const days = Object.entries(byDate).map(([date, v]) => ({ date, ...v, owed: Math.round(v.delivKg * (d.rate_per_kg || 0) + v.loadKg * (d.load_rate_per_kg || 0)) })).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
         const pays = expenses.filter(x => x.driverId === d.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
         return (<Modal title={`🚛 ${d.name} — детали`} onClose={() => setDetailDriver(null)}>
           <div className="space-y-4">
             <div>
-              <div className="font-semibold text-gray-700 mb-1">По дням (развоз)</div>
-              {days.length === 0 ? <div className="text-gray-400 text-sm">Доставок ещё не было</div> : (
+              <div className="font-semibold text-gray-700 mb-1">По дням (развоз + отгрузка)</div>
+              {days.length === 0 ? <div className="text-gray-400 text-sm">Работы ещё не было</div> : (
                 <div className="space-y-1 max-h-60 overflow-y-auto">
-                  {days.map(x => <div key={x.date} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2"><span>{x.date.split("-").reverse().join(".")} · {fmt(x.kg)} кг</span><span className="font-medium">должны {fmt(x.owed)} тг</span></div>)}
+                  {days.map(x => <div key={x.date} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2"><span>{x.date.split("-").reverse().join(".")}{x.delivKg ? ` · 🚚 ${fmt(x.delivKg)}` : ""}{x.loadKg ? ` · 📦 ${fmt(x.loadKg)}` : ""} кг</span><span className="font-medium">должны {fmt(x.owed)} тг</span></div>)}
                 </div>
               )}
             </div>
@@ -1584,7 +1619,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
               <div className="font-semibold text-gray-700 mb-1">Выплаты</div>
               {pays.length === 0 ? <div className="text-gray-400 text-sm">Выплат ещё не было</div> : (
                 <div className="space-y-1 max-h-60 overflow-y-auto">
-                  {pays.map(x => <div key={x.id} className="flex items-center justify-between text-sm border border-gray-100 rounded-lg px-3 py-2"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}{x.extra ? <span className="text-amber-700"> · доплата</span> : <span className="text-emerald-600"> · за развоз</span>}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
+                  {pays.map(x => <div key={x.id} className="flex items-center justify-between text-sm border border-gray-100 rounded-lg px-3 py-2"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}{x.extra ? <span className="text-amber-700"> · доплата</span> : <span className="text-emerald-600"> · зарплата</span>}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
                 </div>
               )}
             </div>
@@ -1592,10 +1627,11 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
         </Modal>);
       })()}
       <div className="space-y-3">
-        {drivers.length === 0 && <div className="text-center py-12 text-gray-400">Водителей нет.</div>}
+        {drivers.length === 0 && <div className="text-center py-12 text-gray-400">Рабочих нет.</div>}
         {drivers.map(d => {
-          const kg = orders.filter(o => o.driverId === d.id && o.status === "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
-          const earned = earnings[d.id] || 0;
+          const delivKg = orders.filter(o => o.driverId === d.id && !o.pickup && o.status === "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
+          const loadKg = orders.filter(o => o.pickup && o.loaderId === d.id && o.status === "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
+          const eDeliv = earnings[d.id] || 0, eLoad = loadEarn[d.id] || 0;
           const wage = wagePaid[d.id] || 0;
           const extra = extraPaid[d.id] || 0;
           const left = remainingOf(d.id);
@@ -1604,15 +1640,16 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
               <div className="flex items-start justify-between">
                 <div>
                   <div className="font-bold text-gray-900">🚛 {d.name}</div>
-                  <div className="text-sm text-gray-500">Ставка: {fmt(d.rate_per_kg)} тг/кг · доставлено {fmt(kg)} кг</div>
-                  <div className="text-sm mt-1">Заработал за развоз: <b>{fmt(earned)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(wage)} тг</span></div>
-                  <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось за развоз: {fmt(left)} тг</div>
+                  <div className="text-sm text-gray-500">🚚 развоз {fmt(d.rate_per_kg)} тг/кг · 📦 отгрузка {fmt(d.load_rate_per_kg || 0)} тг/кг</div>
+                  <div className="text-sm mt-1">Развоз: <b>{fmt(eDeliv)} тг</b> <span className="text-gray-400">({fmt(delivKg)} кг)</span> · Отгрузка: <b>{fmt(eLoad)} тг</b> <span className="text-gray-400">({fmt(loadKg)} кг)</span></div>
+                  <div className="text-sm">Всего заработал: <b>{fmt(eDeliv + eLoad)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(wage)} тг</span></div>
+                  <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось выплатить: {fmt(left)} тг</div>
                   {extra > 0 && <div className="text-xs text-amber-700 mt-0.5">Доплаты (доп. работа): {fmt(extra)} тг</div>}
                 </div>
-                {canEdit && <Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn>}
+                {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(d)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn></div>}
               </div>
               <div className="flex gap-2 mt-3 flex-wrap">
-                {canEdit && <Btn size="sm" onClick={() => openPay(d, false)}>💵 За развоз</Btn>}
+                {canEdit && <Btn size="sm" onClick={() => openPay(d, false)}>💵 Выплатить зарплату</Btn>}
                 {canEdit && <Btn size="sm" variant="secondary" onClick={() => openPay(d, true)}>+ Доплата</Btn>}
                 <Btn size="sm" variant="secondary" onClick={() => setDetailDriver(d)}>📋 Детали</Btn>
               </div>
@@ -2854,6 +2891,8 @@ function EditGroupModal({ group, clients, reload, onClose }) {
     setSaving(true);
     const client = clients.find(c => c.id === base.clientId);
     const grpDriver = group.orders.find(o => o.driverId)?.driverId || ""; // водитель заявки (с любой позиции)
+    const grpPickup = group.orders.some(o => o.pickup); // самовывоз
+    const grpLoader = group.orders.find(o => o.loaderId)?.loaderId || ""; // грузчик заявки
     // Фото (накладные) и отметку доставки собираем со всей заявки и переносим на первую позицию — чтобы не потерять при удалении позиции
     const allPhotos = [...new Set(group.orders.flatMap(o => o.photos || []))];
     const anyDelivered = group.orders.some(o => o.delivered_by_driver);
@@ -2867,7 +2906,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
           const orig = group.orders.find(o => o.id === p.id);
           await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
         } else {
-          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
+          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
         }
       }
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
@@ -2909,13 +2948,14 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
-  const [aiDriver, setAiDriver] = useState(""); // водитель для разобранной заявки — обязателен перед подтверждением
+  const [aiDriver, setAiDriver] = useState(""); // водитель (или грузчик при самовывозе) для разобранной заявки
+  const [aiPickup, setAiPickup] = useState(false); // самовывоз: клиент забирает сам, выбираем грузчика
   const [aiError, setAiError] = useState("");
   const [saving, setSaving] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [editGroup, setEditGroup] = useState(null);
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "" });
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "", pickup: false, loaderId: "" });
   // Открыть форму заявки по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
@@ -2950,7 +2990,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
         return { ...p, trial: !!p.trial, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       });
       setAiResult(mapped);
-      setAiDriver(""); // водителя выбираем вручную каждый раз — заявки могут ехать с разными водителями
+      setAiDriver(""); setAiPickup(false); // водителя/самовывоз выбираем вручную каждый раз
     } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
     setAiLoading(false);
   };
@@ -2962,13 +3002,13 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
   const confirmAI = async () => {
     const ambiguous = aiResult.find(p => (p.matchOptions || []).length > 1 && !p.clientId);
     if (ambiguous) { alert(`Выбери, какой именно клиент «${ambiguous.clientFound}» — их несколько с таким названием.`); return; }
-    if (!aiDriver) { alert("Сначала выбери водителя — кто повезёт эту заявку."); return; }
+    if (!aiPickup && !aiDriver) { alert("Сначала выбери водителя — кто повезёт эту заявку."); return; } // при самовывозе грузчика можно определить позже
     setSaving(true);
     try {
       for (const p of aiResult) {
-        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", driverId: aiDriver, status: "новая" });
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", pickup: aiPickup, driverId: aiPickup ? "" : aiDriver, loaderId: aiPickup ? aiDriver : "", status: "новая" });
       }
-      setAiResult(null); setAiText(""); setAiDriver(""); await reload("orders");
+      setAiResult(null); setAiText(""); setAiDriver(""); setAiPickup(false); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + (e && e.message ? e.message : e)); }
     setSaving(false);
   };
@@ -3016,7 +3056,9 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
     try {
       await dbUpsert("orders", {
         id: uid(), date: form.date, brand: form.brand, grade: form.grade,
-        bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId || inheritedDriver,
+        bag_kg: Number(form.bag_kg), bags: Number(form.bags),
+        driverId: form.pickup ? "" : (form.driverId || inheritedDriver),
+        pickup: !!form.pickup, loaderId: form.pickup ? (form.loaderId || "") : "",
         price_per_kg: Number(price), status: "новая",
         isSample: form.isSample, trial: isTrial, note: form.note || "",
         clientId: form.isSample ? null : form.clientId,
@@ -3062,16 +3104,22 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                 {p.note && <div className="text-amber-800 bg-amber-50 rounded px-2 py-1 mt-1 text-xs">📝 {p.note}</div>}
               </div>
             ))}
-            <div className={`rounded-xl p-3 border ${aiDriver ? "bg-gray-50 border-gray-100" : "bg-orange-50 border-orange-200"}`}>
-              <div className={`text-sm font-medium mb-1 ${aiDriver ? "text-gray-700" : "text-orange-700"}`}>🚛 Кто повезёт? {!aiDriver && "— выбери водителя перед подтверждением"}</div>
+            <label className="flex items-center gap-2 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
+              <input type="checkbox" checked={aiPickup} onChange={e => { setAiPickup(e.target.checked); setAiDriver(""); }} className="w-4 h-4 accent-sky-500" />
+              <span className="text-sm font-medium text-gray-700">🚶 Самовывоз — клиент забирает сам (выбери грузчика)</span>
+            </label>
+            {(() => { const ok = aiPickup || aiDriver; return (
+            <div className={`rounded-xl p-3 border ${ok ? "bg-gray-50 border-gray-100" : "bg-orange-50 border-orange-200"}`}>
+              <div className={`text-sm font-medium mb-1 ${ok ? "text-gray-700" : "text-orange-700"}`}>{aiPickup ? "📦 Кто отгрузит (грузчик)?" : "🚛 Кто повезёт?"} {!ok && "— выбери перед подтверждением"}</div>
               <select value={aiDriver} onChange={e => setAiDriver(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300">
-                <option value="">— выбери водителя —</option>
+                <option value="">{aiPickup ? "— определить позже —" : "— выбери водителя —"}</option>
                 {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </div>
+            ); })()}
             <div className="flex gap-2">
-              <button onClick={confirmAI} disabled={saving || !aiDriver} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{saving ? "Сохраняю..." : aiDriver ? "Добавить все" : "Сначала выбери водителя"}</button>
-              <button onClick={() => { setAiResult(null); setAiDriver(""); }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-4 py-2.5 text-sm">Отмена</button>
+              <button onClick={confirmAI} disabled={saving || (!aiPickup && !aiDriver)} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{saving ? "Сохраняю..." : (aiPickup || aiDriver) ? "Добавить все" : "Сначала выбери водителя"}</button>
+              <button onClick={() => { setAiResult(null); setAiDriver(""); setAiPickup(false); }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-4 py-2.5 text-sm">Отмена</button>
             </div>
           </div>
         )}
@@ -3092,12 +3140,14 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
               const allRoute = g.orders.every(o => o.status === "в пути");
               const prevShipped = gi > 0 && arr[gi - 1].orders.every(o => o.status === "отгружена");
               const shippedCount = arr.filter(x => x.orders.every(o => o.status === "отгружена")).length;
+              const isPickup = g.orders.some(o => o.pickup);
+              const worker = drivers.find(d => d.id === (isPickup ? g.orders.find(o => o.loaderId)?.loaderId : g.orders.find(o => o.driverId)?.driverId));
               return (
                 <Fragment key={g.key}>
                 {shipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚶 Самовывоз</span>}</span>
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
                   </div>
                   <div className="space-y-1">
@@ -3109,12 +3159,13 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                     ))}
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
+                  <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>
                   {canEdit && (
                     <div className="mt-3 space-y-2">
                       <div className="flex gap-2 flex-wrap items-center">
-                        {allNew && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
-                        {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
-                        {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>}
+                        {allNew && !isPickup && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
+                        {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>{isPickup ? "✓ Отгрузить" : "✓ Доставлено"}</Btn>}
+                        {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, isPickup ? "новая" : "в пути")}>↩ {isPickup ? "Отменить" : "Не доставлено"}</Btn>}
                         <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}>✏️ Изменить</Btn>
                         <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>🗑</Btn>
                       </div>
@@ -3149,6 +3200,12 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
               <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно, без маршрута)</span>
             </label>
           )}
+          {!form.isSample && (
+            <label className="flex items-center gap-2 mb-3 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
+              <input type="checkbox" checked={form.pickup} onChange={e => setForm({ ...form, pickup: e.target.checked, driverId: "" })} className="w-4 h-4 accent-sky-500" />
+              <span className="text-sm font-medium text-gray-700">🚶 Самовывоз — клиент забирает сам (вместо водителя выбери грузчика)</span>
+            </label>
+          )}
           <div className="grid grid-cols-2 gap-3">
             {form.isSample
               ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
@@ -3158,9 +3215,11 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
             {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
-            <Inp label="Дата доставки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-            <div className="col-span-2"><Sel label="Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
-            <div className="col-span-2"><Inp label="Заметка (видит водитель)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
+            <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            {form.pickup
+              ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
+              : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>}
+            <div className="col-span-2"><Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
           <div className="flex gap-2 mt-4">
             <Btn onClick={addManual} disabled={savingManual}>{savingManual ? "Сохраняю..." : "Добавить"}</Btn>
