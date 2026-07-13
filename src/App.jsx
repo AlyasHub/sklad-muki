@@ -118,11 +118,33 @@ function zipStore(files) {
 }
 function downloadDocx(name, text) {
   const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const paras = String(text).split("\n").map(line => {
-    const run = line === "" ? "" : `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t xml:space="preserve">${esc(line)}</w:t></w:r>`;
-    return `<w:p><w:pPr><w:jc w:val="both"/></w:pPr>${run}</w:p>`;
-  }).join("");
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paras}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr></w:body></w:document>`;
+  // Оформление точно как в эталонных договорах: Times New Roman 11, одинарный интервал,
+  // без отступов после абзаца, выравнивание по ширине, заголовок по центру жирным,
+  // реквизиты сторон — двумя колонками (таблица без границ), как в эталоне
+  const rpr = `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/><w:szCs w:val="22"/>`;
+  const mkPara = (line, opts = {}) => {
+    const b = opts.bold ? "<w:b/>" : "";
+    const jc = opts.jc || "both";
+    const pPr = `<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:jc w:val="${jc}"/><w:rPr>${b}${rpr}</w:rPr></w:pPr>`;
+    const run = line === "" ? "" : `<w:r><w:rPr>${b}${rpr}</w:rPr><w:t xml:space="preserve">${esc(line)}</w:t></w:r>`;
+    return `<w:p>${pPr}${run}</w:p>`;
+  };
+  const lines = String(text).split("\n");
+  const firstNonEmpty = lines.findIndex(l => l.trim() !== ""); // заголовок договора — по центру, жирным
+  const paraFor = (line, idx) => mkPara(line, { bold: idx === firstNonEmpty, jc: idx === firstNonEmpty ? "center" : "both" });
+  const trimEnd = arr => { const a = [...arr]; while (a.length && a[a.length - 1].trim() === "") a.pop(); return a; };
+  const supIdx = lines.findIndex(l => l.trim().startsWith("«ПОСТАВЩИК»"));
+  const buyIdx = lines.findIndex(l => l.trim().startsWith("«ПОКУПАТЕЛЬ»"));
+  let paras;
+  if (supIdx > 0 && buyIdx > supIdx) {
+    const cell = ls => `<w:tc><w:tcPr><w:tcW w:w="5500" w:type="dxa"/></w:tcPr>${(trimEnd(ls).map(l => mkPara(l, { jc: "left" })).join("")) || mkPara("")}</w:tc>`;
+    paras = lines.slice(0, supIdx).map(paraFor).join("")
+      + `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="5958"/><w:gridCol w:w="5146"/></w:tblGrid><w:tr>${cell(lines.slice(supIdx, buyIdx))}${cell(lines.slice(buyIdx))}</w:tr></w:tbl>`
+      + mkPara(""); // после таблицы в конце документа Word требует абзац
+  } else {
+    paras = lines.map(paraFor).join("");
+  }
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paras}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="454" w:right="680" w:bottom="567" w:left="1134" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr></w:body></w:document>`;
   const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
   const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
   const enc = new TextEncoder();
