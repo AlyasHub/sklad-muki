@@ -2950,8 +2950,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
         return { ...p, trial: !!p.trial, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       });
       setAiResult(mapped);
-      // Подставляем водителя, если у этого клиента на эту дату уже есть назначенный (можно поменять)
-      setAiDriver(mapped.map(p => p.clientId ? (orders.find(o => o.clientId === p.clientId && o.date === p.date && o.driverId)?.driverId || "") : "").find(Boolean) || "");
+      setAiDriver(""); // водителя выбираем вручную каждый раз — заявки могут ехать с разными водителями
     } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
     setAiLoading(false);
   };
