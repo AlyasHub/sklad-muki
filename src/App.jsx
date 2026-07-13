@@ -83,6 +83,62 @@ function downloadFile(name, content, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// Генерация настоящего Word-файла (.docx) без внешних библиотек.
+// .docx — это ZIP из нескольких XML. Собираем ZIP вручную (метод «store», без сжатия) + CRC32.
+function crc32(bytes) {
+  let crc = ~0;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i];
+    for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+  }
+  return ~crc >>> 0;
+}
+function zipStore(files) {
+  const enc = new TextEncoder();
+  const chunks = []; let offset = 0;
+  const u16 = n => new Uint8Array([n & 255, (n >>> 8) & 255]);
+  const u32 = n => new Uint8Array([n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]);
+  const push = a => { chunks.push(a); offset += a.length; };
+  const central = [];
+  for (const f of files) {
+    const nameB = enc.encode(f.name), data = f.data, crc = crc32(data), size = data.length, local = offset;
+    push(u32(0x04034b50)); push(u16(20)); push(u16(0)); push(u16(0)); push(u16(0)); push(u16(0));
+    push(u32(crc)); push(u32(size)); push(u32(size)); push(u16(nameB.length)); push(u16(0)); push(nameB); push(data);
+    const cd = [u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(size), u32(size),
+      u16(nameB.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(local), nameB];
+    central.push(cd);
+  }
+  const cdStart = offset; let cdSize = 0;
+  for (const cd of central) for (const p of cd) { push(p); cdSize += p.length; }
+  const n = files.length;
+  push(u32(0x06054b50)); push(u16(0)); push(u16(0)); push(u16(n)); push(u16(n)); push(u32(cdSize)); push(u32(cdStart)); push(u16(0));
+  const total = chunks.reduce((s, a) => s + a.length, 0), out = new Uint8Array(total);
+  let p = 0; for (const a of chunks) { out.set(a, p); p += a.length; }
+  return out;
+}
+function downloadDocx(name, text) {
+  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const paras = String(text).split("\n").map(line => {
+    const run = line === "" ? "" : `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t xml:space="preserve">${esc(line)}</w:t></w:r>`;
+    return `<w:p><w:pPr><w:jc w:val="both"/></w:pPr>${run}</w:p>`;
+  }).join("");
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paras}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr></w:body></w:document>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+  const enc = new TextEncoder();
+  const zip = zipStore([
+    { name: "[Content_Types].xml", data: enc.encode(contentTypes) },
+    { name: "_rels/.rels", data: enc.encode(rels) },
+    { name: "word/document.xml", data: enc.encode(documentXml) },
+  ]);
+  const blob = new Blob([zip], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // Шифрование пароля (SHA-256) — пароли не хранятся в открытом виде
 async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
@@ -2499,7 +2555,7 @@ function ContractsTab({ clients }) {
             <div className="flex gap-2 flex-wrap">
               <Btn size="sm" onClick={printContract}>🖨 Печать</Btn>
               <Btn size="sm" variant="secondary" onClick={() => copyToClipboard(result)}>📋 Копировать</Btn>
-              <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Договор_${partyName}.txt`, result, "text/plain;charset=utf-8")}>⬇️ Скачать</Btn>
+              <Btn size="sm" variant="secondary" onClick={() => downloadDocx(`Договор_${partyName}.docx`, result)}>⬇️ Скачать Word</Btn>
             </div>
           </div>
           <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-2">Можно править прямо здесь: <mark style={{ background: "#fde68a" }}>жёлтым</mark> подсвечены метки 〔…〕, которые нужно заполнить (особенно <b>пункт 2.2</b>, номер и дату). В печать подсветка не идёт.</div>
