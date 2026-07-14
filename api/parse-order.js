@@ -50,7 +50,6 @@ ${clientInfo}
       body: JSON.stringify({
         model: "claude-sonnet-5",
         max_tokens: 1024,
-        temperature: 0, // разбор должен быть точным и повторяемым
         messages: [{ role: "user", content: prompt }],
       }),
     });
