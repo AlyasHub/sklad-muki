@@ -2365,7 +2365,7 @@ function UsersTab({ users, drivers, logins = [], reload, currentUser }) {
 
 // Журнал входов: кто и когда заходил в приложение (для администратора)
 function LoginLog({ logins }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const sorted = [...(logins || [])].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
   const fmt = iso => {
     const d = new Date(iso);
