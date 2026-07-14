@@ -48,14 +48,16 @@ ${clientInfo}
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: "claude-sonnet-5",
         max_tokens: 1024,
+        temperature: 0, // разбор должен быть точным и повторяемым
         messages: [{ role: "user", content: prompt }],
       }),
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Ошибка Anthropic API" });
     const raw = (data.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+    if ((req.body || {}).debug) return res.status(200).json({ raw, model: data.model, stop_reason: data.stop_reason });
     return res.status(200).json({ raw });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });
