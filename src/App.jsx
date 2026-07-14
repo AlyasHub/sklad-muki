@@ -1992,7 +1992,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
           <div className="font-bold text-gray-800">🔍 Свой отчёт</div>
           {repFiltered.length > 0 && <button onClick={downloadRep} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-3 py-1.5 font-medium">⬇️ Excel</button>}
         </div>
-        <div className="text-xs text-gray-400 mb-2">Дни выбираются периодом сверху (в т.ч. «Свой период» — любые даты). Ниже выбери бренд, сорт и фасовки.</div>
+        <div className="text-xs text-gray-400 mb-2">Дни выбираются периодом сверху (в т.ч. «Свой период» — любые даты). Фасовок можно отметить несколько — нажимай по очереди, повторное нажатие снимает выбор.</div>
         <div className="space-y-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs text-gray-500 w-14">Бренд:</span>
