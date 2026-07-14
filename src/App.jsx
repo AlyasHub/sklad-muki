@@ -387,8 +387,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     setUploadingId(o.id);
     try {
       const url = await uploadPhoto(o.id, file);
-      applyLocal("orders", os => os.map(x => x.id === o.id ? { ...x, photos: [...(x.photos || []), url] } : x));
-      await dbUpsert("orders", { ...o, photos: [...(o.photos || []), url] });
+      const at = new Date().toISOString(); // время загрузки документа — видно администратору
+      applyLocal("orders", os => os.map(x => x.id === o.id ? { ...x, photos: [...(x.photos || []), url], photo_at: { ...(x.photo_at || {}), [url]: at } } : x));
+      await dbUpsert("orders", { ...o, photos: [...(o.photos || []), url], photo_at: { ...(o.photo_at || {}), [url]: at } });
     } catch (e) { alert("⚠️ Не удалось загрузить фото: " + e.message + "\nПроверь интернет и попробуй ещё раз."); reload("orders"); }
     setUploadingId(null);
   };
@@ -717,11 +718,20 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     {!driverMode && canEdit && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
-                  {gPhotos.length > 0 && (
-                    <div className="flex gap-1 flex-wrap mt-2">
-                      {gPhotos.map((url, i) => <img key={i} src={url} onClick={() => setPhotoView(url)} className="w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer" alt="фото" />)}
-                    </div>
-                  )}
+                  {gPhotos.length > 0 && (() => {
+                    const photoAt = Object.assign({}, ...g.orders.map(o => o.photo_at || {})); // когда загружен каждый документ
+                    const fmtAt = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }); };
+                    return (
+                      <div className="flex gap-2 flex-wrap mt-2">
+                        {gPhotos.map((url, i) => (
+                          <div key={i} className="text-center">
+                            <img src={url} onClick={() => setPhotoView(url)} className="w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer" alt="фото" />
+                            {photoAt[url] && <div className="text-[10px] text-gray-400 leading-tight mt-0.5">📎 {fmtAt(photoAt[url])}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   {anyClaim && !allConfirmed && <div className="text-xs text-amber-600 mt-1">🚚 Водитель отметил «доставил» — ждёт подтверждения</div>}
                   {allConfirmed && <div className="text-xs text-emerald-600 mt-1">✓ Подтверждено</div>}
 
@@ -1231,25 +1241,54 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
           </div>
         </Modal>
       )}
-      <div className="grid grid-cols-1 gap-3">
-        {Object.values(balances).map((b, i) => {
-          const need = reserved[`${b.brand}|${b.grade}|${b.bag_kg}`] || 0;
-          const short = need > Math.max(0, b.bags);
-          return (
-          <div key={i} className={`rounded-2xl p-4 border ${short ? "bg-red-50 border-red-300" : b.kg <= 0 ? "bg-red-50 border-red-200" : "bg-white border-gray-100 shadow-sm"}`}>
-            <div className="flex items-center justify-between">
-              <div><div className="font-bold text-gray-900">{b.brand} · {b.grade}</div><div className="text-sm text-gray-500">Мешки по {b.bag_kg} кг</div></div>
-              <div className="text-right"><div className={`text-2xl font-bold ${b.kg <= 0 ? "text-red-600" : "text-emerald-600"}`}>{fmt(Math.max(0, b.kg))} кг</div><div className="text-sm text-gray-400">{Math.max(0, b.bags)} мешков</div></div>
-            </div>
-            {need > 0 && (
-              <div className={`text-sm mt-2 ${short ? "text-red-700 font-semibold" : "text-gray-500"}`}>
-                📋 В заявках (не отгружено): {need} меш.{short && ` · не хватает ${need - Math.max(0, b.bags)} меш.`}
+      <div className="space-y-4">
+        {(() => {
+          const items = Object.values(balances);
+          if (items.length === 0) return <div className="text-center py-12 text-gray-400">Склад пуст.</div>;
+          const gradeList = [...GRADES, ...new Set(items.map(b => b.grade).filter(g => !GRADES.includes(g)))];
+          return gradeList.map(grade => {
+            const rows = items.filter(b => b.grade === grade).sort((a, b) => (a.brand || "").localeCompare(b.brand || "") || a.bag_kg - b.bag_kg);
+            if (!rows.length) return null;
+            const gradeKg = rows.reduce((s, b) => s + Math.max(0, b.kg), 0);
+            const gradeBags = rows.reduce((s, b) => s + Math.max(0, b.bags), 0);
+            const maxKg = Math.max(...rows.map(b => Math.max(0, b.kg)), 1);
+            return (
+              <div key={grade} className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-amber-50 to-white border-b border-gray-100">
+                  <div className="font-bold text-gray-800">{grade === "Высший сорт" ? "⭐" : "🌾"} {grade}</div>
+                  <div className="text-sm text-gray-600"><b>{fmt(gradeKg)} кг</b> · {fmt(gradeBags)} меш.</div>
+                </div>
+                {rows.map((b, i) => {
+                  const have = Math.max(0, b.bags);
+                  const need = reserved[`${b.brand}|${b.grade}|${b.bag_kg}`] || 0;
+                  const short = need > have;
+                  const empty = b.kg <= 0;
+                  return (
+                    <div key={i} className={`px-4 py-3 border-b border-gray-50 last:border-b-0 ${short || empty ? "bg-red-50" : ""}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="font-semibold text-gray-900">{b.brand}</span>
+                          <span className="ml-2 text-sm text-gray-500 whitespace-nowrap">мешки {b.bag_kg} кг</span>
+                        </div>
+                        <div className="text-right whitespace-nowrap">
+                          <span className={`text-xl font-bold ${empty ? "text-red-600" : short ? "text-red-600" : "text-emerald-600"}`}>{fmt(have)}</span>
+                          <span className="text-xs text-gray-400"> меш.</span>
+                          <span className="text-sm text-gray-500 ml-2">{fmt(Math.max(0, b.kg))} кг</span>
+                        </div>
+                      </div>
+                      <div className="mt-1.5"><MiniBar value={Math.max(0, b.kg)} max={maxKg} color={short || empty ? "bg-red-400" : "bg-amber-400"} /></div>
+                      {need > 0 && (
+                        <div className={`text-xs mt-1 ${short ? "text-red-700 font-semibold" : "text-gray-500"}`}>
+                          📋 в заявках {need} меш. · {short ? `не хватает ${need - have} меш.` : `свободно ${have - need} меш.`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            )}
-          </div>
-          );
-        })}
-        {Object.keys(balances).length === 0 && <div className="text-center py-12 text-gray-400">Склад пуст.</div>}
+            );
+          });
+        })()}
       </div>
       <div>
         <h4 className="font-semibold text-gray-700 mb-3">История движений</h4>
@@ -1674,6 +1713,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
 function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () => {}, canEdit = true }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
+  const [gradeOpen, setGradeOpen] = useState({}); // раскрытые сорта/бренды в блоке «По сортам и фасовкам»
   const [from, setFrom] = useState(TODAY());
   const [to, setTo] = useState(TODAY());
   const [advice, setAdvice] = useState("");
@@ -1770,11 +1810,11 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
   const cutoffD = new Date(now); cutoffD.setDate(cutoffD.getDate() - 56);
   const recentDel = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && new Date(o.date) >= cutoffD);
   const demandWD = {};
-  recentDel.forEach(o => { const wd = new Date(o.date).getDay(); const p = `${o.brand} ${o.grade}`; (demandWD[wd] = demandWD[wd] || {})[p] = (demandWD[wd][p] || 0) + o.bags * o.bag_kg; });
+  recentDel.forEach(o => { const wd = new Date(o.date).getDay(); const p = `${o.brand} ${o.grade} ${o.bag_kg}кг`; (demandWD[wd] = demandWD[wd] || {})[p] = (demandWD[wd][p] || 0) + o.bags * o.bag_kg; });
   const expectedWk = {};
   for (let i = 1; i <= 7; i++) { const d = new Date(now); d.setDate(d.getDate() + i); const m = demandWD[d.getDay()] || {}; Object.entries(m).forEach(([p, kg]) => { expectedWk[p] = (expectedWk[p] || 0) + kg / 8; }); }
   const stockByProd = {};
-  stock.forEach(s => { const p = `${s.brand} ${s.grade}`; stockByProd[p] = (stockByProd[p] || 0) + s.weight_kg; });
+  stock.forEach(s => { const p = `${s.brand} ${s.grade} ${s.bag_kg}кг`; stockByProd[p] = (stockByProd[p] || 0) + s.weight_kg; }); // каждая фасовка отдельно
   const restock = Object.entries(expectedWk).map(([p, kg]) => ({ p, exp: Math.round(kg), st: Math.round(stockByProd[p] || 0) })).filter(x => x.exp > 0).sort((a, b) => (b.exp - b.st) - (a.exp - a.st));
   const byClientWD = {};
   recentDel.forEach(o => { const c = o.clientName || "?"; const wd = new Date(o.date).getDay(); const k = byClientWD[c] = byClientWD[c] || {}; const v = k[wd] = k[wd] || { kg: 0, days: new Set() }; v.kg += o.bags * o.bag_kg; v.days.add(o.date); });
@@ -1801,6 +1841,26 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
   const pl = Object.entries(bp).sort((a, b) => b[1].kg - a[1].kg);
   const wl = Object.entries(bw).sort((a, b) => b[1].kg - a[1].kg);
   const cl = Object.entries(bc).sort((a, b) => b[1].kg - a[1].kg);
+  // 📊 Детальная статистика продаж: сорт → бренд → фасовка (за выбранный период)
+  const gradeTree = {};
+  delivered.forEach(o => {
+    const kg = o.bags * o.bag_kg, rev = kg * (o.price_per_kg || 0);
+    const g = gradeTree[o.grade] = gradeTree[o.grade] || { kg: 0, rev: 0, bags: 0, brands: {} };
+    g.kg += kg; g.rev += rev; g.bags += Number(o.bags) || 0;
+    const b = g.brands[o.brand] = g.brands[o.brand] || { kg: 0, rev: 0, bags: 0, packs: {} };
+    b.kg += kg; b.rev += rev; b.bags += Number(o.bags) || 0;
+    const p = b.packs[o.bag_kg] = b.packs[o.bag_kg] || { kg: 0, rev: 0, bags: 0 };
+    p.kg += kg; p.rev += rev; p.bags += Number(o.bags) || 0;
+  });
+  const downloadGradeDetail = () => {
+    const esc2 = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = [["Сорт", "Бренд", "Фасовка кг", "Мешков", "Кг", "Сумма тг", "Ср. цена тг/кг", "Доля объёма %"]];
+    Object.entries(gradeTree).sort((a, b) => b[1].kg - a[1].kg).forEach(([grade, g]) =>
+      Object.entries(g.brands).sort((a, b) => b[1].kg - a[1].kg).forEach(([brand, b]) =>
+        Object.entries(b.packs).sort((a, b) => b[1].kg - a[1].kg).forEach(([pk, p]) =>
+          rows.push([grade, brand, pk, p.bags, p.kg, Math.round(p.rev), p.kg ? Math.round(p.rev / p.kg) : 0, totalKg ? (p.kg / totalKg * 100).toFixed(1) : 0]))));
+    downloadFile(`Отчёт_сорта_бренды_фасовки_${TODAY()}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+  };
   const maxP = Math.max(...pl.map(([, v]) => v.kg), 1), maxW = Math.max(...wl.map(([, v]) => v.kg), 1), maxC = Math.max(...cl.map(([, v]) => v.kg), 1);
   const TD = 14;
   const td = Array.from({ length: TD }, (_, i) => { const d = new Date(now); d.setDate(d.getDate() - (TD - 1 - i)); const ds2 = d.toISOString().split("T")[0]; return { date: ds2, label: `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, "0")}`, kg: allDelivered.filter(o => o.date === ds2).reduce((s, o) => s + o.bags * o.bag_kg, 0) }; });
@@ -1845,6 +1905,44 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
           <div className="text-xs text-gray-600 mt-2">
             Чаще всего уходит <b>{pl[0][0]}</b> ({Math.round(pl[0][1].kg / totalKg * 100)}% объёма){wl.length > 0 ? <>, фасовка <b>{wl[0][0]}</b></> : null}. Держи в приоритете при заказе.
           </div>
+        </div>
+      )}
+
+      {totalKg > 0 && Object.keys(gradeTree).length > 0 && (
+        <div className="bg-white border border-gray-100 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-1">
+            <div className="font-bold text-gray-800">📊 По сортам, брендам и фасовкам</div>
+            <button onClick={downloadGradeDetail} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-3 py-1.5 font-medium">⬇️ Excel</button>
+          </div>
+          <div className="text-xs text-gray-400 mb-2">Продажи за выбранный период. Нажми на сорт, чтобы раскрыть бренды и фасовки.</div>
+          {Object.entries(gradeTree).sort((a, b) => b[1].kg - a[1].kg).map(([grade, g]) => {
+            const gOpen = gradeOpen[grade];
+            return (
+              <div key={grade} className="border-t border-gray-100 first:border-t-0">
+                <button onClick={() => setGradeOpen(s => ({ ...s, [grade]: !s[grade] }))} className="w-full py-2.5 text-left">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-bold text-gray-900">{grade === "Высший сорт" ? "⭐" : "🌾"} {grade} <span className="text-gray-400 font-normal">· {Math.round(g.kg / totalKg * 100)}%</span></span>
+                    <span className="text-gray-700"><b>{fmt(g.kg)} кг</b> · {fmt(g.rev)} тг <span className="text-gray-400">{gOpen ? "▴" : "▾"}</span></span>
+                  </div>
+                  <div className="mt-1"><MiniBar value={g.kg} max={totalKg} color={grade === "Высший сорт" ? "bg-amber-400" : "bg-orange-400"} /></div>
+                </button>
+                {gOpen && Object.entries(g.brands).sort((a, b) => b[1].kg - a[1].kg).map(([brand, b]) => (
+                  <div key={brand} className="ml-3 pl-3 border-l-2 border-amber-100 pb-2">
+                    <div className="flex items-center justify-between text-sm py-1">
+                      <span className="font-semibold text-gray-800">{brand} <span className="text-gray-400 font-normal">· {Math.round(b.kg / g.kg * 100)}% сорта</span></span>
+                      <span className="text-gray-600">{fmt(b.kg)} кг · {fmt(b.rev)} тг</span>
+                    </div>
+                    {Object.entries(b.packs).sort((a, b) => b[1].kg - a[1].kg).map(([pk, p]) => (
+                      <div key={pk} className="flex items-center justify-between text-xs text-gray-500 py-0.5">
+                        <span>• мешки {pk} кг × {fmt(p.bags)} шт.</span>
+                        <span>{fmt(p.kg)} кг · {fmt(Math.round(p.rev))} тг{p.kg > 0 && p.rev > 0 ? ` · ср. ${fmt(Math.round(p.rev / p.kg))} тг/кг` : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -2240,6 +2338,13 @@ function UsersTab({ users, drivers, logins = [], reload, currentUser }) {
               <div>
                 <div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span></div>
                 <div className="text-sm text-gray-500">{ROLES[u.role] || u.role}{linkedDriver ? ` · 🚛 ${linkedDriver.name}` : ""}{u.id === currentUser.id ? " · это вы" : ""}</div>
+                {(() => {
+                  if (!u.last_seen) return <div className="text-xs text-gray-400 mt-0.5">⚪ ещё не заходил(а)</div>;
+                  const mins = Math.floor((Date.now() - Date.parse(u.last_seen)) / 60000);
+                  if (mins < 10) return <div className="text-xs text-emerald-600 mt-0.5">🟢 сейчас в приложении</div>;
+                  const d = new Date(u.last_seen);
+                  return <div className="text-xs text-gray-400 mt-0.5">🕐 был(а) в сети: {d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })} {d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</div>;
+                })()}
               </div>
               <div className="flex gap-1">
                 <Btn size="sm" variant="secondary" onClick={() => openEdit(u)}>✏️</Btn>
@@ -2696,6 +2801,8 @@ function ReactivateTab({ clients, orders }) {
 
 function DebtsTab({ orders, clients, reload, canEdit = true }) {
   const [open, setOpen] = useState({});
+  const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
+  const [selected, setSelected] = useState({});
   // долг = отгружено и не оплачено (новые/в пути в долг НЕ идут)
   const unpaid = orders.filter(o => o.status === "отгружена" && !o.paid && o.bags * o.bag_kg * (o.price_per_kg || 0) > 0);
   const byClient = {};
@@ -2717,6 +2824,16 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
+  const selectedList = list.filter(c => selected[c.key]);
+  const copyReconcile = () => {
+    const lines = selectedList.map(c => {
+      const cl = clients.find(x => x.id === c.clientId);
+      const nm = cl?.org_name || c.org || c.name;
+      return `${nm}${cl?.bin ? ` — БИН ${cl.bin}` : " — БИН не указан"}`;
+    });
+    copyToClipboard(lines.join("\n"));
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-gradient-to-br from-rose-50 to-red-50 border border-rose-100 rounded-2xl p-4 flex items-center justify-between">
@@ -2724,19 +2841,35 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
         <div className="text-2xl font-black text-red-600">{fmt(grand)} тг</div>
       </div>
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет.</div>
+      {list.length > 0 && !reconcile && (
+        <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium">📄 Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
+      )}
+      {reconcile && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+          <div className="text-sm text-amber-800">Отметь галочками компании для акта сверки — скопируется список «название — БИН» для бухгалтера.</div>
+          <div className="flex gap-2 flex-wrap">
+            <Btn size="sm" onClick={copyReconcile} disabled={!selectedList.length}>📋 Скопировать ({selectedList.length})</Btn>
+            <Btn size="sm" variant="secondary" onClick={() => setSelected(Object.fromEntries(list.map(c => [c.key, true])))}>Выбрать все</Btn>
+            <Btn size="sm" variant="secondary" onClick={() => { setReconcile(false); setSelected({}); }}>✕ Готово</Btn>
+          </div>
+        </div>
+      )}
       {list.length === 0 ? (
         <div className="text-center py-12 text-gray-400">Долгов нет — всё оплачено 👍</div>
       ) : list.map(c => {
         const dates = Object.keys(c.byDate).sort((a, b) => b.localeCompare(a));
         const isOpen = open[c.key];
         return (
-          <div key={c.key} className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
-            <button onClick={() => setOpen(o => ({ ...o, [c.key]: !o[c.key] }))} className="w-full flex items-center justify-between p-4 text-left">
-              <div>
-                <div className="font-bold text-gray-900">{c.name}{c.org && <span className="text-sm text-gray-500 font-normal"> · {c.org}</span>}</div>
-                <div className="text-xs text-gray-400">{dates.length} {dates.length === 1 ? "отгрузка не оплачена" : "отгрузок не оплачено"}</div>
+          <div key={c.key} className={`bg-white border rounded-2xl shadow-sm overflow-hidden ${reconcile && selected[c.key] ? "border-amber-400 ring-1 ring-amber-300" : "border-gray-100"}`}>
+            <button onClick={() => reconcile ? setSelected(s => ({ ...s, [c.key]: !s[c.key] })) : setOpen(o => ({ ...o, [c.key]: !o[c.key] }))} className="w-full flex items-center justify-between p-4 text-left">
+              <div className="flex items-center gap-3 min-w-0">
+                {reconcile && <span className={`w-5 h-5 flex-shrink-0 rounded-md border-2 flex items-center justify-center text-white text-xs font-bold ${selected[c.key] ? "bg-amber-500 border-amber-500" : "border-gray-300"}`}>{selected[c.key] ? "✓" : ""}</span>}
+                <div>
+                  <div className="font-bold text-gray-900">{c.name}{c.org && <span className="text-sm text-gray-500 font-normal"> · {c.org}</span>}</div>
+                  <div className="text-xs text-gray-400">{dates.length} {dates.length === 1 ? "отгрузка не оплачена" : "отгрузок не оплачено"}</div>
+                </div>
               </div>
-              <div className="text-right"><div className="font-bold text-red-600">{fmt(c.total)} тг</div><div className="text-xs text-gray-400">{isOpen ? "▲ свернуть" : "▼ открыть"}</div></div>
+              <div className="text-right"><div className="font-bold text-red-600">{fmt(c.total)} тг</div>{!reconcile && <div className="text-xs text-gray-400">{isOpen ? "▲ свернуть" : "▼ открыть"}</div>}</div>
             </button>
             {isOpen && (
               <div className="px-4 pb-4 space-y-2 border-t border-gray-50 pt-3">
@@ -3064,23 +3197,25 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
 
   // Добавить заявку вручную (форма та же, что была в «Заявках»)
   const addManual = async () => {
-    // Единичная реализация: разовый покупатель не из базы, забрал сам и оплатил — сразу отгружено, склад списывается
+    // Единичная реализация: разовый покупатель не из базы, за деньги.
+    // Забрал сам — сразу отгружено и склад списан; если выбран водитель — обычная доставка (склад спишется при отгрузке).
     if (form.oneOff) {
       if (!form.bags) { alert("Укажи, сколько мешков."); return; }
       if (!form.price_per_kg) { alert("Укажи цену тг/кг — реализация идёт за деньги."); return; }
       setSavingManual(true);
       const kg = Number(form.bags) * Number(form.bag_kg);
       const buyer = form.oneOffName.trim() || "Разовый покупатель";
+      const instant = !form.driverId; // забрал сам
       try {
         await dbUpsert("orders", {
           id: uid(), date: form.date, brand: form.brand, grade: form.grade,
-          bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: "",
-          price_per_kg: Number(form.price_per_kg), status: "отгружена",
+          bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId || "",
+          price_per_kg: Number(form.price_per_kg), status: instant ? "отгружена" : "новая",
           oneOff: true, paid: true, pay_method: form.payMethod, note: form.note || "",
           clientId: null, clientName: buyer,
         });
-        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: form.brand, grade: form.grade, weight_kg: -kg, bags: -Number(form.bags), bag_kg: Number(form.bag_kg), note: `Реализация: ${buyer}` });
-        setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "" })); await reload("orders"); await reload("stock");
+        if (instant) await dbUpsert("stock", { id: uid(), date: TODAY(), brand: form.brand, grade: form.grade, weight_kg: -kg, bags: -Number(form.bags), bag_kg: Number(form.bag_kg), note: `Реализация: ${buyer}` });
+        setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "", driverId: "" })); await reload("orders"); if (instant) await reload("stock");
       } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
       setSavingManual(false);
       return;
@@ -3199,7 +3334,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                     ))}
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
-                  {!isOneOff && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
+                  {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
                   {canEdit && (
                     <div className="mt-3 space-y-2">
                       <div className="flex gap-2 flex-wrap items-center">
@@ -3273,9 +3408,11 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                 </div>
               </div>
             )}
-            {!form.oneOff && (form.pickup
-              ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
-              : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>)}
+            {form.oneOff
+              ? <div className="col-span-2"><Sel label="🚚 Кто повезёт" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— забрал сам (сразу отгружено) —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
+              : (form.pickup
+                ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
+                : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>)}
             <div className="col-span-2"><Inp label={form.oneOff ? "Заметка" : form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
           <div className="flex gap-2 mt-4">

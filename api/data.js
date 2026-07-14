@@ -13,7 +13,12 @@ export default async function handler(req, res) {
   try {
     // Пользователь удалён в «Доступе» → доступ закрыт сразу (при ближайшем запросе выкинет на вход)
     const allUsers = await dbList("users");
-    if (!allUsers.some(x => x.id === u.uid)) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
+    const me = allUsers.find(x => x.id === u.uid);
+    if (!me) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
+    // Последняя активность (не чаще раза в 5 минут, в фоне — не тормозим запрос)
+    if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 5 * 60000) {
+      dbUpsert("users", { ...me, last_seen: new Date().toISOString() }).catch(() => {});
+    }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
       const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins"];
@@ -71,7 +76,8 @@ async function upsertFor(u, table, item) {
     // Фото объединяем (не теряем, можно перенести на другую позицию), отметку доставки не сбрасываем.
     if (table === "orders" && existing) {
       const photos = [...new Set([...(Array.isArray(existing.photos) ? existing.photos : []), ...(Array.isArray(item.photos) ? item.photos : [])])];
-      item = { ...item, delivered_by_driver: !!existing.delivered_by_driver || !!item.delivered_by_driver, delivered_at: item.delivered_at || existing.delivered_at, photos };
+      const photo_at = { ...(existing.photo_at || {}), ...(item.photo_at || {}) }; // время загрузки каждого документа
+      item = { ...item, delivered_by_driver: !!existing.delivered_by_driver || !!item.delivered_by_driver, delivered_at: item.delivered_at || existing.delivered_at, photos, photo_at };
     }
     return dbUpsert(table, item);
   }
@@ -85,6 +91,7 @@ async function upsertFor(u, table, item) {
       delivered_at: item.delivered_at ?? existing.delivered_at,
       loaded: typeof item.loaded === "boolean" ? item.loaded : existing.loaded,
       photos: Array.isArray(item.photos) ? item.photos : existing.photos,
+      photo_at: (item.photo_at && typeof item.photo_at === "object") ? { ...(existing.photo_at || {}), ...item.photo_at } : existing.photo_at, // время загрузки документов
     };
     return dbUpsert("orders", merged);
   }
