@@ -46,6 +46,7 @@ export default async function handler(req, res) {
 async function listFor(u, table) {
   if (u.role === "director") {
     if (table === "users") return (await dbList("users")).map(({ passhash, ...rest }) => rest); // не отдаём хэши в браузер
+    if (table === "logins") return (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 300); // только свежие — не гоняем весь журнал
     return await dbList(table);
   }
   if (u.role === "viewer") {

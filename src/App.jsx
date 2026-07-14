@@ -3441,6 +3441,7 @@ export default function App() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [syncing, setSyncing] = useState(false); // ручное обновление: крутим значок и показываем ✓
   const [syncDone, setSyncDone] = useState(false);
+  const [updateReady, setUpdateReady] = useState(false); // на сервере вышла новая версия приложения
   const [openOrderSignal, setOpenOrderSignal] = useState(0);
   const [openExpenseSignal, setOpenExpenseSignal] = useState(0);
   const goTab = id => { setTab(id); setMoreOpen(false); setFabOpen(false); };
@@ -3460,7 +3461,12 @@ export default function App() {
       // Все таблицы одним запросом (быстрее, особенно на «холодном» старте)
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
-      setData({ clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [] });
+      setData(prev => {
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [] };
+        // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
+        const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
+        return same ? prev : next;
+      });
       setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) {
       // apiData сбрасывает токен на 401 (сессия истекла / доступ закрыт) → выкидываем на экран входа
@@ -3485,9 +3491,25 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     // обновляем только когда вкладка открыта — экономим трафик/лимиты, когда сайт свёрнут
-    const t = setInterval(() => { if (document.visibilityState === "visible") reloadAll(false); }, 30000);
+    const t = setInterval(() => { if (document.visibilityState === "visible") reloadAll(false); }, 60000);
     return () => clearInterval(t);
   }, [user]);
+
+  // Проверка обновлений: если на сервере вышла новая версия — показываем плашку «обновить».
+  // Иначе водители неделями сидят на старой версии, не перезагружая приложение.
+  useEffect(() => {
+    const current = document.querySelector('script[src*="/assets/index-"]')?.getAttribute("src");
+    if (!current) return;
+    const check = async () => {
+      try {
+        const html = await (await fetch("/", { cache: "no-store" })).text();
+        const m = html.match(/\/assets\/index-[a-z0-9]+\.js/);
+        if (m && m[0] !== current) setUpdateReady(true);
+      } catch {}
+    };
+    const t = setInterval(check, 5 * 60000);
+    return () => clearInterval(t);
+  }, []);
 
   // При входе переключить на первую доступную для роли вкладку
   useEffect(() => {
@@ -3539,6 +3561,11 @@ export default function App() {
           </div>
         </div>
       </div>
+      {updateReady && (
+        <button onClick={() => window.location.reload()} className="w-full bg-amber-500 text-white text-sm font-bold px-4 py-2.5 text-center">
+          ✨ Вышло обновление приложения — нажми здесь, чтобы обновиться
+        </button>
+      )}
       {error && <div className="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-600 text-center">{error}</div>}
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
