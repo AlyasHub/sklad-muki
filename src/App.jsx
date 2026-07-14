@@ -1713,7 +1713,6 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
 function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () => {}, canEdit = true }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
-  const [gradeOpen, setGradeOpen] = useState({}); // раскрытые сорта/бренды в блоке «По сортам и фасовкам»
   const [from, setFrom] = useState(TODAY());
   const [to, setTo] = useState(TODAY());
   const [advice, setAdvice] = useState("");
@@ -1841,25 +1840,26 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
   const pl = Object.entries(bp).sort((a, b) => b[1].kg - a[1].kg);
   const wl = Object.entries(bw).sort((a, b) => b[1].kg - a[1].kg);
   const cl = Object.entries(bc).sort((a, b) => b[1].kg - a[1].kg);
-  // 📊 Детальная статистика продаж: сорт → бренд → фасовка (за выбранный период)
-  const gradeTree = {};
+  // 📊 Детальная статистика продаж: бренд → сорт → фасовка (за выбранный период)
+  const brandTree = {};
   delivered.forEach(o => {
     const kg = o.bags * o.bag_kg, rev = kg * (o.price_per_kg || 0);
-    const g = gradeTree[o.grade] = gradeTree[o.grade] || { kg: 0, rev: 0, bags: 0, brands: {} };
-    g.kg += kg; g.rev += rev; g.bags += Number(o.bags) || 0;
-    const b = g.brands[o.brand] = g.brands[o.brand] || { kg: 0, rev: 0, bags: 0, packs: {} };
+    const b = brandTree[o.brand] = brandTree[o.brand] || { kg: 0, rev: 0, bags: 0, grades: {} };
     b.kg += kg; b.rev += rev; b.bags += Number(o.bags) || 0;
-    const p = b.packs[o.bag_kg] = b.packs[o.bag_kg] || { kg: 0, rev: 0, bags: 0 };
+    const g = b.grades[o.grade] = b.grades[o.grade] || { kg: 0, rev: 0, bags: 0, packs: {} };
+    g.kg += kg; g.rev += rev; g.bags += Number(o.bags) || 0;
+    const p = g.packs[o.bag_kg] = g.packs[o.bag_kg] || { kg: 0, rev: 0, bags: 0 };
     p.kg += kg; p.rev += rev; p.bags += Number(o.bags) || 0;
   });
+  const gradeOrder = g => { const i = GRADES.indexOf(g); return i === -1 ? 99 : i; }; // Высший, потом Первый
   const downloadGradeDetail = () => {
     const esc2 = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const rows = [["Сорт", "Бренд", "Фасовка кг", "Мешков", "Кг", "Сумма тг", "Ср. цена тг/кг", "Доля объёма %"]];
-    Object.entries(gradeTree).sort((a, b) => b[1].kg - a[1].kg).forEach(([grade, g]) =>
-      Object.entries(g.brands).sort((a, b) => b[1].kg - a[1].kg).forEach(([brand, b]) =>
-        Object.entries(b.packs).sort((a, b) => b[1].kg - a[1].kg).forEach(([pk, p]) =>
-          rows.push([grade, brand, pk, p.bags, p.kg, Math.round(p.rev), p.kg ? Math.round(p.rev / p.kg) : 0, totalKg ? (p.kg / totalKg * 100).toFixed(1) : 0]))));
-    downloadFile(`Отчёт_сорта_бренды_фасовки_${TODAY()}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+    const rows = [["Бренд", "Сорт", "Фасовка кг", "Мешков", "Кг", "Сумма тг", "Ср. цена тг/кг", "Доля объёма %"]];
+    Object.entries(brandTree).sort((a, b) => a[0].localeCompare(b[0], "ru")).forEach(([brand, b]) =>
+      Object.entries(b.grades).sort((a, b) => gradeOrder(a[0]) - gradeOrder(b[0])).forEach(([grade, g]) =>
+        Object.entries(g.packs).sort((a, b) => Number(b[0]) - Number(a[0])).forEach(([pk, p]) =>
+          rows.push([brand, grade, pk, p.bags, p.kg, Math.round(p.rev), p.kg ? Math.round(p.rev / p.kg) : 0, totalKg ? (p.kg / totalKg * 100).toFixed(1) : 0]))));
+    downloadFile(`Отчёт_бренды_сорта_фасовки_${TODAY()}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
   };
   const maxP = Math.max(...pl.map(([, v]) => v.kg), 1), maxW = Math.max(...wl.map(([, v]) => v.kg), 1), maxC = Math.max(...cl.map(([, v]) => v.kg), 1);
   const TD = 14;
@@ -1908,41 +1908,42 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
         </div>
       )}
 
-      {totalKg > 0 && Object.keys(gradeTree).length > 0 && (
+      {totalKg > 0 && Object.keys(brandTree).length > 0 && (
         <div className="bg-white border border-gray-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-1">
-            <div className="font-bold text-gray-800">📊 По сортам, брендам и фасовкам</div>
+            <div className="font-bold text-gray-800">📊 По брендам, сортам и фасовкам</div>
             <button onClick={downloadGradeDetail} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-3 py-1.5 font-medium">⬇️ Excel</button>
           </div>
-          <div className="text-xs text-gray-400 mb-2">Продажи за выбранный период. Нажми на сорт, чтобы раскрыть бренды и фасовки.</div>
-          {Object.entries(gradeTree).sort((a, b) => b[1].kg - a[1].kg).map(([grade, g]) => {
-            const gOpen = gradeOpen[grade];
-            return (
-              <div key={grade} className="border-t border-gray-100 first:border-t-0">
-                <button onClick={() => setGradeOpen(s => ({ ...s, [grade]: !s[grade] }))} className="w-full py-2.5 text-left">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-bold text-gray-900">{grade === "Высший сорт" ? "⭐" : "🌾"} {grade} <span className="text-gray-400 font-normal">· {Math.round(g.kg / totalKg * 100)}%</span></span>
-                    <span className="text-gray-700"><b>{fmt(g.kg)} кг</b> · {fmt(g.rev)} тг <span className="text-gray-400">{gOpen ? "▴" : "▾"}</span></span>
-                  </div>
-                  <div className="mt-1"><MiniBar value={g.kg} max={totalKg} color={grade === "Высший сорт" ? "bg-amber-400" : "bg-orange-400"} /></div>
-                </button>
-                {gOpen && Object.entries(g.brands).sort((a, b) => b[1].kg - a[1].kg).map(([brand, b]) => (
-                  <div key={brand} className="ml-3 pl-3 border-l-2 border-amber-100 pb-2">
-                    <div className="flex items-center justify-between text-sm py-1">
-                      <span className="font-semibold text-gray-800">{brand} <span className="text-gray-400 font-normal">· {Math.round(b.kg / g.kg * 100)}% сорта</span></span>
-                      <span className="text-gray-600">{fmt(b.kg)} кг · {fmt(b.rev)} тг</span>
+          <div className="text-xs text-gray-400 mb-3">Продажи за выбранный период.</div>
+          <div className="space-y-5">
+            {Object.entries(brandTree).sort((a, b) => a[0].localeCompare(b[0], "ru")).map(([brand, b]) => (
+              <div key={brand}>
+                <div className="flex items-end justify-between border-b-2 border-amber-300 pb-1">
+                  <span className="text-xl font-black text-gray-900">{brand}</span>
+                  <span className="text-sm text-gray-600"><b>{fmt(b.kg)} кг</b> · {fmt(b.rev)} тг · {Math.round(b.kg / totalKg * 100)}%</span>
+                </div>
+                {Object.entries(b.grades).sort((a2, b2) => gradeOrder(a2[0]) - gradeOrder(b2[0])).map(([grade, g]) => (
+                  <div key={grade} className="mt-2">
+                    <div className="flex items-center justify-between text-sm font-bold text-amber-800">
+                      <span>{grade === "Высший сорт" ? "⭐" : "🌾"} {grade}</span>
+                      <span className="font-semibold text-gray-500">{fmt(g.kg)} кг</span>
                     </div>
-                    {Object.entries(b.packs).sort((a, b) => b[1].kg - a[1].kg).map(([pk, p]) => (
-                      <div key={pk} className="flex items-center justify-between text-xs text-gray-500 py-0.5">
-                        <span>• мешки {pk} кг × {fmt(p.bags)} шт.</span>
-                        <span>{fmt(p.kg)} кг · {fmt(Math.round(p.rev))} тг{p.kg > 0 && p.rev > 0 ? ` · ср. ${fmt(Math.round(p.rev / p.kg))} тг/кг` : ""}</span>
+                    <div className="grid grid-cols-[3.2rem_1fr_1fr_1.3fr] gap-x-2 text-[11px] text-gray-400 mt-1 px-1">
+                      <span>фасовка</span><span className="text-right">мешков</span><span className="text-right">кг</span><span className="text-right">сумма</span>
+                    </div>
+                    {Object.entries(g.packs).sort((a2, b2) => Number(b2[0]) - Number(a2[0])).map(([pk, p]) => (
+                      <div key={pk} className="grid grid-cols-[3.2rem_1fr_1fr_1.3fr] gap-x-2 items-center text-sm py-1 px-1 border-b border-gray-50 last:border-b-0">
+                        <span className="font-semibold text-gray-900">{pk} кг</span>
+                        <span className="text-right text-gray-600">{fmt(p.bags)}</span>
+                        <span className="text-right font-semibold text-gray-800">{fmt(p.kg)}</span>
+                        <span className="text-right text-gray-600">{fmt(Math.round(p.rev))} тг</span>
                       </div>
                     ))}
                   </div>
                 ))}
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
       )}
 
