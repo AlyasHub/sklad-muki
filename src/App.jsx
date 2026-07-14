@@ -3439,6 +3439,8 @@ export default function App() {
   const [lastSync, setLastSync] = useState(null);
   const [fabOpen, setFabOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false); // ручное обновление: крутим значок и показываем ✓
+  const [syncDone, setSyncDone] = useState(false);
   const [openOrderSignal, setOpenOrderSignal] = useState(0);
   const [openExpenseSignal, setOpenExpenseSignal] = useState(0);
   const goTab = id => { setTab(id); setMoreOpen(false); setFabOpen(false); };
@@ -3494,6 +3496,15 @@ export default function App() {
     if (!allowed.includes(tab)) setTab(allowed[0] || "calendar");
   }, [user]);
 
+  // Ручное обновление с видимой реакцией: значок крутится, по завершении — зелёная галочка
+  const manualRefresh = async () => {
+    if (syncing) return;
+    setSyncing(true); setSyncDone(false);
+    await reloadAll(false);
+    setSyncing(false); setSyncDone(true);
+    setTimeout(() => setSyncDone(false), 2000);
+  };
+
   const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
@@ -3520,7 +3531,10 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-sm font-bold px-3 py-1.5 rounded-full">{newOrders} новых</div>}
-            <button onClick={() => reloadAll(false)} className="text-gray-400 hover:text-gray-600 text-lg" title="Обновить">🔄</button>
+            <button onClick={manualRefresh} disabled={syncing} title="Обновить" className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-sm font-medium transition-all active:scale-90 ${syncDone ? "bg-emerald-50 border-emerald-300 text-emerald-600" : syncing ? "bg-amber-50 border-amber-300 text-amber-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-700"}`}>
+              <span className={`inline-block text-base leading-none ${syncing ? "animate-spin" : ""}`}>🔄</span>
+              {syncDone && <span className="font-bold">✓</span>}
+            </button>
             <button onClick={logout} className="text-gray-400 hover:text-gray-600 text-sm" title="Выйти">Выйти</button>
           </div>
         </div>
