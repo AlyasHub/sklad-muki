@@ -443,6 +443,20 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     applyLocal("orders", os => os.filter(o => !ids.has(o.id)));
     try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); } catch (e) { notifyErr(e); reload("orders"); }
   };
+  // Разовый покупатель понравился → заводим в базу клиентов и привязываем его заявки
+  const addOneOffToClients = async g => {
+    if (!confirm(`Добавить «${g.clientName}» в базу клиентов?`)) return;
+    try {
+      const o0 = g.orders[0];
+      const id = uid();
+      const prices = [];
+      g.orders.forEach(o => { if ((o.price_per_kg || 0) > 0 && !prices.some(p => p.brand === o.brand && p.grade === o.grade && p.bag_kg === Number(o.bag_kg))) prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); });
+      await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices });
+      for (const o of g.orders) await dbUpsert("orders", { ...o, clientId: id });
+      await reload("clients"); await reload("orders");
+      alert(`✓ «${g.clientName}» теперь в базе клиентов. Дополни карточку (телефон, реквизиты) во вкладке «Клиенты».`);
+    } catch (e) { notifyErr(e); }
+  };
   const setGroupStatus = async (g, status) => {
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, status } : o));
@@ -519,11 +533,19 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     const seen = new Set(); const pts = [];
     dayOrders.filter(o => o.status !== "отгружена" && !o.pickup).forEach(o => { // самовывоз в маршрут доставки не идёт
       const client = clients.find(c => c.id === o.clientId);
-      if (!client || seen.has(client.id)) return;
-      const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
-      if (!coords) return;
-      seen.add(client.id);
-      pts.push({ ...coords, id: client.id, name: o.clientName, delivery_time: clientTime(client) });
+      if (client) {
+        if (seen.has(client.id)) return;
+        const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
+        if (!coords) return;
+        seen.add(client.id);
+        pts.push({ ...coords, id: client.id, name: o.clientName, delivery_time: clientTime(client) });
+        return;
+      }
+      // Разовая продажа с доставкой: точка 2ГИС хранится прямо в заявке
+      const key = "nm:" + (o.clientName || "");
+      if (!o.coords || seen.has(key)) return;
+      seen.add(key);
+      pts.push({ ...o.coords, id: key, name: o.clientName, delivery_time: "" });
     });
     return pts.length ? optimizeRoute(pts) : [];
   })();
@@ -544,7 +566,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     return Object.values(m).sort((a, b) => {
       const ta = tierOf(a), tb = tierOf(b);
       if (ta !== tb) return ta - tb;
-      const ra = routeIndex[a.clientId] ?? 9999, rb = routeIndex[b.clientId] ?? 9999;
+      const ra = routeIndex[a.clientId || a.key] ?? 9999, rb = routeIndex[b.clientId || b.key] ?? 9999;
       if (ra !== rb) return ra - rb;
       return (a.clientName || "").localeCompare(b.clientName || "");
     });
@@ -710,10 +732,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   </div>
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
+                  {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
-                    {client?.gis_link && <a href={client.gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
-                    {(() => { const co = client && (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)); return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
+                    {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
+                    {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
                     {!driverMode && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
                     {!driverMode && canEdit && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
@@ -762,6 +785,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                       {!allShipped
                         ? <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Отгрузить</Btn>
                         : <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "новая")}>↩ Отменить</Btn>}
+                      {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}>➕ В клиенты</Btn>}
                       <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
                     </div>
                     ) : (
@@ -844,13 +868,21 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
         const pending = dayOrders.filter(o => o.status !== "отгружена");
         const buildRoute = list => {
           const seen = new Set(); const pts = [];
-          list.forEach(o => {
+          list.filter(o => !o.pickup).forEach(o => { // самовывоз в маршрут не идёт
             const client = clients.find(c => c.id === o.clientId);
-            if (!client || seen.has(client.id)) return;
-            const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
-            if (!coords) return;
-            seen.add(client.id);
-            pts.push({ ...coords, name: o.clientName, delivery_time: clientTime(client) });
+            if (client) {
+              if (seen.has(client.id)) return;
+              const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
+              if (!coords) return;
+              seen.add(client.id);
+              pts.push({ ...coords, name: o.clientName, delivery_time: clientTime(client) });
+              return;
+            }
+            // Разовая продажа: точка 2ГИС в самой заявке
+            const key = "nm:" + (o.clientName || "");
+            if (!o.coords || seen.has(key)) return;
+            seen.add(key);
+            pts.push({ ...o.coords, name: o.clientName, delivery_time: "" });
           });
           if (!pts.length) return null;
           const optimized = optimizeRoute(pts);
@@ -3216,7 +3248,22 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [editGroup, setEditGroup] = useState(null);
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "", pickup: false, loaderId: "", oneOff: false, oneOffName: "", payMethod: "Нал" });
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "", pickup: false, loaderId: "", oneOff: false, oneOffName: "", payMethod: "Нал", oneOffAddress: "", gis_link: "", coords: null });
+  // Позиции разовой продажи (несколько сортов/цен за раз) + определение точки 2ГИС
+  const ooBlank = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
+  const [ooPos, setOoPos] = useState([{ ...ooBlank }]);
+  const [ooResolving, setOoResolving] = useState(false);
+  const [ooErr, setOoErr] = useState("");
+  const updOo = (i, k, v) => setOoPos(ps => ps.map((p, j) => j === i ? { ...p, [k]: v } : p));
+  const ooResolve = async () => {
+    setOoResolving(true); setOoErr("");
+    try {
+      const direct = parseCoordsFromGisLink(form.gis_link);
+      const coords = direct || await resolveGisCoords(form.gis_link);
+      setForm(f => ({ ...f, coords }));
+    } catch (e) { setOoErr(e.message); }
+    setOoResolving(false);
+  };
   // Открыть форму заявки по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
@@ -3305,27 +3352,50 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
     try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); } catch (e) { notifyErr(e); reload("orders"); }
   };
 
+  // Разовый покупатель понравился → одним нажатием заводим его в базу клиентов
+  // (имя, адрес, точка 2ГИС и цены из проданных позиций), а его заявки привязываем к карточке
+  const addOneOffToClients = async g => {
+    if (!confirm(`Добавить «${g.clientName}» в базу клиентов?`)) return;
+    try {
+      const o0 = g.orders[0];
+      const id = uid();
+      const prices = [];
+      g.orders.forEach(o => { if ((o.price_per_kg || 0) > 0 && !prices.some(p => p.brand === o.brand && p.grade === o.grade && p.bag_kg === Number(o.bag_kg))) prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); });
+      await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices });
+      for (const o of g.orders) await dbUpsert("orders", { ...o, clientId: id });
+      await reload("clients"); await reload("orders");
+      alert(`✓ «${g.clientName}» теперь в базе клиентов. Дополни карточку (телефон, реквизиты) во вкладке «Клиенты».`);
+    } catch (e) { notifyErr(e); }
+  };
+
   // Добавить заявку вручную (форма та же, что была в «Заявках»)
   const addManual = async () => {
-    // Единичная реализация: разовый покупатель не из базы, за деньги.
+    // Единичная реализация: разовый покупатель не из базы, за деньги, можно несколько позиций.
     // Забрал сам — сразу отгружено и склад списан; если выбран водитель — обычная доставка (склад спишется при отгрузке).
     if (form.oneOff) {
-      if (!form.bags) { alert("Укажи, сколько мешков."); return; }
-      if (!form.price_per_kg) { alert("Укажи цену тг/кг — реализация идёт за деньги."); return; }
+      const valid = ooPos.filter(p => Number(p.bags) > 0);
+      if (!valid.length) { alert("Укажи, сколько мешков."); return; }
+      if (valid.some(p => !p.price_per_kg)) { alert("Укажи цену тг/кг для каждой позиции — реализация идёт за деньги."); return; }
       setSavingManual(true);
-      const kg = Number(form.bags) * Number(form.bag_kg);
       const buyer = form.oneOffName.trim() || "Разовый покупатель";
       const instant = !form.driverId; // забрал сам
       try {
-        await dbUpsert("orders", {
-          id: uid(), date: form.date, brand: form.brand, grade: form.grade,
-          bag_kg: Number(form.bag_kg), bags: Number(form.bags), driverId: form.driverId || "",
-          price_per_kg: Number(form.price_per_kg), status: instant ? "отгружена" : "новая",
-          oneOff: true, paid: true, pay_method: form.payMethod, note: form.note || "",
-          clientId: null, clientName: buyer,
-        });
-        if (instant) await dbUpsert("stock", { id: uid(), date: TODAY(), brand: form.brand, grade: form.grade, weight_kg: -kg, bags: -Number(form.bags), bag_kg: Number(form.bag_kg), note: `Реализация: ${buyer}` });
-        setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "", driverId: "" })); await reload("orders"); if (instant) await reload("stock");
+        for (const p of valid) {
+          const kg = Number(p.bags) * Number(p.bag_kg);
+          await dbUpsert("orders", {
+            id: uid(), date: form.date, brand: p.brand, grade: p.grade,
+            bag_kg: Number(p.bag_kg), bags: Number(p.bags), driverId: form.driverId || "",
+            price_per_kg: Number(p.price_per_kg), status: instant ? "отгружена" : "новая",
+            oneOff: true, paid: true, pay_method: form.payMethod, note: form.note || "",
+            clientId: null, clientName: buyer,
+            oneOffAddress: form.oneOffAddress || "", gis_link: form.gis_link || "", coords: form.coords || null,
+          });
+          if (instant) await dbUpsert("stock", { id: uid(), date: TODAY(), brand: p.brand, grade: p.grade, weight_kg: -kg, bags: -Number(p.bags), bag_kg: Number(p.bag_kg), note: `Реализация: ${buyer}` });
+        }
+        setShowManual(false);
+        setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "", driverId: "", oneOffAddress: "", gis_link: "", coords: null }));
+        setOoPos([{ ...ooBlank }]); setOoErr("");
+        await reload("orders"); if (instant) await reload("stock");
       } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
       setSavingManual(false);
       return;
@@ -3445,12 +3515,14 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
                   {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
+                  {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
                   {canEdit && (
                     <div className="mt-3 space-y-2">
                       <div className="flex gap-2 flex-wrap items-center">
                         {allNew && !isPickup && !isOneOff && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
                         {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>{isPickup ? "✓ Отгрузить" : "✓ Доставлено"}</Btn>}
                         {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, (isPickup || isOneOff) ? "новая" : "в пути")}>↩ {(isPickup || isOneOff) ? "Отменить" : "Не доставлено"}</Btn>}
+                        {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}>➕ В клиенты</Btn>}
                         <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}>✏️ Изменить</Btn>
                         <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>🗑</Btn>
                       </div>
@@ -3488,7 +3560,7 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
           {!form.trial && !form.isSample && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-emerald-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.oneOff} onChange={e => setForm({ ...form, oneOff: e.target.checked, pickup: false, driverId: "", clientId: "", date: TODAY() })} className="w-4 h-4 accent-emerald-500" />
-              <span className="text-sm font-medium text-gray-700">💰 Единичная реализация — покупатель не из базы, забрал и оплатил сразу (склад спишется)</span>
+              <span className="text-sm font-medium text-gray-700">💰 Единичная реализация — покупатель не из базы, за деньги (несколько сортов, можно с доставкой)</span>
             </label>
           )}
           {!form.isSample && !form.oneOff && (
@@ -3497,34 +3569,66 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
               <span className="text-sm font-medium text-gray-700">🚶 Самовывоз — клиент забирает сам (вместо водителя выбери грузчика)</span>
             </label>
           )}
-          <div className="grid grid-cols-2 gap-3">
-            {form.oneOff
-              ? <div className="col-span-2"><Inp label="Покупатель (можно не заполнять)" value={form.oneOffName} onChange={e => setForm({ ...form, oneOffName: e.target.value })} placeholder="Разовый покупатель" /></div>
-              : form.isSample
-                ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
-                : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
-            <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
-            <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
-            <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
-            <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder={form.oneOff ? "обязательно" : "авто из базы"} value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
-            <Inp label={form.pickup || form.oneOff ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-            {form.oneOff && (
-              <div className="col-span-2">
+          {form.oneOff ? (
+            <div className="space-y-3">
+              <Inp label="Покупатель (можно не заполнять)" value={form.oneOffName} onChange={e => setForm({ ...form, oneOffName: e.target.value })} placeholder="Разовый покупатель" />
+              <div>
+                <p className="text-sm font-medium text-gray-700 mb-2">Что купил</p>
+                {ooPos.map((p, i) => (
+                  <div key={i} className="border border-gray-200 rounded-xl p-3 mb-2 relative">
+                    {ooPos.length > 1 && <button onClick={() => setOoPos(ps => ps.filter((_, j) => j !== i))} className="absolute top-2 right-2 text-red-400 hover:text-red-600 text-lg leading-none" title="Убрать позицию">✕</button>}
+                    <div className="grid grid-cols-2 gap-2">
+                      <Sel label="Бренд" value={p.brand} onChange={e => updOo(i, "brand", e.target.value)} options={BRANDS} />
+                      <Sel label="Сорт" value={p.grade} onChange={e => updOo(i, "grade", e.target.value)} options={GRADES} />
+                      <Sel label="Фасовка" value={p.bag_kg} onChange={e => updOo(i, "bag_kg", e.target.value)} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+                      <Inp label="Мешков" type="number" value={p.bags} onChange={e => updOo(i, "bags", e.target.value)} />
+                      <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="обязательно" value={p.price_per_kg} onChange={e => updOo(i, "price_per_kg", e.target.value)} /></div>
+                    </div>
+                  </div>
+                ))}
+                <button onClick={() => setOoPos(ps => [...ps, { ...ooBlank }])} className="w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm font-medium text-gray-500 hover:bg-gray-50">+ ещё сорт / цена</button>
+              </div>
+              <Inp label="Адрес доставки (если повезём)" value={form.oneOffAddress} onChange={e => setForm({ ...form, oneOffAddress: e.target.value })} placeholder="Астана, ул. Абая 10" />
+              <div>
+                <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value, coords: null })} placeholder="https://2gis.kz/astana/geo/..." />
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  <Btn size="sm" variant="secondary" onClick={ooResolve} disabled={ooResolving || !form.gis_link}>{ooResolving ? "Ищу точку..." : "📍 Определить точку"}</Btn>
+                  {form.coords
+                    ? <span className="text-xs text-emerald-600 font-medium">✓ точка найдена — встанет в маршрут водителя</span>
+                    : <span className="text-xs text-gray-400">без точки заявка в маршрут не попадёт</span>}
+                </div>
+                {ooErr && <div className="text-xs text-red-500 mt-1">{ooErr}</div>}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+                <Sel label="🚚 Кто повезёт" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— забрал сам —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+              </div>
+              <div>
                 <label className="text-sm font-medium text-gray-700">Оплата</label>
                 <div className="flex gap-2 mt-1">
                   <button onClick={() => setForm({ ...form, payMethod: "Нал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Нал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>💵 Нал</button>
                   <button onClick={() => setForm({ ...form, payMethod: "Безнал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Безнал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>💳 Безнал</button>
                 </div>
               </div>
-            )}
-            {form.oneOff
-              ? <div className="col-span-2"><Sel label="🚚 Кто повезёт" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— забрал сам (сразу отгружено) —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
-              : (form.pickup
-                ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
-                : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>)}
-            <div className="col-span-2"><Inp label={form.oneOff ? "Заметка" : form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
+              <Inp label="Заметка" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. позвонить перед приездом" />
+            </div>
+          ) : (
+          <div className="grid grid-cols-2 gap-3">
+            {form.isSample
+              ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
+              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
+            <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
+            <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
+            <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+            <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
+            {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
+            <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            {form.pickup
+              ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
+              : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>}
+            <div className="col-span-2"><Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
+          )}
           <div className="flex gap-2 mt-4">
             <Btn onClick={addManual} disabled={savingManual}>{savingManual ? "Сохраняю..." : "Добавить"}</Btn>
             <Btn variant="secondary" onClick={() => setShowManual(false)}>Отмена</Btn>
