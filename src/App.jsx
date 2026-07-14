@@ -1715,6 +1715,10 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
 function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () => {}, canEdit = true }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
+  // 🔍 Свой отчёт: фильтры по бренду, сорту и фасовкам (период — общий сверху)
+  const [repBrand, setRepBrand] = useState("all");
+  const [repGrade, setRepGrade] = useState("all");
+  const [repPacks, setRepPacks] = useState([]); // пусто = все фасовки
   const [from, setFrom] = useState(TODAY());
   const [to, setTo] = useState(TODAY());
   const [advice, setAdvice] = useState("");
@@ -1863,6 +1867,40 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
           rows.push([brand, grade, pk, p.bags, p.kg, Math.round(p.rev), p.kg ? Math.round(p.rev / p.kg) : 0, totalKg ? (p.kg / totalKg * 100).toFixed(1) : 0]))));
     downloadFile(`Отчёт_бренды_сорта_фасовки_${TODAY()}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
   };
+
+  // 🔍 Свой отчёт: продажи за период с фильтрами бренд/сорт/фасовки
+  const repFiltered = delivered.filter(o =>
+    (repBrand === "all" || o.brand === repBrand) &&
+    (repGrade === "all" || o.grade === repGrade) &&
+    (repPacks.length === 0 || repPacks.includes(Number(o.bag_kg))));
+  const repKg = repFiltered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  const repBags = repFiltered.reduce((s, o) => s + (Number(o.bags) || 0), 0);
+  const repRev = repFiltered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+  const repOrdersCount = new Set(repFiltered.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
+  const repDays = new Set(repFiltered.map(o => o.date)).size;
+  // Средняя цена продаж — взвешенная по объёму, бесплатные (пробы) не считаем
+  const repPricedKg = repFiltered.filter(o => (o.price_per_kg || 0) > 0).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  const repAvgPrice = repPricedKg ? repRev / repPricedKg : 0;
+  const repPriceList = [...new Set(repFiltered.filter(o => (o.price_per_kg || 0) > 0).map(o => o.price_per_kg))];
+  const repMinPrice = repPriceList.length ? Math.min(...repPriceList) : 0;
+  const repMaxPrice = repPriceList.length ? Math.max(...repPriceList) : 0;
+  const repByClient = {};
+  repFiltered.forEach(o => { const k = o.clientName || "?"; if (!repByClient[k]) repByClient[k] = { kg: 0, bags: 0, rev: 0 }; repByClient[k].kg += o.bags * o.bag_kg; repByClient[k].bags += Number(o.bags) || 0; repByClient[k].rev += o.bags * o.bag_kg * (o.price_per_kg || 0); });
+  const repClients = Object.entries(repByClient).sort((a, b) => b[1].kg - a[1].kg);
+  const repByDate = {};
+  repFiltered.forEach(o => { if (!repByDate[o.date]) repByDate[o.date] = { kg: 0, rev: 0 }; repByDate[o.date].kg += o.bags * o.bag_kg; repByDate[o.date].rev += o.bags * o.bag_kg * (o.price_per_kg || 0); });
+  const repDates = Object.entries(repByDate).sort((a, b) => b[0].localeCompare(a[0]));
+  const repFilterName = `${repBrand === "all" ? "все бренды" : repBrand} · ${repGrade === "all" ? "все сорта" : repGrade} · ${repPacks.length ? repPacks.join("+") + " кг" : "все фасовки"}`;
+  const downloadRep = () => {
+    const esc2 = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = [["Фильтр", repFilterName], ["Итого кг", repKg], ["Мешков", repBags], ["Сумма тг", Math.round(repRev)], ["Средняя цена тг/кг", Math.round(repAvgPrice)], [],
+      ["Клиент", "Мешков", "Кг", "Сумма тг", "Ср. цена тг/кг", "Доля %"]];
+    repClients.forEach(([name, v]) => rows.push([name, v.bags, v.kg, Math.round(v.rev), v.kg ? Math.round(v.rev / v.kg) : 0, repKg ? (v.kg / repKg * 100).toFixed(1) : 0]));
+    rows.push([]);
+    rows.push(["Дата", "Кг", "Сумма тг"]);
+    repDates.forEach(([d, v]) => rows.push([d, v.kg, Math.round(v.rev)]));
+    downloadFile(`Свой_отчёт_${TODAY()}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+  };
   const maxP = Math.max(...pl.map(([, v]) => v.kg), 1), maxW = Math.max(...wl.map(([, v]) => v.kg), 1), maxC = Math.max(...cl.map(([, v]) => v.kg), 1);
   const TD = 14;
   const td = Array.from({ length: TD }, (_, i) => { const d = new Date(now); d.setDate(d.getDate() - (TD - 1 - i)); const ds2 = d.toISOString().split("T")[0]; return { date: ds2, label: `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, "0")}`, kg: allDelivered.filter(o => o.date === ds2).reduce((s, o) => s + o.bags * o.bag_kg, 0) }; });
@@ -1948,6 +1986,74 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
           </div>
         </div>
       )}
+
+      <div className="bg-white border border-gray-100 rounded-2xl p-4">
+        <div className="flex items-center justify-between mb-1">
+          <div className="font-bold text-gray-800">🔍 Свой отчёт</div>
+          {repFiltered.length > 0 && <button onClick={downloadRep} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-3 py-1.5 font-medium">⬇️ Excel</button>}
+        </div>
+        <div className="text-xs text-gray-400 mb-2">Дни выбираются периодом сверху (в т.ч. «Свой период» — любые даты). Ниже выбери бренд, сорт и фасовки.</div>
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-gray-500 w-14">Бренд:</span>
+            {[["all", "Все"], ...BRANDS.map(b => [b, b])].map(([v, l]) => (
+              <button key={v} onClick={() => setRepBrand(v)} className={`text-xs px-3 py-1.5 rounded-full font-medium ${repBrand === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{l}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-gray-500 w-14">Сорт:</span>
+            {[["all", "Все"], ...GRADES.map(g => [g, g])].map(([v, l]) => (
+              <button key={v} onClick={() => setRepGrade(v)} className={`text-xs px-3 py-1.5 rounded-full font-medium ${repGrade === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{l}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-gray-500 w-14">Фасовка:</span>
+            <button onClick={() => setRepPacks([])} className={`text-xs px-3 py-1.5 rounded-full font-medium ${repPacks.length === 0 ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Все</button>
+            {[...WEIGHTS].sort((a, b) => b - a).map(w => (
+              <button key={w} onClick={() => setRepPacks(p => p.includes(w) ? p.filter(x => x !== w) : [...p, w])} className={`text-xs px-3 py-1.5 rounded-full font-medium ${repPacks.includes(w) ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{w} кг</button>
+            ))}
+          </div>
+        </div>
+        {repFiltered.length === 0 ? (
+          <div className="text-center py-6 text-gray-400 text-sm">По этим фильтрам за выбранный период продаж нет.</div>
+        ) : (
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-emerald-50 rounded-xl p-3"><div className="text-xs text-emerald-700">Отгружено</div><div className="text-lg font-bold text-emerald-800">{fmt(repKg)} кг</div><div className="text-xs text-gray-500">{fmt(repBags)} мешков</div></div>
+              <div className="bg-amber-50 rounded-xl p-3"><div className="text-xs text-amber-700">Сумма</div><div className="text-lg font-bold text-amber-800">{fmt(Math.round(repRev))} тг</div><div className="text-xs text-gray-500">{repOrdersCount} заявок</div></div>
+              <div className="bg-blue-50 rounded-xl p-3"><div className="text-xs text-blue-700">💰 Средняя цена продаж</div><div className="text-lg font-bold text-blue-800">{fmt(Math.round(repAvgPrice))} тг/кг</div>{repMinPrice !== repMaxPrice && <div className="text-xs text-gray-500">от {fmt(repMinPrice)} до {fmt(repMaxPrice)} тг/кг</div>}</div>
+              <div className="bg-purple-50 rounded-xl p-3"><div className="text-xs text-purple-700">Средние</div><div className="text-sm font-bold text-purple-800">~{fmt(repDays ? Math.round(repKg / repDays) : 0)} кг/день</div><div className="text-xs text-gray-500">{repDays} дн. с продажами · ~{fmt(repOrdersCount ? Math.round(repKg / repOrdersCount) : 0)} кг/заявка</div></div>
+            </div>
+            <div>
+              <div className="text-sm font-bold text-gray-700 mb-1">Кому ушло</div>
+              <div className="grid grid-cols-[1fr_4rem_4.5rem_3rem] gap-x-2 text-[11px] text-gray-400 px-1">
+                <span>клиент</span><span className="text-right">кг</span><span className="text-right">сумма</span><span className="text-right">доля</span>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {repClients.map(([name, v]) => (
+                  <div key={name} className="grid grid-cols-[1fr_4rem_4.5rem_3rem] gap-x-2 items-center text-sm py-1 px-1 border-b border-gray-50 last:border-b-0">
+                    <span className="text-gray-800 truncate">{name}</span>
+                    <span className="text-right font-semibold">{fmt(v.kg)}</span>
+                    <span className="text-right text-gray-600">{fmt(Math.round(v.rev))}</span>
+                    <span className="text-right text-gray-500">{repKg ? Math.round(v.kg / repKg * 100) : 0}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-bold text-gray-700 mb-1">По дням</div>
+              <div className="max-h-48 overflow-y-auto">
+                {repDates.map(([d, v]) => (
+                  <div key={d} className="flex items-center justify-between text-sm py-1 px-1 border-b border-gray-50 last:border-b-0">
+                    <span className="text-gray-600">{d.split("-").reverse().join(".")}</span>
+                    <span><b>{fmt(v.kg)} кг</b> · <span className="text-gray-500">{fmt(Math.round(v.rev))} тг</span></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {writeoffKg > 0 && (
         <div className="bg-gradient-to-br from-red-50 to-orange-50 border border-red-100 rounded-2xl p-4">
