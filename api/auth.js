@@ -15,7 +15,10 @@ export default async function handler(req, res) {
     // Проверка: нужен ли первый пользователь (для экрана входа). Без пароля.
     if (action === "status") {
       const users = await dbList("users");
-      return res.status(200).json({ bootstrap: users.length === 0 });
+      // Диагностика: создана ли таблица журнала входов (наружу — только да/нет и число записей)
+      let logins_ok = true, logins_count = 0;
+      try { logins_count = (await dbList("logins")).length; } catch { logins_ok = false; }
+      return res.status(200).json({ bootstrap: users.length === 0, logins_ok, logins_count });
     }
 
     if (!username || !password) return res.status(400).json({ error: "Введи логин и пароль" });
@@ -32,7 +35,7 @@ export default async function handler(req, res) {
     const u = users.find(x => (x.username || "").toLowerCase() === username.trim().toLowerCase() && x.passhash === hash);
     if (!u) return res.status(401).json({ error: "Неверный логин или пароль" });
     // Журнал входов (для админа: кто и когда заходил)
-    try { await dbUpsert("logins", { id: uid(), userId: u.id, name: u.name, username: u.username, role: u.role, at: new Date().toISOString() }); } catch {}
+    try { await dbUpsert("logins", { id: uid(), userId: u.id, name: u.name, username: u.username, role: u.role, at: new Date().toISOString(), kind: "login" }); } catch {}
     return res.status(200).json({ token: makeToken(u), user: pub(u) });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });

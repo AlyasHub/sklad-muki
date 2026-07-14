@@ -2384,6 +2384,7 @@ function LoginLog({ logins }) {
           {sorted.slice(0, 200).map(l => (
             <div key={l.id} className="bg-white border border-gray-100 rounded-lg px-3 py-2 flex items-center justify-between text-sm">
               <div>
+                <span className="mr-1" title={l.kind === "login" ? "вход по паролю" : "открыл приложение"}>{l.kind === "login" ? "🔑" : "📱"}</span>
                 <span className="font-medium text-gray-900">{l.name || l.username}</span>
                 <span className="text-xs text-gray-400 ml-1">· {ROLES[l.role] || l.role}</span>
               </div>

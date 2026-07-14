@@ -2,6 +2,8 @@
 // отдаёт только то, что роли положено. Водитель НЕ может прочитать клиентов/цены/чужие отгрузки.
 import { verifyToken, dbList, dbUpsert, dbDelete, configured } from "./_lib.js";
 
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   if (!configured()) return res.status(500).json({ error: "Сервер не настроен" });
@@ -17,6 +19,11 @@ export default async function handler(req, res) {
     if (!me) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
     // Последняя активность (не чаще раза в 5 минут, в фоне — не тормозим запрос)
     if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 5 * 60000) {
+      // Если не был активен больше 30 минут — считаем это новым «заходом» и пишем в журнал.
+      // Вход по паролю бывает редко (токен живёт 30 дней), поэтому журнал ведём по заходам в приложение.
+      if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 30 * 60000) {
+        dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" }).catch(() => {});
+      }
       dbUpsert("users", { ...me, last_seen: new Date().toISOString() }).catch(() => {});
     }
     if (op === "loadAll") {
