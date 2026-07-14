@@ -17,14 +17,15 @@ export default async function handler(req, res) {
     const allUsers = await dbList("users");
     const me = allUsers.find(x => x.id === u.uid);
     if (!me) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
-    // Последняя активность (не чаще раза в 5 минут, в фоне — не тормозим запрос)
+    // Последняя активность (не чаще раза в 5 минут).
+    // ВАЖНО: пишем с await — Vercel замораживает функцию после ответа, и «фоновые» записи погибают.
     if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 5 * 60000) {
-      // Если не был активен больше 30 минут — считаем это новым «заходом» и пишем в журнал.
+      // Если не был активен больше 30 минут — это новый «заход», пишем в журнал.
       // Вход по паролю бывает редко (токен живёт 30 дней), поэтому журнал ведём по заходам в приложение.
       if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 30 * 60000) {
-        dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" }).catch(() => {});
+        try { await dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" }); } catch {}
       }
-      dbUpsert("users", { ...me, last_seen: new Date().toISOString() }).catch(() => {});
+      try { await dbUpsert("users", { ...me, last_seen: new Date().toISOString() }); } catch {}
     }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
