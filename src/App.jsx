@@ -1245,43 +1245,45 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
         {(() => {
           const items = Object.values(balances);
           if (items.length === 0) return <div className="text-center py-12 text-gray-400">Склад пуст.</div>;
-          const gradeList = [...GRADES, ...new Set(items.map(b => b.grade).filter(g => !GRADES.includes(g)))];
-          return gradeList.map(grade => {
-            const rows = items.filter(b => b.grade === grade).sort((a, b) => (a.brand || "").localeCompare(b.brand || "") || a.bag_kg - b.bag_kg);
-            if (!rows.length) return null;
-            const gradeKg = rows.reduce((s, b) => s + Math.max(0, b.kg), 0);
-            const gradeBags = rows.reduce((s, b) => s + Math.max(0, b.bags), 0);
-            const maxKg = Math.max(...rows.map(b => Math.max(0, b.kg)), 1);
+          const brandNames = [...new Set(items.map(b => b.brand))].sort((a, b) => (a || "").localeCompare(b || "", "ru"));
+          return brandNames.map(brand => {
+            const brandRows = items.filter(x => x.brand === brand);
+            const brandKg = brandRows.reduce((s, b) => s + Math.max(0, b.kg), 0);
+            const brandBags = brandRows.reduce((s, b) => s + Math.max(0, b.bags), 0);
+            const gradeList = [...GRADES, ...new Set(brandRows.map(r => r.grade).filter(g => !GRADES.includes(g)))];
             return (
-              <div key={grade} className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-amber-50 to-white border-b border-gray-100">
-                  <div className="font-bold text-gray-800">{grade === "Высший сорт" ? "⭐" : "🌾"} {grade}</div>
-                  <div className="text-sm text-gray-600"><b>{fmt(gradeKg)} кг</b> · {fmt(gradeBags)} меш.</div>
+              <div key={brand} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+                <div className="flex items-end justify-between border-b-2 border-amber-300 pb-1">
+                  <span className="text-xl font-black text-gray-900">{brand}</span>
+                  <span className="text-sm text-gray-600"><b>{fmt(brandKg)} кг</b> · {fmt(brandBags)} меш.</span>
                 </div>
-                {rows.map((b, i) => {
-                  const have = Math.max(0, b.bags);
-                  const need = reserved[`${b.brand}|${b.grade}|${b.bag_kg}`] || 0;
-                  const short = need > have;
-                  const empty = b.kg <= 0;
+                {gradeList.map(grade => {
+                  const rows = brandRows.filter(r => r.grade === grade).sort((a, b) => b.bag_kg - a.bag_kg);
+                  if (!rows.length) return null;
+                  const gKg = rows.reduce((s, b) => s + Math.max(0, b.kg), 0);
                   return (
-                    <div key={i} className={`px-4 py-3 border-b border-gray-50 last:border-b-0 ${short || empty ? "bg-red-50" : ""}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <span className="font-semibold text-gray-900">{b.brand}</span>
-                          <span className="ml-2 text-sm text-gray-500 whitespace-nowrap">мешки {b.bag_kg} кг</span>
-                        </div>
-                        <div className="text-right whitespace-nowrap">
-                          <span className={`text-xl font-bold ${empty ? "text-red-600" : short ? "text-red-600" : "text-emerald-600"}`}>{fmt(have)}</span>
-                          <span className="text-xs text-gray-400"> меш.</span>
-                          <span className="text-sm text-gray-500 ml-2">{fmt(Math.max(0, b.kg))} кг</span>
-                        </div>
+                    <div key={grade} className="mt-2">
+                      <div className="flex items-center justify-between text-sm font-bold text-amber-800">
+                        <span>{grade === "Высший сорт" ? "⭐" : "🌾"} {grade}</span>
+                        <span className="font-semibold text-gray-500">{fmt(gKg)} кг</span>
                       </div>
-                      <div className="mt-1.5"><MiniBar value={Math.max(0, b.kg)} max={maxKg} color={short || empty ? "bg-red-400" : "bg-amber-400"} /></div>
-                      {need > 0 && (
-                        <div className={`text-xs mt-1 ${short ? "text-red-700 font-semibold" : "text-gray-500"}`}>
-                          📋 в заявках {need} меш. · {short ? `не хватает ${need - have} меш.` : `свободно ${have - need} меш.`}
-                        </div>
-                      )}
+                      <div className="grid grid-cols-[3.2rem_1fr_1fr_1.6fr] gap-x-2 text-[11px] text-gray-400 mt-1 px-1">
+                        <span>фасовка</span><span className="text-right">мешков</span><span className="text-right">кг</span><span className="text-right">в заявках</span>
+                      </div>
+                      {rows.map((b, i) => {
+                        const have = Math.max(0, b.bags);
+                        const need = reserved[`${b.brand}|${b.grade}|${b.bag_kg}`] || 0;
+                        const short = need > have;
+                        const empty = b.kg <= 0;
+                        return (
+                          <div key={i} className={`grid grid-cols-[3.2rem_1fr_1fr_1.6fr] gap-x-2 items-center text-sm py-1 px-1 border-b border-gray-50 last:border-b-0 ${short || empty ? "bg-red-50 rounded-lg" : ""}`}>
+                            <span className="font-semibold text-gray-900">{b.bag_kg} кг</span>
+                            <span className={`text-right font-bold ${empty || short ? "text-red-600" : "text-emerald-600"}`}>{fmt(have)}</span>
+                            <span className="text-right text-gray-700">{fmt(Math.max(0, b.kg))}</span>
+                            <span className={`text-right text-xs ${short ? "text-red-700 font-semibold" : "text-gray-500"}`}>{need > 0 ? (short ? `${need} меш. · не хватает ${need - have}` : `${need} меш. · своб. ${have - need}`) : "—"}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
