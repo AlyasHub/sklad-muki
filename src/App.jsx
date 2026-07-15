@@ -393,13 +393,22 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     } catch (e) { alert("⚠️ Не удалось загрузить фото: " + e.message + "\nПроверь интернет и попробуй ещё раз."); reload("orders"); }
     setUploadingId(null);
   };
+  // ЖЕЛЕЗНЫЙ УЧЁТ: на каждую позицию заявки — ровно ОДНО движение склада (id = mv_<id заявки>).
+  // Повторное списание (двойное нажатие, два администратора) перезаписывает ту же строку — не задваивается.
+  // Отмена отгрузки удаляет эту строку — точный откат без «дрейфа» остатков.
+  const shipStock = o => dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+  const unshipStock = async o => {
+    if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id); // точный откат
+    // заявки, списанные до этого обновления, возвращаем отдельной строкой (как раньше)
+    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+  };
+
   // Директор подтверждает доставку → списание со склада
   const confirmDelivery = async o => {
     try {
       await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
       if (o.status !== "отгружена") {
-        const kg = o.bags * o.bag_kg;
-        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+        await shipStock(o);
         await reload("stock");
       }
       await reload("orders");
@@ -411,13 +420,12 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
   const updateStatus = async (o, status) => {
     if (status === o.status) return;
     try {
-      const kg = o.bags * o.bag_kg;
       await dbUpsert("orders", { ...o, status });
       if (status === "отгружена" && o.status !== "отгружена") {
-        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+        await shipStock(o);
         await reload("stock");
       } else if (status !== "отгружена" && o.status === "отгружена") {
-        await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат (отмена отгрузки): ${o.clientName}` });
+        await unshipStock(o);
         await reload("stock");
       }
       await reload("orders");
@@ -463,11 +471,10 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     try {
       await Promise.all(g.orders.map(async o => {
         if (o.status === status) return;
-        const kg = o.bags * o.bag_kg;
         await dbUpsert("orders", { ...o, status });
         if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
-        if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
-        else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+        if (status === "отгружена" && o.status !== "отгружена") await shipStock(o);
+        else if (status !== "отгружена" && o.status === "отгружена") await unshipStock(o);
       }));
       reload("stock"); // склад подтянем в фоне (не блокируя экран)
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
@@ -479,7 +486,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
       await Promise.all(g.orders.map(async o => {
         if (o.confirmed && o.status === "отгружена") return;
         await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
-        if (o.status !== "отгружена" && !o.fromKaraganda) { const kg = o.bags * o.bag_kg; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` }); }
+        if (o.status !== "отгружена" && !o.fromKaraganda) await shipStock(o);
       }));
       reload("stock");
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
@@ -1207,9 +1214,13 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
     if (!balances[k]) balances[k] = { brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, kg: 0, bags: 0 };
     balances[k].kg += s.weight_kg; balances[k].bags += s.bags;
   });
-  // Общий остаток всей муки на складе (только положительные позиции)
-  const totalKg = Object.values(balances).reduce((s, b) => s + Math.max(0, b.kg), 0);
-  const totalBags = Object.values(balances).reduce((s, b) => s + Math.max(0, b.bags), 0);
+  // Общий остаток всей муки на складе (честный: минусы не прячем — минус значит «расход есть, прихода нет»)
+  const totalKg = Object.values(balances).reduce((s, b) => s + b.kg, 0);
+  const totalBags = Object.values(balances).reduce((s, b) => s + b.bags, 0);
+  const negatives = Object.values(balances).filter(b => b.kg < 0);
+  // Сводка за сегодня — быстрый контроль «что пришло / что ушло»
+  const todayIn = stock.filter(s => s.date === TODAY() && s.weight_kg > 0).reduce((sum, s) => sum + s.weight_kg, 0);
+  const todayOut = stock.filter(s => s.date === TODAY() && s.weight_kg < 0).reduce((sum, s) => sum + Math.abs(s.weight_kg), 0);
 
   // Сколько мешков «забронировано» заявками, которые ещё НЕ отгружены (новая + в пути).
   // При отгрузке склад списывается автоматически, поэтому здесь только будущий спрос.
@@ -1238,7 +1249,17 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
         <div className="text-sm font-medium text-amber-100">🌾 Всего муки на складе</div>
         <div className="text-4xl font-black mt-1">{fmt(totalKg)} кг</div>
         <div className="text-sm text-amber-100 mt-1">≈ {fmt(Math.round(totalKg / 100) / 10)} т · {fmt(totalBags)} мешков · {Object.values(balances).filter(b => b.kg > 0).length} видов</div>
+        <div className="text-sm text-amber-100 mt-1.5 border-t border-amber-400 pt-1.5">Сегодня: <b className="text-white">▲ +{fmt(todayIn)} кг</b> приход · <b className="text-white">▼ −{fmt(todayOut)} кг</b> расход</div>
       </div>
+      {negatives.length > 0 && (
+        <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
+          <div className="font-bold text-red-700 mb-1">⛔ Остаток ушёл в минус — приход не внесён</div>
+          <div className="space-y-1">
+            {negatives.map((b, i) => <div key={i} className="text-sm text-red-700">• <b>{b.brand} {b.grade} {b.bag_kg}кг</b>: {fmt(b.kg)} кг ({fmt(b.bags)} меш.)</div>)}
+          </div>
+          <div className="text-xs text-red-600 mt-2">Минус значит: отгрузки по этой позиции записаны, а приход — нет. Внеси приход («+ Операция» → Приход) или прими фуру в «Поставках» — остаток выправится.</div>
+        </div>
+      )}
       {shortages.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
           <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
@@ -1280,8 +1301,8 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
           const brandNames = [...new Set(items.map(b => b.brand))].sort((a, b) => (a || "").localeCompare(b || "", "ru"));
           return brandNames.map(brand => {
             const brandRows = items.filter(x => x.brand === brand);
-            const brandKg = brandRows.reduce((s, b) => s + Math.max(0, b.kg), 0);
-            const brandBags = brandRows.reduce((s, b) => s + Math.max(0, b.bags), 0);
+            const brandKg = brandRows.reduce((s, b) => s + b.kg, 0);
+            const brandBags = brandRows.reduce((s, b) => s + b.bags, 0);
             const gradeList = [...GRADES, ...new Set(brandRows.map(r => r.grade).filter(g => !GRADES.includes(g)))];
             return (
               <div key={brand} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
@@ -1292,7 +1313,7 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
                 {gradeList.map(grade => {
                   const rows = brandRows.filter(r => r.grade === grade).sort((a, b) => b.bag_kg - a.bag_kg);
                   if (!rows.length) return null;
-                  const gKg = rows.reduce((s, b) => s + Math.max(0, b.kg), 0);
+                  const gKg = rows.reduce((s, b) => s + b.kg, 0);
                   return (
                     <div key={grade} className="mt-2">
                       <div className="flex items-center justify-between text-sm font-bold text-amber-800">
@@ -1303,16 +1324,18 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
                         <span>фасовка</span><span className="text-right">мешков</span><span className="text-right">кг</span><span className="text-right">в заявках</span>
                       </div>
                       {rows.map((b, i) => {
-                        const have = Math.max(0, b.bags);
+                        const have = b.bags; // честный остаток — минус видно сразу
+                        const avail = Math.max(0, have);
                         const need = reserved[`${b.brand}|${b.grade}|${b.bag_kg}`] || 0;
-                        const short = need > have;
+                        const short = need > avail;
+                        const negative = b.kg < 0;
                         const empty = b.kg <= 0;
                         return (
                           <div key={i} className={`grid grid-cols-[3.2rem_1fr_1fr_1.6fr] gap-x-2 items-center text-sm py-1 px-1 border-b border-gray-50 last:border-b-0 ${short || empty ? "bg-red-50 rounded-lg" : ""}`}>
                             <span className="font-semibold text-gray-900">{b.bag_kg} кг</span>
                             <span className={`text-right font-bold ${empty || short ? "text-red-600" : "text-emerald-600"}`}>{fmt(have)}</span>
-                            <span className="text-right text-gray-700">{fmt(Math.max(0, b.kg))}</span>
-                            <span className={`text-right text-xs ${short ? "text-red-700 font-semibold" : "text-gray-500"}`}>{need > 0 ? (short ? `${need} меш. · не хватает ${need - have}` : `${need} меш. · своб. ${have - need}`) : "—"}</span>
+                            <span className="text-right text-gray-700">{fmt(b.kg)}</span>
+                            <span className={`text-right text-xs ${short || negative ? "text-red-700 font-semibold" : "text-gray-500"}`}>{negative ? "⛔ минус — внеси приход" : need > 0 ? (short ? `${need} меш. · не хватает ${need - avail}` : `${need} меш. · своб. ${avail - need}`) : "—"}</span>
                           </div>
                         );
                       })}
@@ -1327,7 +1350,7 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
       <div>
         <h4 className="font-semibold text-gray-700 mb-3">История движений</h4>
         <div className="space-y-2">
-          {[...stock].reverse().slice(0, 30).map(s => (
+          {[...stock].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").replace(/^mv_/, "").localeCompare((a.id || "").replace(/^mv_/, ""))).slice(0, 30).map(s => (
             <div key={s.id} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm">
               <div className="min-w-0">
                 <span className={s.weight_kg > 0 ? "text-emerald-600 font-medium" : "text-red-500 font-medium"}>{s.weight_kg > 0 ? "▲ Приход" : "▼ Расход"}</span>
@@ -3242,7 +3265,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
   );
 }
 
-function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0 }) {
+function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -3328,17 +3351,22 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
 
   // Смена статуса доставки — оптимистично (экран сразу), запись в фоне
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
+  // Железный учёт: одно движение склада на позицию (id = mv_<id заявки>) — не задваивается, отмена = точный откат
+  const shipStock = o => dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+  const unshipStock = async o => {
+    if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id);
+    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+  };
   const setGroupStatus = async (g, status) => {
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, status } : o));
     try {
       await Promise.all(g.orders.map(async o => {
         if (o.status === status) return;
-        const kg = o.bags * o.bag_kg;
         await dbUpsert("orders", { ...o, status });
         if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
-        if (status === "отгружена" && o.status !== "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -kg, bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
-        else if (status !== "отгружена" && o.status === "отгружена") await dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+        if (status === "отгружена" && o.status !== "отгружена") await shipStock(o);
+        else if (status !== "отгружена" && o.status === "отгружена") await unshipStock(o);
       }));
       reload("stock");
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
@@ -3387,15 +3415,17 @@ function TodayTab({ orders, clients, drivers = [], reload, applyLocal = () => {}
       try {
         for (const p of valid) {
           const kg = Number(p.bags) * Number(p.bag_kg);
+          const orderId = uid();
           await dbUpsert("orders", {
-            id: uid(), date: form.date, brand: p.brand, grade: p.grade,
+            id: orderId, date: form.date, brand: p.brand, grade: p.grade,
             bag_kg: Number(p.bag_kg), bags: Number(p.bags), driverId: form.driverId || "",
             price_per_kg: Number(p.price_per_kg), status: instant ? "отгружена" : "новая",
             oneOff: true, paid: true, pay_method: form.payMethod, note: form.note || "",
             clientId: null, clientName: buyer,
             oneOffAddress: form.oneOffAddress || "", gis_link: form.gis_link || "", coords: form.coords || null,
           });
-          if (instant) await dbUpsert("stock", { id: uid(), date: TODAY(), brand: p.brand, grade: p.grade, weight_kg: -kg, bags: -Number(p.bags), bag_kg: Number(p.bag_kg), note: `Реализация: ${buyer}` });
+          // id движения привязан к заявке — отмена вернёт остаток точным откатом, дубля не будет
+          if (instant) await dbUpsert("stock", { id: "mv_" + orderId, date: TODAY(), brand: p.brand, grade: p.grade, weight_kg: -kg, bags: -Number(p.bags), bag_kg: Number(p.bag_kg), note: `Реализация: ${buyer}` });
         }
         setShowManual(false);
         setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "", driverId: "", oneOffAddress: "", gis_link: "", coords: null }));
@@ -3785,7 +3815,7 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
