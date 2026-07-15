@@ -2446,7 +2446,12 @@ function UsersTab({ users, drivers, logins = [], reload, currentUser }) {
     } catch (e) { setErr("Ошибка: " + e.message); }
     setSaving(false);
   };
-  const deleteUser = async id => { await dbDelete("users", id); await reload("users"); };
+  const deleteUser = async (id) => {
+    const u = users.find(x => x.id === id);
+    // Двойная защита от случайного пальца: подтверждение с именем + удаление только после точного ответа
+    if (!confirm(`Удалить пользователя «${u?.name || "?"}» (@${u?.username || "?"})? Он больше не сможет войти в приложение.`)) return;
+    await dbDelete("users", id); await reload("users");
+  };
 
   return (
     <div className="space-y-5">
