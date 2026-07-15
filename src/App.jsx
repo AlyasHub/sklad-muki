@@ -1184,6 +1184,7 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
   const [saving, setSaving] = useState(false);
   const blank = { date: TODAY(), brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", note: "", op: "in", reason: WRITEOFF_REASONS[0] };
   const [form, setForm] = useState(blank);
+  const [audit, setAudit] = useState(null); // сверка по позиции: {brand, grade, bag_kg}
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
   const openEdit = s => {
@@ -1331,7 +1332,7 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
                         const negative = b.kg < 0;
                         const empty = b.kg <= 0;
                         return (
-                          <div key={i} className={`grid grid-cols-[3.2rem_1fr_1fr_1.6fr] gap-x-2 items-center text-sm py-1 px-1 border-b border-gray-50 last:border-b-0 ${short || empty ? "bg-red-50 rounded-lg" : ""}`}>
+                          <div key={i} onClick={() => setAudit({ brand: b.brand, grade: b.grade, bag_kg: b.bag_kg })} title="Нажми — покажу все движения по этой позиции" className={`grid grid-cols-[3.2rem_1fr_1fr_1.6fr] gap-x-2 items-center text-sm py-1 px-1 border-b border-gray-50 last:border-b-0 cursor-pointer hover:bg-amber-50 ${short || empty ? "bg-red-50 rounded-lg" : ""}`}>
                             <span className="font-semibold text-gray-900">{b.bag_kg} кг</span>
                             <span className={`text-right font-bold ${empty || short ? "text-red-600" : "text-emerald-600"}`}>{fmt(have)}</span>
                             <span className="text-right text-gray-700">{fmt(b.kg)}</span>
@@ -1347,6 +1348,34 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
           });
         })()}
       </div>
+      {audit && (() => {
+        const rows = stock
+          .filter(s => s.brand === audit.brand && s.grade === audit.grade && String(s.bag_kg) === String(audit.bag_kg))
+          .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.id || "").replace(/^mv_/, "").localeCompare((b.id || "").replace(/^mv_/, "")));
+        let run = 0;
+        const lines = rows.map(s => { run += s.weight_kg || 0; return { ...s, run }; });
+        return (
+          <Modal title={`🔍 Сверка: ${audit.brand} ${audit.grade} ${audit.bag_kg}кг`} onClose={() => setAudit(null)}>
+            <div className="text-xs text-gray-500 mb-2">Все движения по позиции от первого до последнего. «Остаток» — сколько стало после операции. Если ждёшь приход, а его тут нет — он записан на другой сорт/фасовку (посмотри сверку соседней строки).</div>
+            <div className="grid grid-cols-[4rem_1fr_4.2rem_4.2rem] gap-x-2 text-[11px] text-gray-400 px-1 mb-1">
+              <span>дата</span><span>операция</span><span className="text-right">кг</span><span className="text-right">остаток</span>
+            </div>
+            <div className="max-h-96 overflow-y-auto">
+              {lines.length === 0 && <div className="text-center text-gray-400 py-6 text-sm">По этой позиции движений нет.</div>}
+              {lines.map((s, i) => (
+                <div key={i} className="grid grid-cols-[4rem_1fr_4.2rem_4.2rem] gap-x-2 items-center text-xs py-1.5 px-1 border-b border-gray-50 last:border-b-0">
+                  <span className="text-gray-500">{(s.date || "").slice(5).split("-").reverse().join(".")}</span>
+                  <span className="text-gray-700 truncate">{s.note || s.reason || (s.weight_kg > 0 ? "Приход" : "Расход")}</span>
+                  <span className={`text-right font-semibold ${s.weight_kg > 0 ? "text-emerald-600" : "text-red-500"}`}>{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)}</span>
+                  <span className={`text-right font-bold ${s.run < 0 ? "text-red-600" : "text-gray-800"}`}>{fmt(s.run)}</span>
+                </div>
+              ))}
+            </div>
+            <div className={`mt-3 rounded-xl p-3 text-sm font-bold ${run < 0 ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>Итоговый остаток: {fmt(run)} кг{run < 0 ? " — приход не внесён или внесён на другую позицию" : ""}</div>
+          </Modal>
+        );
+      })()}
+
       <div>
         <h4 className="font-semibold text-gray-700 mb-3">История движений</h4>
         <div className="space-y-2">
