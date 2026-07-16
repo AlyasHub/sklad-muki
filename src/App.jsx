@@ -26,6 +26,8 @@ async function apiData(op, table, extra = {}) {
     if (res.status === 401) setAuthToken(null);
     throw new Error(data.error || "Ошибка сервера");
   }
+  // Автопродление входа: сервер прислал свежий токен (старый скоро истечёт) — тихо обновляем
+  if (data.fresh_token) setAuthToken(data.fresh_token);
   return data;
 }
 async function dbGetAll(table) { return (await apiData("list", table)).rows || []; }
