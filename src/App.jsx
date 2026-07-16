@@ -175,7 +175,7 @@ async function sha256(str) {
 const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "supply", "karaganda", "drivers", "expenses", "access"],
+  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "drivers", "expenses", "access"],
   viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
@@ -187,8 +187,8 @@ const PRIMARY_NAV = {
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Рабочие", expenses: "Расходы", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Рабочие", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -2835,6 +2835,119 @@ const CONTRACT_TEMPLATES = [
   { key: "predoplata", name: "Предоплата (100% предоплата)", text: PREDOPLATA },
 ];
 
+// 🧾 Мягкая накладная — точная копия Excel-шаблона «расх. накладная на выезд»:
+// две копии на листе, те же колонки/шрифты/высоты строк. Позиции подставляются из заявок клиента за дату.
+const MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+function SoftInvoiceTab({ clients, orders }) {
+  const [clientId, setClientId] = useState("");
+  const [buyer, setBuyer] = useState("");
+  const [date, setDate] = useState(TODAY());
+  const [docNum, setDocNum] = useState("1");
+  const [rows, setRows] = useState([]);
+
+  const fillFromOrders = (cid, d) => {
+    const list = orders.filter(o => o.clientId === cid && o.date === d);
+    setRows(list.map(o => ({ name: `${o.brand} ${o.grade} ${o.bag_kg}кг`, qty: o.bags, price: Math.round((o.price_per_kg || 0) * o.bag_kg) })));
+  };
+  const pickClient = id => {
+    setClientId(id);
+    const c = clients.find(x => x.id === id);
+    setBuyer(c ? c.name : "");
+    if (id) fillFromOrders(id, date);
+  };
+  const changeDate = d => { setDate(d); if (clientId) fillFromOrders(clientId, d); };
+  const upd = (i, k, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r));
+  const total = rows.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.price) || 0), 0);
+
+  const printInvoice = () => {
+    const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const d = new Date(date + "T00:00:00");
+    const day = isNaN(d) ? "" : d.getDate();
+    const monthYear = isNaN(d) ? "" : `${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()} г`;
+    // строка таблицы: в шаблоне все 10 строк пронумерованы; числа — Times New Roman
+    const tr = i => {
+      const r = rows[i];
+      const sum = r ? (Number(r.qty) || 0) * (Number(r.price) || 0) : "";
+      return `<tr class="line"><td class="bx c">${i + 1}</td><td class="bx">${r ? esc(r.name) : ""}</td><td class="bx c">${r ? "шт" : ""}</td><td class="bx tnr">${r ? esc(r.qty) : ""}</td><td class="bx tnr">${r ? esc(r.price) : ""}</td><td class="bx c" colspan="2">${r && sum ? fmt(sum) : ""}</td></tr>`;
+    };
+    const copy = `
+      <div class="hdr">Основное подразделение</div>
+      <table class="doc">
+        <colgroup><col style="width:98px"><col style="width:220px"><col style="width:64px"><col style="width:88px"><col style="width:110px"><col style="width:95px"><col style="width:64px"></colgroup>
+        <tr style="height:40px"><td colspan="3"></td><td class="bx c b s10">Номер документа</td><td class="bx c b s10" colspan="3">Дата составления</td></tr>
+        <tr><td colspan="3"></td><td class="bx c">${esc(docNum)}</td><td class="bx c">${day}</td><td class="bx c" colspan="2">${monthYear}</td></tr>
+        <tr class="line"><td></td></tr>
+        <tr class="line"><td></td></tr>
+        <tr class="line"><td class="b">Покупатель:</td><td class="ub" colspan="3">${esc(buyer)}</td></tr>
+        <tr class="line"><td></td></tr>
+        <tr style="height:40px"><td class="bx c b">№</td><td class="bx c b">Наименование, сорт, размер</td><td class="bx c b">Ед.измерения</td><td class="bx c b">Количество</td><td class="bx c b">Цена</td><td class="bx c b" colspan="2">Сумма</td></tr>
+        ${Array.from({ length: 10 }, (_, i) => tr(i)).join("")}
+        <tr style="height:21px"><td colspan="4"></td><td class="b s12">Итого: </td><td class="b s12">${fmt(total)}</td><td class="b">тенге</td></tr>
+        <tr class="line"><td></td></tr>
+        <tr class="line"><td></td></tr>
+        <tr class="line"><td></td><td>Принял______________/</td></tr>
+        <tr class="line"><td></td></tr>
+        <tr class="line"><td></td><td>Кассир ______________/</td><td colspan="2"></td><td colspan="3">Менеджер ______________/</td></tr>
+      </table>`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Накладная</title><style>
+      @page{size:A4 portrait;margin:7mm 10mm}
+      body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#000;margin:0}
+      table.doc{border-collapse:collapse;table-layout:fixed}
+      td{padding:1px 4px;overflow:hidden;white-space:nowrap}
+      tr.line{height:21px}
+      .bx{border:1px solid #000}
+      .c{text-align:center}
+      .b{font-weight:bold}
+      .s10{font-size:10pt}
+      .s12{font-size:12pt}
+      .tnr{font-family:'Times New Roman',serif}
+      .ub{border-bottom:1px solid #000}
+      .hdr{font-weight:bold;font-size:14pt;margin:6px 0 4px 470px;white-space:nowrap}
+      .gap{height:80px}
+    </style></head><body>${copy}<div class="gap"></div>${copy}</body></html>`;
+    const old = document.getElementById("print-frame");
+    if (old) old.remove();
+    const iframe = document.createElement("iframe");
+    iframe.id = "print-frame";
+    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow.document;
+    doc.open(); doc.write(html); doc.close();
+    setTimeout(() => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) {} setTimeout(() => iframe.remove(), 3000); }, 400);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">🧾 Мягкая накладная по вашему шаблону — две копии на листе. Выбери клиента и дату: позиции подставятся из заявок этого дня (цена за мешок = цена/кг × фасовка). Всё можно поправить руками перед печатью.</div>
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
+        <Sel label="Клиент (покупатель)" value={clientId} onChange={e => pickClient(e.target.value)} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
+        <div className="grid grid-cols-2 gap-3">
+          <Inp label="Покупатель (как в накладной)" value={buyer} onChange={e => setBuyer(e.target.value)} placeholder="можно вписать вручную" />
+          <Inp label="Дата составления" type="date" value={date} onChange={e => changeDate(e.target.value)} />
+        </div>
+        <div className="w-32"><Inp label="Номер документа" value={docNum} onChange={e => setDocNum(e.target.value)} /></div>
+      </div>
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="font-bold text-gray-800">Позиции</div>
+          <Btn size="sm" variant="secondary" onClick={() => setRows(rs => [...rs, { name: "", qty: "", price: "" }])}>+ строка</Btn>
+        </div>
+        {rows.length === 0 && <div className="text-sm text-gray-400 text-center py-4">Позиций нет — выбери клиента с заявкой на эту дату или добавь строку вручную.</div>}
+        {rows.map((r, i) => (
+          <div key={i} className="grid grid-cols-[1fr_4.5rem_5rem_2rem] gap-2 items-end mb-2">
+            <Inp label={i === 0 ? "Наименование" : ""} value={r.name} onChange={e => upd(i, "name", e.target.value)} placeholder="ДАРАД Высший сорт 50кг" />
+            <Inp label={i === 0 ? "Кол-во" : ""} type="number" value={r.qty} onChange={e => upd(i, "qty", e.target.value)} />
+            <Inp label={i === 0 ? "Цена" : ""} type="number" value={r.price} onChange={e => upd(i, "price", e.target.value)} />
+            <button onClick={() => setRows(rs => rs.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600 pb-2 text-lg leading-none" title="Убрать">✕</button>
+          </div>
+        ))}
+        {rows.length > 0 && <div className="text-right font-bold text-gray-800 mt-2">Итого: {fmt(total)} тенге</div>}
+      </div>
+      <Btn onClick={printInvoice} disabled={!buyer || rows.length === 0} size="lg">🖨 Печать (2 копии на листе)</Btn>
+    </div>
+  );
+}
+
 function ContractsTab({ clients }) {
   const taRef = useRef(null);
   const backRef = useRef(null);
@@ -3862,6 +3975,7 @@ export default function App() {
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
+            {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} canEdit={isDirector} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
