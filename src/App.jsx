@@ -2863,6 +2863,54 @@ function SoftInvoiceTab({ clients, orders }) {
   const total = filled.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.price) || 0), 0);
   const fmt2 = n => (Number(n) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // Генератор PDF (pdfmake с кириллицей) подгружается один раз при первом скачивании
+  const loadPdfMake = () => new Promise((resolve, reject) => {
+    if (window.pdfMake && window.pdfMake.vfs) return resolve(window.pdfMake);
+    const s1 = document.createElement("script");
+    s1.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js";
+    s1.onload = () => {
+      const s2 = document.createElement("script");
+      s2.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js";
+      s2.onload = () => resolve(window.pdfMake);
+      s2.onerror = () => reject(new Error("Не удалось загрузить шрифты PDF"));
+      document.body.appendChild(s2);
+    };
+    s1.onerror = () => reject(new Error("Не удалось загрузить генератор PDF"));
+    document.body.appendChild(s1);
+  });
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const downloadPdf = async () => {
+    setPdfBusy(true);
+    try {
+      const pdfMake = await loadPdfMake();
+      const d = new Date(date + "T00:00:00");
+      const day = isNaN(d) ? "" : d.getDate();
+      const monthYear = isNaN(d) ? "" : `${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()} г`;
+      const cell = (t, extra = {}) => ({ text: String(t ?? ""), fontSize: 10.5, ...extra });
+      const copyContent = () => [
+        { text: "Основное подразделение", bold: true, fontSize: 14, margin: [300, 0, 0, 6] },
+        { table: { widths: [80, 45, 95], body: [
+          [cell("Номер документа", { bold: true, fontSize: 8.5, alignment: "center" }), { ...cell("Дата составления", { bold: true, fontSize: 8.5, alignment: "center" }), colSpan: 2 }, {}],
+          [cell(docNum, { alignment: "center" }), cell(day, { alignment: "center" }), cell(monthYear, { alignment: "center" })],
+        ] }, margin: [240, 0, 0, 16] },
+        { columns: [{ width: 78, text: "Покупатель:", bold: true, fontSize: 11 }, { width: "auto", text: buyer, fontSize: 11, decoration: "underline" }], margin: [0, 0, 0, 12] },
+        { table: { widths: [20, "*", 58, 66, 52, 70], body: [
+          ["№", "Наименование, сорт, размер", "Кол-во мешков", "Цена за мешок", "Кол-во кг", "Сумма"].map(h => cell(h, { bold: true, alignment: "center", fontSize: 10 })),
+          ...filled.map((r, i) => {
+            const qty = Number(r.qty) || 0, price = Number(r.price) || 0, kg = qty * (Number(r.bag_kg) || 0);
+            return [cell(i + 1, { alignment: "center" }), cell(r.name), cell(fmt2(qty), { alignment: "center" }), cell(fmt2(price), { alignment: "center" }), cell(kg ? fmt(kg) : "", { alignment: "center" }), cell(fmt(qty * price), { alignment: "center" })];
+          }),
+        ] } },
+        { columns: [{ width: "*", text: "" }, { width: "auto", text: `Итого: ${fmt(total)} тенге`, bold: true, fontSize: 12 }], margin: [0, 8, 12, 0] },
+        { text: "Принял______________/", fontSize: 11, margin: [40, 26, 0, 0] },
+        { columns: [{ width: 230, text: "Кассир ______________/", fontSize: 11 }, { width: "auto", text: "Менеджер ______________/", fontSize: 11 }], margin: [40, 14, 0, 0] },
+      ];
+      const dd = { pageSize: "A4", pageMargins: [28, 24, 28, 20], content: [...copyContent(), { text: "", margin: [0, 26, 0, 0] }, ...copyContent()] };
+      pdfMake.createPdf(dd).download(`Накладная_${(buyer || "клиент").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
+    } catch (e) { alert("⚠️ " + (e.message || e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setPdfBusy(false);
+  };
+
   const printInvoice = () => {
     const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const d = new Date(date + "T00:00:00");
@@ -2958,7 +3006,10 @@ function SoftInvoiceTab({ clients, orders }) {
         })}
         {filled.length > 0 && <div className="text-right font-bold text-gray-800 mt-2">Позиций: {filled.length} · Итого: {fmt(total)} тенге</div>}
       </div>
-      <Btn onClick={printInvoice} disabled={!buyer || filled.length === 0} size="lg">🖨 Печать (2 копии на листе)</Btn>
+      <div className="flex gap-2">
+        <button onClick={downloadPdf} disabled={!buyer || filled.length === 0 || pdfBusy} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl font-semibold px-4 py-3">{pdfBusy ? "Собираю PDF..." : "⬇️ Скачать PDF"}</button>
+        <button onClick={printInvoice} disabled={!buyer || filled.length === 0} className="flex-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-700 rounded-xl font-semibold px-4 py-3">🖨 Сразу на печать</button>
+      </div>
     </div>
   );
 }
