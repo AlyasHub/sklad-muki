@@ -396,6 +396,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
   // ЖЕЛЕЗНЫЙ УЧЁТ: на каждую позицию заявки — ровно ОДНО движение склада (id = mv_<id заявки>).
   // Повторное списание (двойное нажатие, два администратора) перезаписывает ту же строку — не задваивается.
   // Отмена отгрузки удаляет эту строку — точный откат без «дрейфа» остатков.
+  const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
   const shipStock = o => dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
   const unshipStock = async o => {
     if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id); // точный откат
@@ -466,6 +467,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     } catch (e) { notifyErr(e); }
   };
   const setGroupStatus = async (g, status) => {
+    if (busyRef.current.has(g.key)) return; // замок: пока первое нажатие сохраняется, второе игнорируем
+    busyRef.current.add(g.key);
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, status } : o));
     try {
@@ -478,8 +481,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
       }));
       reload("stock"); // склад подтянем в фоне (не блокируя экран)
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
+    finally { busyRef.current.delete(g.key); }
   };
   const confirmGroup = async g => {
+    if (busyRef.current.has(g.key)) return; // замок от двойного нажатия
+    busyRef.current.add(g.key);
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, confirmed: true, status: "отгружена" } : o));
     try {
@@ -490,6 +496,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
       }));
       reload("stock");
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
+    finally { busyRef.current.delete(g.key); }
   };
   const driverMarkGroup = async (g, val) => {
     const ids = new Set(g.orders.map(o => o.id));
@@ -3381,12 +3388,15 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
   // Смена статуса доставки — оптимистично (экран сразу), запись в фоне
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
   // Железный учёт: одно движение склада на позицию (id = mv_<id заявки>) — не задваивается, отмена = точный откат
+  const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
   const shipStock = o => dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
   const unshipStock = async o => {
     if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id);
     return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
   };
   const setGroupStatus = async (g, status) => {
+    if (busyRef.current.has(g.key)) return; // пока первое нажатие сохраняется, второе игнорируем
+    busyRef.current.add(g.key);
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, status } : o));
     try {
@@ -3399,6 +3409,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
       }));
       reload("stock");
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
+    finally { busyRef.current.delete(g.key); }
   };
   // Перенести доставку на другую дату (если сегодня не получилось отгрузить)
   const rescheduleGroup = async (g, date) => {
