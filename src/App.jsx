@@ -303,7 +303,7 @@ async function parseOrderWithAI(text, clients) {
       today: TODAY(),
       tomorrow: TOMORROW(),
       weekday: TODAY_WEEKDAY(),
-      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand, products: (c.prices || []).map(p => ({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg })) })),
+      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, address: c.address, contact_name: c.contact_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand, products: (c.prices || []).map(p => ({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg })) })),
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -3601,7 +3601,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
     try {
       const parsed = await parseOrderWithAI(aiText, clients);
       const mapped = parsed.map(p => {
-        const matches = clients.filter(c => c.name.toLowerCase().includes(p.clientName.toLowerCase()) || p.clientName.toLowerCase().includes(c.name.toLowerCase()));
+        const q = (p.clientName || "").toLowerCase().trim();
+        // Ступенчатый поиск: имя → организация/контакт → адрес (если в заявке писали адресом)
+        let matches = clients.filter(c => c.name.toLowerCase().includes(q) || q.includes(c.name.toLowerCase()));
+        if (!matches.length) matches = clients.filter(c => (c.org_name || "").toLowerCase().includes(q) || (c.contact_name || "").toLowerCase() === q);
+        if (!matches.length && q.length >= 4) matches = clients.filter(c => c.address && (c.address.toLowerCase().includes(q) || q.includes(c.address.toLowerCase())));
         const chosen = matches.length === 1 ? matches[0] : null; // если совпало несколько (тёзки) — пусть выберет вручную
         return { ...p, trial: !!p.trial, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       });
