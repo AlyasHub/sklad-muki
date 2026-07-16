@@ -1192,6 +1192,33 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
   const blank = { date: TODAY(), brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", note: "", op: "in", reason: WRITEOFF_REASONS[0] };
   const [form, setForm] = useState(blank);
   const [audit, setAudit] = useState(null); // сверка по позиции: {brand, grade, bag_kg}
+  const [dupCheck, setDupCheck] = useState(false); // отчёт «дубли списаний»
+
+  // 🔎 Поиск двойных списаний: по каждой связке «клиент + позиция» сумма списаний (минус возвраты)
+  // должна равняться сумме отгруженных заявок. Расхождение > 0 — лишние списания (дубли).
+  const dupReport = (() => {
+    if (!dupCheck) return null;
+    const groups = {};
+    orders.filter(o => o.status === "отгружена" && !o.fromKaraganda).forEach(o => {
+      const k = `${o.clientName}|${o.brand}|${o.grade}|${o.bag_kg}`;
+      const g = groups[k] = groups[k] || { clientName: o.clientName, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, shipKg: 0, shipCnt: 0, rows: [] };
+      g.shipKg += o.bags * o.bag_kg; g.shipCnt++;
+    });
+    stock.forEach(s => {
+      const m = (s.note || "").match(/^(?:Отгрузка|Реализация|Возврат(?: \(отмена отгрузки\))?): (.+)$/);
+      if (!m) return;
+      const k = `${m[1]}|${s.brand}|${s.grade}|${s.bag_kg}`;
+      const g = groups[k] = groups[k] || { clientName: m[1], brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, shipKg: 0, shipCnt: 0, rows: [] };
+      g.rows.push(s);
+    });
+    const out = [];
+    Object.values(groups).forEach(g => {
+      const movedKg = g.rows.reduce((s2, r) => s2 + (r.weight_kg || 0), 0); // списания со знаком минус, возвраты — плюс
+      const diff = -movedKg - g.shipKg; // >0 — списано больше, чем отгружено (дубли); <0 — недосписано
+      if (Math.abs(diff) >= 1) out.push({ ...g, diff });
+    });
+    return out.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  })();
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
   const openEdit = s => {
@@ -1251,7 +1278,7 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3>{canEdit && <Btn onClick={openNew}>+ Операция</Btn>}</div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3><div className="flex gap-2">{canEdit && <Btn size="sm" variant="secondary" onClick={() => setDupCheck(true)}>🔎 Дубли</Btn>}{canEdit && <Btn onClick={openNew}>+ Операция</Btn>}</div></div>
       {canEdit && <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>}
       <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl p-5 text-white shadow-sm">
         <div className="text-sm font-medium text-amber-100">🌾 Всего муки на складе</div>
@@ -1355,6 +1382,42 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
           });
         })()}
       </div>
+      {dupCheck && dupReport && (
+        <Modal title="🔎 Проверка списаний (дубли)" onClose={() => setDupCheck(false)}>
+          <div className="text-xs text-gray-500 mb-3">Сверяю: по каждой связке «клиент + позиция» списано со склада должно быть ровно столько, сколько отгружено по заявкам. <b>Лишнее = дубли</b> — их можно удалить прямо здесь. Учти: если отгруженную заявку потом удалили, её списание остаётся — это не дубль.</div>
+          {dupReport.length === 0 ? (
+            <div className="bg-emerald-50 text-emerald-700 rounded-xl p-4 text-center font-bold">✓ Всё сходится — лишних списаний не найдено</div>
+          ) : dupReport.map((g, gi) => {
+            // строки с одинаковой датой и весом внутри группы — вероятные дубли
+            const cnt = {};
+            g.rows.forEach(r => { const k = `${r.date}|${r.weight_kg}`; cnt[k] = (cnt[k] || 0) + 1; });
+            return (
+              <div key={gi} className={`border rounded-xl p-3 mb-3 ${g.diff > 0 ? "border-red-300 bg-red-50" : "border-amber-300 bg-amber-50"}`}>
+                <div className="font-bold text-gray-900 text-sm">{g.clientName} · {g.brand} {g.grade} {g.bag_kg}кг</div>
+                <div className={`text-sm mt-0.5 ${g.diff > 0 ? "text-red-700" : "text-amber-700"}`}>
+                  Отгружено по заявкам: <b>{fmt(g.shipKg)} кг</b> ({g.shipCnt} поз.) · списано со склада: <b>{fmt(g.shipKg + g.diff)} кг</b> ({g.rows.filter(r => r.weight_kg < 0).length} строк)
+                  → {g.diff > 0 ? `лишние списания ${fmt(g.diff)} кг` : `недосписано ${fmt(-g.diff)} кг`}
+                </div>
+                <div className="mt-2 space-y-1">
+                  {g.rows.sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r, ri) => {
+                    const isDup = cnt[`${r.date}|${r.weight_kg}`] > 1 && r.weight_kg < 0;
+                    return (
+                      <div key={ri} className={`flex items-center justify-between gap-2 text-xs rounded-lg px-2 py-1.5 ${isDup ? "bg-red-100" : "bg-white"}`}>
+                        <span className="text-gray-600">{(r.date || "").split("-").reverse().join(".")} · {r.note}{isDup && <b className="text-red-700"> · возможный дубль</b>}</span>
+                        <span className="flex items-center gap-2 whitespace-nowrap">
+                          <b className={r.weight_kg < 0 ? "text-red-600" : "text-emerald-600"}>{r.weight_kg > 0 ? "+" : ""}{fmt(r.weight_kg)} кг</b>
+                          {canEdit && r.weight_kg < 0 && <button onClick={() => deleteMovement(r.id)} className="text-red-400 hover:text-red-600 font-bold" title="Удалить это списание">✕</button>}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </Modal>
+      )}
+
       {audit && (() => {
         const rows = stock
           .filter(s => s.brand === audit.brand && s.grade === audit.grade && String(s.bag_kg) === String(audit.bag_kg))
