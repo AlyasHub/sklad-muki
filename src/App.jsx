@@ -2845,49 +2845,53 @@ function SoftInvoiceTab({ clients, orders }) {
   const [docNum, setDocNum] = useState("1");
   const [rows, setRows] = useState([]);
 
-  const fillFromOrders = (cid, d) => {
-    const list = orders.filter(o => o.clientId === cid && o.date === d);
-    setRows(list.map(o => ({ name: `${o.brand} ${o.grade} ${o.bag_kg}кг`, qty: o.bags, price: Math.round((o.price_per_kg || 0) * o.bag_kg) })));
-  };
+  // Выбрал клиента → подставляем ВСЕ позиции его прайса (наименование + цена за мешок).
+  // Вручную остаётся заполнить только количество мешков; пустые строки в печать не идут.
   const pickClient = id => {
     setClientId(id);
     const c = clients.find(x => x.id === id);
     setBuyer(c ? c.name : "");
-    if (id) fillFromOrders(id, date);
+    setRows(c ? (c.prices || []).map(p => ({
+      name: `${p.brand} ${p.bag_kg} кг ${p.grade}`,
+      bag_kg: Number(p.bag_kg) || 0,
+      qty: "",
+      price: Math.round((p.price_per_kg || 0) * (Number(p.bag_kg) || 0)),
+    })) : []);
   };
-  const changeDate = d => { setDate(d); if (clientId) fillFromOrders(clientId, d); };
   const upd = (i, k, v) => setRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r));
-  const total = rows.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.price) || 0), 0);
+  const filled = rows.filter(r => Number(r.qty) > 0); // в печать идут только строки с количеством
+  const total = filled.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.price) || 0), 0);
+  const fmt2 = n => (Number(n) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const printInvoice = () => {
     const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const d = new Date(date + "T00:00:00");
     const day = isNaN(d) ? "" : d.getDate();
     const monthYear = isNaN(d) ? "" : `${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()} г`;
-    // строка таблицы: в шаблоне все 10 строк пронумерованы; числа — Times New Roman
-    const tr = i => {
-      const r = rows[i];
-      const sum = r ? (Number(r.qty) || 0) * (Number(r.price) || 0) : "";
-      return `<tr class="line"><td class="bx c">${i + 1}</td><td class="bx">${r ? esc(r.name) : ""}</td><td class="bx c">${r ? "шт" : ""}</td><td class="bx tnr">${r ? esc(r.qty) : ""}</td><td class="bx tnr">${r ? esc(r.price) : ""}</td><td class="bx c" colspan="2">${r && sum ? fmt(sum) : ""}</td></tr>`;
+    // строк ровно столько, сколько заполненных позиций; форматы чисел как в образце PDF (15,00 · 7 875,00 · 118 125)
+    const tr = (r, i) => {
+      const qty = Number(r.qty) || 0, price = Number(r.price) || 0;
+      const kg = qty * (Number(r.bag_kg) || 0);
+      return `<tr class="line"><td class="bx c">${i + 1}</td><td class="bx">${esc(r.name)}</td><td class="bx c tnr">${fmt2(qty)}</td><td class="bx c tnr">${fmt2(price)}</td><td class="bx c tnr">${kg ? fmt(kg) : ""}</td><td class="bx c">${fmt(qty * price)}</td></tr>`;
     };
     const copy = `
       <div class="hdr">Основное подразделение</div>
       <table class="doc">
-        <colgroup><col style="width:98px"><col style="width:220px"><col style="width:64px"><col style="width:88px"><col style="width:110px"><col style="width:95px"><col style="width:64px"></colgroup>
-        <tr style="height:40px"><td colspan="3"></td><td class="bx c b s10">Номер документа</td><td class="bx c b s10" colspan="3">Дата составления</td></tr>
-        <tr><td colspan="3"></td><td class="bx c">${esc(docNum)}</td><td class="bx c">${day}</td><td class="bx c" colspan="2">${monthYear}</td></tr>
+        <colgroup><col style="width:60px"><col style="width:230px"><col style="width:95px"><col style="width:105px"><col style="width:95px"><col style="width:110px"></colgroup>
+        <tr style="height:40px"><td colspan="2"></td><td class="bx c b s10">Номер документа</td><td class="bx c b s10" colspan="3">Дата составления</td></tr>
+        <tr><td colspan="2"></td><td class="bx c">${esc(docNum)}</td><td class="bx c">${day}</td><td class="bx c" colspan="2">${monthYear}</td></tr>
         <tr class="line"><td></td></tr>
         <tr class="line"><td></td></tr>
-        <tr class="line"><td class="b">Покупатель:</td><td class="ub" colspan="3">${esc(buyer)}</td></tr>
+        <tr class="line"><td class="b" style="white-space:nowrap">Покупатель:</td><td class="ub" colspan="3">${esc(buyer)}</td></tr>
         <tr class="line"><td></td></tr>
-        <tr style="height:40px"><td class="bx c b">№</td><td class="bx c b">Наименование, сорт, размер</td><td class="bx c b">Ед.измерения</td><td class="bx c b">Количество</td><td class="bx c b">Цена</td><td class="bx c b" colspan="2">Сумма</td></tr>
-        ${Array.from({ length: 10 }, (_, i) => tr(i)).join("")}
-        <tr style="height:21px"><td colspan="4"></td><td class="b s12">Итого: </td><td class="b s12">${fmt(total)}</td><td class="b">тенге</td></tr>
+        <tr style="height:40px"><td class="bx c b">№</td><td class="bx c b">Наименование, сорт, размер</td><td class="bx c b">Кол-во мешков</td><td class="bx c b">Цена за мешок</td><td class="bx c b">Кол-во кг</td><td class="bx c b">Сумма</td></tr>
+        ${filled.map((r, i) => tr(r, i)).join("")}
+        <tr style="height:24px"><td colspan="3"></td><td class="b s12" style="text-align:right">Итого: </td><td class="b s12 c">${fmt(total)}</td><td class="b">тенге</td></tr>
         <tr class="line"><td></td></tr>
         <tr class="line"><td></td></tr>
         <tr class="line"><td></td><td>Принял______________/</td></tr>
         <tr class="line"><td></td></tr>
-        <tr class="line"><td></td><td>Кассир ______________/</td><td colspan="2"></td><td colspan="3">Менеджер ______________/</td></tr>
+        <tr class="line"><td></td><td>Кассир ______________/</td><td colspan="2"></td><td colspan="2">Менеджер ______________/</td></tr>
       </table>`;
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Накладная</title><style>
       @page{size:A4 portrait;margin:7mm 10mm}
@@ -2918,32 +2922,43 @@ function SoftInvoiceTab({ clients, orders }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">🧾 Мягкая накладная по вашему шаблону — две копии на листе. Выбери клиента и дату: позиции подставятся из заявок этого дня (цена за мешок = цена/кг × фасовка). Всё можно поправить руками перед печатью.</div>
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">🧾 Выбери клиента — подставятся все позиции его прайса с ценами за мешок. Проставь <b>только количество мешков</b> у нужных позиций: в накладную попадут именно они, ровно столько строк. Печать — две копии на листе.</div>
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
         <Sel label="Клиент (покупатель)" value={clientId} onChange={e => pickClient(e.target.value)} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
         <div className="grid grid-cols-2 gap-3">
           <Inp label="Покупатель (как в накладной)" value={buyer} onChange={e => setBuyer(e.target.value)} placeholder="можно вписать вручную" />
-          <Inp label="Дата составления" type="date" value={date} onChange={e => changeDate(e.target.value)} />
+          <Inp label="Дата составления" type="date" value={date} onChange={e => setDate(e.target.value)} />
         </div>
         <div className="w-32"><Inp label="Номер документа" value={docNum} onChange={e => setDocNum(e.target.value)} /></div>
       </div>
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
         <div className="flex items-center justify-between mb-2">
-          <div className="font-bold text-gray-800">Позиции</div>
-          <Btn size="sm" variant="secondary" onClick={() => setRows(rs => [...rs, { name: "", qty: "", price: "" }])}>+ строка</Btn>
+          <div className="font-bold text-gray-800">Позиции из прайса клиента</div>
+          <Btn size="sm" variant="secondary" onClick={() => setRows(rs => [...rs, { name: "", bag_kg: 50, qty: "", price: "" }])}>+ строка</Btn>
         </div>
-        {rows.length === 0 && <div className="text-sm text-gray-400 text-center py-4">Позиций нет — выбери клиента с заявкой на эту дату или добавь строку вручную.</div>}
-        {rows.map((r, i) => (
-          <div key={i} className="grid grid-cols-[1fr_4.5rem_5rem_2rem] gap-2 items-end mb-2">
-            <Inp label={i === 0 ? "Наименование" : ""} value={r.name} onChange={e => upd(i, "name", e.target.value)} placeholder="ДАРАД Высший сорт 50кг" />
-            <Inp label={i === 0 ? "Кол-во" : ""} type="number" value={r.qty} onChange={e => upd(i, "qty", e.target.value)} />
-            <Inp label={i === 0 ? "Цена" : ""} type="number" value={r.price} onChange={e => upd(i, "price", e.target.value)} />
-            <button onClick={() => setRows(rs => rs.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600 pb-2 text-lg leading-none" title="Убрать">✕</button>
-          </div>
-        ))}
-        {rows.length > 0 && <div className="text-right font-bold text-gray-800 mt-2">Итого: {fmt(total)} тенге</div>}
+        {rows.length === 0 && <div className="text-sm text-gray-400 text-center py-4">{clientId ? "У этого клиента нет цен в карточке — добавь их во вкладке «Клиенты» или строку вручную." : "Выбери клиента — позиции его прайса появятся здесь."}</div>}
+        {rows.map((r, i) => {
+          const qty = Number(r.qty) || 0;
+          const kg = qty * (Number(r.bag_kg) || 0);
+          const sum = qty * (Number(r.price) || 0);
+          return (
+            <div key={i} className={`border rounded-xl p-3 mb-2 ${qty > 0 ? "border-emerald-300 bg-emerald-50" : "border-gray-100"}`}>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <input value={r.name} onChange={e => upd(i, "name", e.target.value)} placeholder="ДАРАД 50 кг Высший сорт" className="font-medium text-gray-900 bg-transparent flex-1 focus:outline-none border-b border-transparent focus:border-amber-300" />
+                <button onClick={() => setRows(rs => rs.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600 text-lg leading-none flex-shrink-0" title="Убрать">✕</button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <Inp label="Мешков" type="number" value={r.qty} onChange={e => upd(i, "qty", e.target.value)} placeholder="0" />
+                <Inp label="Цена за мешок" type="number" value={r.price} onChange={e => upd(i, "price", e.target.value)} />
+                <Inp label="Фасовка, кг" type="number" value={r.bag_kg} onChange={e => upd(i, "bag_kg", e.target.value)} />
+              </div>
+              {qty > 0 && <div className="text-xs text-emerald-700 font-medium mt-1">✓ в накладную: {fmt(kg)} кг · {fmt(sum)} тг</div>}
+            </div>
+          );
+        })}
+        {filled.length > 0 && <div className="text-right font-bold text-gray-800 mt-2">Позиций: {filled.length} · Итого: {fmt(total)} тенге</div>}
       </div>
-      <Btn onClick={printInvoice} disabled={!buyer || rows.length === 0} size="lg">🖨 Печать (2 копии на листе)</Btn>
+      <Btn onClick={printInvoice} disabled={!buyer || filled.length === 0} size="lg">🖨 Печать (2 копии на листе)</Btn>
     </div>
   );
 }
