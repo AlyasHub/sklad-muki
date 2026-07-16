@@ -3603,11 +3603,12 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
       const mapped = parsed.map(p => {
         const q = (p.clientName || "").toLowerCase().trim();
         // Ступенчатый поиск: имя → организация/контакт → адрес (если в заявке писали адресом)
+        let matchBy = "имя";
         let matches = clients.filter(c => c.name.toLowerCase().includes(q) || q.includes(c.name.toLowerCase()));
-        if (!matches.length) matches = clients.filter(c => (c.org_name || "").toLowerCase().includes(q) || (c.contact_name || "").toLowerCase() === q);
-        if (!matches.length && q.length >= 4) matches = clients.filter(c => c.address && (c.address.toLowerCase().includes(q) || q.includes(c.address.toLowerCase())));
-        const chosen = matches.length === 1 ? matches[0] : null; // если совпало несколько (тёзки) — пусть выберет вручную
-        return { ...p, trial: !!p.trial, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
+        if (!matches.length) { matchBy = "организация"; matches = clients.filter(c => (c.org_name || "").toLowerCase().includes(q) || (c.contact_name || "").toLowerCase() === q); }
+        if (!matches.length && q.length >= 4) { matchBy = "адрес"; matches = clients.filter(c => c.address && (c.address.toLowerCase().includes(q) || q.includes(c.address.toLowerCase()))); }
+        const chosen = matches.length === 1 ? matches[0] : null; // если совпало несколько (тёзки/похожие адреса) — пусть выберет вручную
+        return { ...p, trial: !!p.trial, matchBy, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       });
       setAiResult(mapped);
       setAiDriver(""); setAiPickup(false); // водителя/самовывоз выбираем вручную каждый раз
@@ -3766,16 +3767,18 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
           <div className="mt-3 border-t border-gray-100 pt-3 space-y-2">
             {aiResult.map((p, i) => (
               <div key={i} className="bg-gray-50 rounded-xl p-3 text-sm">
-                <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{(p.matchOptions || []).length === 0 && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
-                {(p.matchOptions || []).length > 1 && (
-                  <div className="mt-1">
-                    <div className="text-xs text-orange-600 mb-1">⚠️ Несколько клиентов с таким названием — выбери нужного:</div>
-                    <select value={p.clientId || ""} onChange={e => chooseClient(i, e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
-                      <option value="">— выбери клиента —</option>
-                      {p.matchOptions.map(c => <option key={c.id} value={c.id}>{c.name}{c.org_name ? ` (${c.org_name})` : ""}</option>)}
-                    </select>
-                  </div>
-                )}
+                <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{(p.matchOptions || []).length === 0 && <Badge color="red">Не в базе</Badge>}{p.clientId && p.matchBy === "адрес" && <Badge color="yellow">📍 найден по адресу — проверь</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
+                {p.clientId && (() => {
+                  const c = clients.find(x => x.id === p.clientId);
+                  return c && (c.org_name || c.address) ? <div className="text-xs text-gray-500 mt-0.5">{c.org_name ? `🏢 ${c.org_name}` : ""}{c.org_name && c.address ? " · " : ""}{c.address ? `📍 ${c.address}` : ""}</div> : null;
+                })()}
+                <div className="mt-1">
+                  {(p.matchOptions || []).length > 1 && <div className="text-xs text-orange-600 mb-1">⚠️ Несколько похожих клиентов — выбери, какая именно организация:</div>}
+                  <select value={p.clientId || ""} onChange={e => chooseClient(i, e.target.value)} className={`w-full border rounded-lg px-2 py-1.5 text-xs ${(p.matchOptions || []).length > 1 && !p.clientId ? "border-orange-300 bg-orange-50" : "border-gray-200 text-gray-500"}`}>
+                    <option value="">— клиент не выбран —</option>
+                    {[...clients].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru")).map(c => <option key={c.id} value={c.id}>{c.name}{c.org_name ? ` (${c.org_name})` : ""}{c.address ? ` — ${c.address}` : ""}</option>)}
+                  </select>
+                </div>
                 <div className="text-gray-600 mt-1">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
                 <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">бесплатно</span> : (p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">цена не найдена</span>)}</div>
                 {p.note && <div className="text-amber-800 bg-amber-50 rounded px-2 py-1 mt-1 text-xs">📝 {p.note}</div>}
