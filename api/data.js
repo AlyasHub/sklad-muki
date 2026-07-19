@@ -1,6 +1,6 @@
 // Привратник базы. Все чтения/записи идут сюда. Проверяет токен и роль,
 // отдаёт только то, что роли положено. Водитель НЕ может прочитать клиентов/цены/чужие отгрузки.
-import { verifyToken, signToken, dbList, dbUpsert, dbDelete, configured } from "./_lib.js";
+import { verifyToken, signToken, dbList, dbUpsert, dbDelete, configured, orderLinkSig } from "./_lib.js";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -36,6 +36,13 @@ export default async function handler(req, res) {
       // Пока человек пользуется приложением, его больше не выкинет на вход.
       const fresh_token = (u.exp && u.exp - Date.now() < 7 * 864e5) ? signToken({ uid: u.uid, role: u.role, driverId: u.driverId || "", name: u.name, exp: Date.now() + 30 * 864e5 }) : null;
       return res.status(200).json(fresh_token ? { data: out, fresh_token } : { data: out });
+    }
+    // Подпись клиентской заказ-ссылки (только администратор)
+    if (op === "orderLink") {
+      if (u.role !== "director") return res.status(403).json({ error: "Только для администратора" });
+      const cid = (req.body || {}).clientId;
+      if (!cid) return res.status(400).json({ error: "Нет клиента" });
+      return res.status(200).json({ sig: orderLinkSig(cid) });
     }
     if (op === "list") return res.status(200).json({ rows: await listFor(u, table) });
     if (op === "upsert") { await upsertFor(u, table, item); return res.status(200).json({ ok: true }); }

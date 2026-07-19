@@ -693,9 +693,12 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
       </div>
 
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
           <h4 className="font-semibold text-gray-700">Отгрузки на {selected.split("-").reverse().join(".")}</h4>
-          {dayKg > 0 && <span className="text-sm text-gray-500">📦 {fmt(dayKg)} кг</span>}
+          {dayKg > 0 && (() => {
+            const leftKg = dayOrders.filter(o => o.status !== "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
+            return <span className="text-sm text-gray-500">📦 {fmt(dayKg)} кг{leftKg > 0 ? <> · <b className="text-amber-700">осталось {fmt(leftKg)} кг</b></> : <> · <b className="text-emerald-600">✓ всё отгружено</b></>}</span>;
+          })()}
         </div>
         {!driverMode && dayOrders.length > 0 && (
           <div className="flex gap-2 mb-3">
@@ -732,7 +735,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && <Badge color="blue">🚶 Самовывоз</Badge>}{isOneOff && <Badge color="green">💰 разовая</Badge>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && <Badge color="blue">🚶 Самовывоз</Badge>}{isOneOff && <Badge color="green">💰 разовая</Badge>}{g.orders.some(o => o.from_client) && <Badge color="blue">🌐 от клиента</Badge>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
@@ -1294,6 +1297,10 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
         <div className="text-4xl font-black mt-1">{fmt(totalKg)} кг</div>
         <div className="text-sm text-amber-100 mt-1">≈ {fmt(Math.round(totalKg / 100) / 10)} т · {fmt(totalBags)} мешков · {Object.values(balances).filter(b => b.kg > 0).length} видов</div>
         <div className="text-sm text-amber-100 mt-1.5 border-t border-amber-400 pt-1.5">Сегодня: <b className="text-white">▲ +{fmt(todayIn)} кг</b> приход · <b className="text-white">▼ −{fmt(todayOut)} кг</b> расход</div>
+        {(() => {
+          const reservedKg = orders.filter(o => (o.status === "новая" || o.status === "в пути") && !o.fromKaraganda).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+          return <div className="text-sm text-amber-100 mt-1">📋 В заявках (бронь): <b className="text-white">{fmt(reservedKg)} кг</b> · свободно: <b className="text-white">{fmt(totalKg - reservedKg)} кг</b></div>;
+        })()}
       </div>
       {negatives.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
@@ -1563,7 +1570,22 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
     try { await dbUpsert("clients", { id: editId || uid(), ...form }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
-  const deleteClient = async id => { await dbDelete("clients", id); await reload("clients"); };
+  const deleteClient = async id => {
+    const c = clients.find(x => x.id === id);
+    if (!confirm(`Удалить клиента «${c?.name || "?"}»? Карточка с ценами и реквизитами удалится (история заявок останется).`)) return;
+    await dbDelete("clients", id); await reload("clients");
+  };
+  // Персональная заказ-ссылка: клиент открывает её и сам отправляет заявку — она падает к нам со статусом «новая»
+  const copyOrderLink = async c => {
+    try {
+      const d = await apiData("orderLink", null, { clientId: c.id });
+      const link = `${location.origin}/order.html?c=${c.id}&k=${d.sig}`;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(link);
+        alert(`✓ Ссылка скопирована — отправь клиенту «${c.name}» в WhatsApp.\nОн сам выберет позиции из своего прайса, и заявка придёт к нам как «новая».`);
+      } else window.prompt("Скопируй ссылку для клиента:", link);
+    } catch (e) { alert("⚠️ " + (e.message || e)); }
+  };
 
   // Дата последнего заказа по каждому клиенту (любая продажа, включая Караганду)
   const STALE_DAYS = 14;
@@ -1682,7 +1704,10 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
               </div>
               {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}>✕</Btn></div>}
             </div>
-            <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
+            <div className="flex gap-2 flex-wrap">
+              <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
+              {canEdit && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}>🔗 Заказ-ссылка</Btn>}
+            </div>
           </div>
           );
         })}
@@ -3859,7 +3884,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
                 {shipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚶 Самовывоз</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">💰 разовая</span>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚶 Самовывоз</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">💰 разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">🌐 от клиента</span>}</span>
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
                   </div>
                   <div className="space-y-1">

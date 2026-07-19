@@ -56,3 +56,8 @@ export async function dbDelete(table, id) {
 }
 
 export const SERVICE_KEY_RAW = SERVICE_KEY; // для загрузки фото
+
+// Подпись для клиентской заказ-ссылки: без неё чужой не сможет ни увидеть прайс, ни отправить заявку
+export function orderLinkSig(clientId) {
+  return crypto.createHmac("sha256", AUTH_SECRET).update("order-link:" + clientId).digest("base64url").slice(0, 20);
+}
