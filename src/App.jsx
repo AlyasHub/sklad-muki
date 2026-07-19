@@ -1219,7 +1219,14 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
       const diff = -movedKg - g.shipKg; // >0 — списано больше, чем отгружено (дубли); <0 — недосписано
       if (Math.abs(diff) >= 1) out.push({ ...g, diff });
     });
-    return out.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+    // Дубли ПРИХОДОВ: два одинаковых прихода одной датой (позиция, вес и примечание совпадают)
+    const inMap = {};
+    stock.filter(s => s.weight_kg > 0 && !/^Возврат/.test(s.note || "")).forEach(s => {
+      const k = `${s.date}|${s.brand}|${s.grade}|${s.bag_kg}|${s.weight_kg}|${s.note || ""}`;
+      (inMap[k] = inMap[k] || []).push(s);
+    });
+    const inDups = Object.values(inMap).filter(g2 => g2.length > 1).sort((a, b) => b[0].weight_kg * b.length - a[0].weight_kg * a.length);
+    return { groups: out.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)), inDups };
   })();
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
@@ -1387,9 +1394,9 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
       {dupCheck && dupReport && (
         <Modal title="🔎 Проверка списаний (дубли)" onClose={() => setDupCheck(false)}>
           <div className="text-xs text-gray-500 mb-3">Сверяю: по каждой связке «клиент + позиция» списано со склада должно быть ровно столько, сколько отгружено по заявкам. <b>Лишнее = дубли</b> — их можно удалить прямо здесь. Учти: если отгруженную заявку потом удалили, её списание остаётся — это не дубль.</div>
-          {dupReport.length === 0 ? (
-            <div className="bg-emerald-50 text-emerald-700 rounded-xl p-4 text-center font-bold">✓ Всё сходится — лишних списаний не найдено</div>
-          ) : dupReport.map((g, gi) => {
+          {dupReport.groups.length === 0 && dupReport.inDups.length === 0 ? (
+            <div className="bg-emerald-50 text-emerald-700 rounded-xl p-4 text-center font-bold">✓ Всё сходится — лишних списаний и приходов не найдено</div>
+          ) : dupReport.groups.map((g, gi) => {
             // строки с одинаковой датой и весом внутри группы — вероятные дубли
             const cnt = {};
             g.rows.forEach(r => { const k = `${r.date}|${r.weight_kg}`; cnt[k] = (cnt[k] || 0) + 1; });
@@ -1417,6 +1424,29 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
               </div>
             );
           })}
+          {dupReport.inDups.length > 0 && (
+            <>
+              <div className="font-bold text-gray-800 text-sm mt-4 mb-1">▲ Приходы, похожие на дубли</div>
+              <div className="text-xs text-gray-500 mb-2">Одинаковые приходы одной датой (позиция, вес и примечание совпадают). Если приход на самом деле был один — удали лишний, остаток пересчитается.</div>
+              {dupReport.inDups.map((g2, gi) => (
+                <div key={gi} className="border border-red-300 bg-red-50 rounded-xl p-3 mb-3">
+                  <div className="font-bold text-gray-900 text-sm">{g2[0].brand} {g2[0].grade} {g2[0].bag_kg}кг · {(g2[0].date || "").split("-").reverse().join(".")}</div>
+                  <div className="text-sm text-red-700 mt-0.5">{g2.length} одинаковых прихода по <b>+{fmt(g2[0].weight_kg)} кг</b>{g2[0].note ? ` · «${g2[0].note}»` : ""}</div>
+                  <div className="mt-2 space-y-1">
+                    {g2.map((r, ri) => (
+                      <div key={ri} className="flex items-center justify-between gap-2 text-xs bg-white rounded-lg px-2 py-1.5">
+                        <span className="text-gray-600">{(r.date || "").split("-").reverse().join(".")} · {r.note || "Приход"}{ri > 0 && <b className="text-red-700"> · возможный дубль</b>}</span>
+                        <span className="flex items-center gap-2 whitespace-nowrap">
+                          <b className="text-emerald-600">+{fmt(r.weight_kg)} кг</b>
+                          {canEdit && <button onClick={() => deleteMovement(r.id)} className="text-red-400 hover:text-red-600 font-bold" title="Удалить этот приход">✕</button>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
         </Modal>
       )}
 
@@ -2448,8 +2478,9 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
     setSaving(true);
     try {
       if (status === "принята" && t.status !== "принята") {
-        for (const item of t.items) { const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: uid(), date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` }); }
-        if (t.price) await dbUpsert("expenses", { id: uid(), date: TODAY(), category: "Фура/Поставка", amount: Number(t.price), note: `Фура от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}` });
+        // id прихода привязан к фуре и позиции — двойное нажатие «Принять» перезапишет те же строки, а не задвоит их
+        for (let i = 0; i < t.items.length; i++) { const item = t.items[i]; const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: `tin_${t.id}_${i}`, date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` }); }
+        if (t.price) await dbUpsert("expenses", { id: "texp_" + t.id, date: TODAY(), category: "Фура/Поставка", amount: Number(t.price), note: `Фура от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}` });
         await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
         await reload("stock"); await reload("expenses");
       } else {
