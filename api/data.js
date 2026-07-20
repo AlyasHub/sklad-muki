@@ -36,6 +36,10 @@ export async function makeSnapshot(by) {
   } catch {}
   return { id: snap.id, at: snap.at, counts };
 }
+// Снимок целиком (для скачивания и отправки на почту)
+export async function getSnapshot(id) {
+  return (await dbList("backups")).find(x => x.id === id) || null;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });

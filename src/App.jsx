@@ -2908,7 +2908,7 @@ function BackupLog() {
               <div className="font-bold text-gray-800 text-sm">💾 Резервные копии</div>
               <Btn size="sm" onClick={makeNow} disabled={busy === "now"}>{busy === "now" ? "Делаю..." : "Сделать копию"}</Btn>
             </div>
-            <div className="text-xs text-gray-400 mb-2">Копия базы создаётся автоматически каждый день. Хранятся последние 14.</div>
+            <div className="text-xs text-gray-400 mb-2">Копия базы создаётся автоматически раз в неделю (воскресенье, 21:00) и уходит файлом на почту. Хранятся последние 14 — это ~3 месяца.</div>
             {backups.length === 0 && <div className="text-sm text-gray-400 py-2">Копий пока нет — нажми «Сделать копию».</div>}
             {backups.map(b => (
               <div key={b.id} className="flex items-center justify-between gap-2 text-sm py-1.5 border-b border-gray-50 last:border-b-0">
