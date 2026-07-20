@@ -1521,7 +1521,39 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
   const [histTo, setHistTo] = useState(TODAY());
   const [search, setSearch] = useState("");
   const [staleOnly, setStaleOnly] = useState(false);
+  const [showRestore, setShowRestore] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
+
+  // Удалённые клиенты: в заявках остались их ID/имя, а карточки в базе уже нет — можно восстановить
+  const orphans = (() => {
+    const ids = new Set(clients.map(c => c.id));
+    const m = {};
+    orders.forEach(o => {
+      if (!o.clientId || o.oneOff || ids.has(o.clientId)) return; // разовые (без карточки) и живые клиенты пропускаем
+      const g = m[o.clientId] = m[o.clientId] || { id: o.clientId, name: o.clientName || "?", orders: [], lastDate: "" };
+      g.orders.push(o);
+      if ((o.date || "") > g.lastDate) g.lastDate = o.date;
+    });
+    return Object.values(m).sort((a, b) => (b.lastDate || "").localeCompare(a.lastDate || ""));
+  })();
+  const restoreClient = async g => {
+    if (!confirm(`Восстановить клиента «${g.name}»? Вернутся имя, цены и вся история заявок/долгов. Реквизиты (БИН, адрес, банк) нужно будет вписать заново.`)) return;
+    // Цены: берём последнюю цену по каждой связке бренд|сорт|фасовка из его заявок
+    const prices = [], seen = {};
+    [...g.orders].sort((a, b) => (b.date || "").localeCompare(a.date || "")).forEach(o => {
+      const k = `${o.brand}|${o.grade}|${o.bag_kg}`;
+      if (!seen[k] && !o.trial && (o.price_per_kg || 0) > 0) { seen[k] = true; prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); }
+    });
+    // Бренд/фасовка по умолчанию — самые частые в заявках
+    const freq = (key, num) => { const c = {}; g.orders.forEach(o => { const v = o[key]; if (v) c[v] = (c[v] || 0) + 1; }); const top = Object.entries(c).sort((a, b) => b[1] - a[1])[0]; return top ? (num ? Number(top[0]) : top[0]) : ""; };
+    try {
+      // ВАЖНО: тот же id — чтобы вся история (заявки, долги) снова подцепилась к карточке
+      await dbUpsert("clients", { id: g.id, name: g.name, org_name: "", contact_name: "", address: "", contact: "", default_brand: freq("brand"), default_bag_kg: freq("bag_kg", true), prices });
+      await reload("clients");
+      setShowRestore(false);
+      alert(`✓ «${g.name}» восстановлен — имя, цены (${prices.length}) и вся история на месте. Открой карточку (✏️) и допиши реквизиты: БИН, адрес, банк, телефон.`);
+    } catch (e) { alert("⚠️ Не восстановилось: " + (e && e.message ? e.message : e)); }
+  };
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
   const [clientText, setClientText] = useState("");
   const [parsingClient, setParsingClient] = useState(false);
@@ -1602,7 +1634,21 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3>{canEdit && <Btn onClick={openNew}>+ Новый клиент</Btn>}</div>
+      <div className="flex items-center justify-between gap-2 flex-wrap"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3><div className="flex gap-2">{canEdit && orphans.length > 0 && <Btn size="sm" variant="secondary" onClick={() => setShowRestore(true)}>↩️ Восстановить ({orphans.length})</Btn>}{canEdit && <Btn onClick={openNew}>+ Новый клиент</Btn>}</div></div>
+      {showRestore && (
+        <Modal title="↩️ Восстановить удалённого клиента" onClose={() => setShowRestore(false)}>
+          <div className="text-xs text-gray-500 mb-3">Эти клиенты удалены из базы, но в заявках сохранилась их история. Восстановление вернёт имя, цены и всю историю (долги, заявки). Реквизиты нужно будет вписать заново.</div>
+          {orphans.length === 0 ? <div className="text-center text-gray-400 py-6">Удалённых клиентов не найдено.</div> : orphans.map(g => (
+            <div key={g.id} className="flex items-center justify-between gap-2 border border-gray-100 rounded-xl p-3 mb-2">
+              <div className="min-w-0">
+                <div className="font-bold text-gray-900 truncate">{g.name}</div>
+                <div className="text-xs text-gray-500">{g.orders.length} заявок · последняя {g.lastDate ? g.lastDate.split("-").reverse().join(".") : "—"}</div>
+              </div>
+              <Btn size="sm" onClick={() => restoreClient(g)}>Восстановить</Btn>
+            </div>
+          ))}
+        </Modal>
+      )}
       <div className="space-y-2">
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Поиск по имени, организации, телефону" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
         {staleCount > 0 && (
