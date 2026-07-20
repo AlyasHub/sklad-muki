@@ -1543,16 +1543,21 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
     const ids = new Set(clients.map(c => c.id));
     const byId = {}, byName = {};
     orders.forEach(o => {
-      if (o.oneOff || o.isSample) return; // разовые продажи и пробники новых компаний — не клиенты базы
       if (o.clientId) {
         if (ids.has(o.clientId)) return;
         const g = byId[o.clientId] = byId[o.clientId] || { id: o.clientId, name: o.clientName || "?", orders: [], lastDate: "" };
         g.orders.push(o); if ((o.date || "") > g.lastDate) g.lastDate = o.date;
       } else {
+        // Заявки без карточки: разовые продажи, самовывоз, пробники, неузнанные разбором — всё сюда
         const nm = (o.clientName || "").trim();
         if (!nm) return;
-        const g = byName[nm.toLowerCase()] = byName[nm.toLowerCase()] || { name: nm, orders: [], lastDate: "" };
-        g.orders.push(o); if ((o.date || "") > g.lastDate) g.lastDate = o.date;
+        const key = nm.toLowerCase();
+        const g = byName[key] = byName[key] || { name: nm, orders: [], lastDate: "", kinds: new Set() };
+        g.orders.push(o);
+        if (o.oneOff) g.kinds.add("разовая продажа");
+        if (o.pickup) g.kinds.add("самовывоз");
+        if (o.isSample) g.kinds.add("проба");
+        if ((o.date || "") > g.lastDate) g.lastDate = o.date;
       }
     });
     const byDate = (a, b) => (b.lastDate || "").localeCompare(a.lastDate || "");
@@ -1582,7 +1587,9 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
       let id = exist?.id;
       if (!exist) {
         id = uid();
-        await dbUpsert("clients", { id, name: g.name, org_name: "", contact_name: "", address: "", contact: "", default_brand: freqOf(g.orders, "brand"), default_bag_kg: freqOf(g.orders, "bag_kg", true), prices: pricesFromOrders(g.orders) });
+        // если это были разовые продажи с доставкой — подтянем адрес и точку 2ГИС из заявки
+        const withAddr = g.orders.find(o => o.oneOffAddress || o.gis_link || o.coords) || {};
+        await dbUpsert("clients", { id, name: g.name, org_name: "", contact_name: "", address: withAddr.oneOffAddress || "", contact: "", gis_link: withAddr.gis_link || "", coords: withAddr.coords || null, default_brand: freqOf(g.orders, "brand"), default_bag_kg: freqOf(g.orders, "bag_kg", true), prices: pricesFromOrders(g.orders) });
       }
       for (const o of g.orders) await dbUpsert("orders", { ...o, clientId: id });
       await reload("clients"); await reload("orders");
@@ -1693,14 +1700,15 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
           {unlinked.length > 0 && (
             <>
               <div className="font-bold text-gray-800 text-sm mb-1 mt-3">Заявки без карточки клиента</div>
-              <div className="text-xs text-gray-500 mb-2">Записаны только по имени — карточку удалили или разбор из WhatsApp не узнал клиента. Создадим карточку из этих заявок (или привяжем к существующей с таким же именем).</div>
+              <div className="text-xs text-gray-500 mb-2">Записаны только по имени: разовые продажи, самовывоз, пробы или заявки, где разбор не узнал клиента. Создадим карточку из этих заявок (или привяжем к существующей с таким же именем).</div>
               {unlinked.map((g, i) => {
                 const exist = clients.find(c => (c.name || "").toLowerCase().trim() === g.name.toLowerCase().trim());
+                const kinds = [...(g.kinds || [])].join(", ");
                 return (
                   <div key={i} className="flex items-center justify-between gap-2 border border-gray-100 rounded-xl p-3 mb-2">
                     <div className="min-w-0">
                       <div className="font-bold text-gray-900 truncate">{g.name}</div>
-                      <div className="text-xs text-gray-500">{g.orders.length} заявок · последняя {g.lastDate ? g.lastDate.split("-").reverse().join(".") : "—"}{exist ? " · есть карточка с таким именем" : ""}</div>
+                      <div className="text-xs text-gray-500">{g.orders.length} заявок · последняя {g.lastDate ? g.lastDate.split("-").reverse().join(".") : "—"}{kinds ? ` · ${kinds}` : ""}{exist ? " · есть карточка с таким именем" : ""}</div>
                     </div>
                     <Btn size="sm" onClick={() => linkUnlinked(g)}>{exist ? "Привязать" : "Создать"}</Btn>
                   </div>
