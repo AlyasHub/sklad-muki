@@ -1524,35 +1524,71 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
   const [showRestore, setShowRestore] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
 
-  // Удалённые клиенты: в заявках остались их ID/имя, а карточки в базе уже нет — можно восстановить
-  const orphans = (() => {
-    const ids = new Set(clients.map(c => c.id));
-    const m = {};
-    orders.forEach(o => {
-      if (!o.clientId || o.oneOff || ids.has(o.clientId)) return; // разовые (без карточки) и живые клиенты пропускаем
-      const g = m[o.clientId] = m[o.clientId] || { id: o.clientId, name: o.clientName || "?", orders: [], lastDate: "" };
-      g.orders.push(o);
-      if ((o.date || "") > g.lastDate) g.lastDate = o.date;
-    });
-    return Object.values(m).sort((a, b) => (b.lastDate || "").localeCompare(a.lastDate || ""));
-  })();
-  const restoreClient = async g => {
-    if (!confirm(`Восстановить клиента «${g.name}»? Вернутся имя, цены и вся история заявок/долгов. Реквизиты (БИН, адрес, банк) нужно будет вписать заново.`)) return;
-    // Цены: берём последнюю цену по каждой связке бренд|сорт|фасовка из его заявок
+  // Пересобираем цены из заявок: последняя цена по каждой связке бренд|сорт|фасовка
+  const pricesFromOrders = list => {
     const prices = [], seen = {};
-    [...g.orders].sort((a, b) => (b.date || "").localeCompare(a.date || "")).forEach(o => {
+    [...list].sort((a, b) => (b.date || "").localeCompare(a.date || "")).forEach(o => {
       const k = `${o.brand}|${o.grade}|${o.bag_kg}`;
       if (!seen[k] && !o.trial && (o.price_per_kg || 0) > 0) { seen[k] = true; prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); }
     });
-    // Бренд/фасовка по умолчанию — самые частые в заявках
-    const freq = (key, num) => { const c = {}; g.orders.forEach(o => { const v = o[key]; if (v) c[v] = (c[v] || 0) + 1; }); const top = Object.entries(c).sort((a, b) => b[1] - a[1])[0]; return top ? (num ? Number(top[0]) : top[0]) : ""; };
+    return prices;
+  };
+  const freqOf = (list, key, num) => { const c = {}; list.forEach(o => { const v = o[key]; if (v) c[v] = (c[v] || 0) + 1; }); const top = Object.entries(c).sort((a, b) => b[1] - a[1])[0]; return top ? (num ? Number(top[0]) : top[0]) : ""; };
+
+  // Что можно восстановить:
+  // 1) orphans — заявки привязаны к ID, но карточки в базе нет (клиента удалили)
+  // 2) unlinked — заявки записаны только по имени, без привязки к карточке
+  //    (так бывает, когда разбор из WhatsApp не узнал клиента, либо карточку удалили давно)
+  const { orphans, unlinked } = (() => {
+    const ids = new Set(clients.map(c => c.id));
+    const byId = {}, byName = {};
+    orders.forEach(o => {
+      if (o.oneOff || o.isSample) return; // разовые продажи и пробники новых компаний — не клиенты базы
+      if (o.clientId) {
+        if (ids.has(o.clientId)) return;
+        const g = byId[o.clientId] = byId[o.clientId] || { id: o.clientId, name: o.clientName || "?", orders: [], lastDate: "" };
+        g.orders.push(o); if ((o.date || "") > g.lastDate) g.lastDate = o.date;
+      } else {
+        const nm = (o.clientName || "").trim();
+        if (!nm) return;
+        const g = byName[nm.toLowerCase()] = byName[nm.toLowerCase()] || { name: nm, orders: [], lastDate: "" };
+        g.orders.push(o); if ((o.date || "") > g.lastDate) g.lastDate = o.date;
+      }
+    });
+    const byDate = (a, b) => (b.lastDate || "").localeCompare(a.lastDate || "");
+    return { orphans: Object.values(byId).sort(byDate), unlinked: Object.values(byName).sort(byDate) };
+  })();
+
+  const restoreClient = async g => {
+    if (!confirm(`Восстановить клиента «${g.name}»? Вернутся имя, цены и вся история заявок/долгов. Реквизиты (БИН, адрес, банк) нужно будет вписать заново.`)) return;
+    const prices = pricesFromOrders(g.orders);
     try {
       // ВАЖНО: тот же id — чтобы вся история (заявки, долги) снова подцепилась к карточке
-      await dbUpsert("clients", { id: g.id, name: g.name, org_name: "", contact_name: "", address: "", contact: "", default_brand: freq("brand"), default_bag_kg: freq("bag_kg", true), prices });
+      await dbUpsert("clients", { id: g.id, name: g.name, org_name: "", contact_name: "", address: "", contact: "", default_brand: freqOf(g.orders, "brand"), default_bag_kg: freqOf(g.orders, "bag_kg", true), prices });
       await reload("clients");
       setShowRestore(false);
       alert(`✓ «${g.name}» восстановлен — имя, цены (${prices.length}) и вся история на месте. Открой карточку (✏️) и допиши реквизиты: БИН, адрес, банк, телефон.`);
     } catch (e) { alert("⚠️ Не восстановилось: " + (e && e.message ? e.message : e)); }
+  };
+
+  // Заявки только по имени: создаём карточку (или привязываем к существующей) и подшиваем к ней историю
+  const linkUnlinked = async g => {
+    const exist = clients.find(c => (c.name || "").toLowerCase().trim() === g.name.toLowerCase().trim());
+    const msg = exist
+      ? `Привязать ${g.orders.length} заявок к существующему клиенту «${exist.name}»? Его история и долги пополнятся этими заявками.`
+      : `Создать клиента «${g.name}» из его ${g.orders.length} заявок? Подставим цены из истории, заявки привяжутся к карточке. Реквизиты впишешь потом.`;
+    if (!confirm(msg)) return;
+    try {
+      let id = exist?.id;
+      if (!exist) {
+        id = uid();
+        await dbUpsert("clients", { id, name: g.name, org_name: "", contact_name: "", address: "", contact: "", default_brand: freqOf(g.orders, "brand"), default_bag_kg: freqOf(g.orders, "bag_kg", true), prices: pricesFromOrders(g.orders) });
+      }
+      for (const o of g.orders) await dbUpsert("orders", { ...o, clientId: id });
+      await reload("clients"); await reload("orders");
+      setShowRestore(false);
+      alert(`✓ Готово: «${g.name}» ${exist ? "получил" : "создан и получил"} ${g.orders.length} заявок из истории. Допиши реквизиты в карточке (✏️).`);
+    } catch (e) { alert("⚠️ Не получилось: " + (e && e.message ? e.message : e)); }
   };
   const [pf, setPf] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
   const [clientText, setClientText] = useState("");
@@ -1634,26 +1670,52 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-2 flex-wrap"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3><div className="flex gap-2">{canEdit && <Btn size="sm" variant="secondary" onClick={() => setShowRestore(true)}>↩️ Восстановить{orphans.length > 0 ? ` (${orphans.length})` : ""}</Btn>}{canEdit && <Btn onClick={openNew}>+ Новый клиент</Btn>}</div></div>
+      <div className="flex items-center justify-between gap-2 flex-wrap"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3><div className="flex gap-2">{canEdit && <Btn size="sm" variant="secondary" onClick={() => setShowRestore(true)}>↩️ Восстановить{orphans.length + unlinked.length > 0 ? ` (${orphans.length + unlinked.length})` : ""}</Btn>}{canEdit && <Btn onClick={openNew}>+ Новый клиент</Btn>}</div></div>
       {showRestore && (
         <Modal title="↩️ Восстановить удалённого клиента" onClose={() => setShowRestore(false)}>
-          <div className="text-xs text-gray-500 mb-3">Эти клиенты удалены из базы, но в заявках сохранилась их история. Восстановление вернёт имя, цены и всю историю (долги, заявки). Реквизиты нужно будет вписать заново.</div>
-          {orphans.length === 0 ? (
+          <div className="text-xs text-gray-500 mb-3">Восстановление вернёт имя, цены и всю историю (заявки, долги). Реквизиты (БИН, адрес, банк) нужно вписать заново.</div>
+
+          {orphans.length > 0 && (
+            <>
+              <div className="font-bold text-gray-800 text-sm mb-1">Удалённые клиенты</div>
+              {orphans.map(g => (
+                <div key={g.id} className="flex items-center justify-between gap-2 border border-gray-100 rounded-xl p-3 mb-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-gray-900 truncate">{g.name}</div>
+                    <div className="text-xs text-gray-500">{g.orders.length} заявок · последняя {g.lastDate ? g.lastDate.split("-").reverse().join(".") : "—"}</div>
+                  </div>
+                  <Btn size="sm" onClick={() => restoreClient(g)}>Восстановить</Btn>
+                </div>
+              ))}
+            </>
+          )}
+
+          {unlinked.length > 0 && (
+            <>
+              <div className="font-bold text-gray-800 text-sm mb-1 mt-3">Заявки без карточки клиента</div>
+              <div className="text-xs text-gray-500 mb-2">Записаны только по имени — карточку удалили или разбор из WhatsApp не узнал клиента. Создадим карточку из этих заявок (или привяжем к существующей с таким же именем).</div>
+              {unlinked.map((g, i) => {
+                const exist = clients.find(c => (c.name || "").toLowerCase().trim() === g.name.toLowerCase().trim());
+                return (
+                  <div key={i} className="flex items-center justify-between gap-2 border border-gray-100 rounded-xl p-3 mb-2">
+                    <div className="min-w-0">
+                      <div className="font-bold text-gray-900 truncate">{g.name}</div>
+                      <div className="text-xs text-gray-500">{g.orders.length} заявок · последняя {g.lastDate ? g.lastDate.split("-").reverse().join(".") : "—"}{exist ? " · есть карточка с таким именем" : ""}</div>
+                    </div>
+                    <Btn size="sm" onClick={() => linkUnlinked(g)}>{exist ? "Привязать" : "Создать"}</Btn>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {orphans.length === 0 && unlinked.length === 0 && (
             <div className="text-sm text-gray-500 py-4 space-y-2">
-              <div className="font-medium text-gray-700">Удалённых клиентов с историей не найдено.</div>
-              <div>Это значит, что у удалённого клиента <b>не было ни одной заявки</b> в базе — восстанавливать из истории нечего (но и терять было нечего: ни долгов, ни заказов).</div>
-              <div>Заведи его заново через «+ Новый клиент» — цены и реквизиты впиши вручную.</div>
-              <div className="text-xs text-gray-400 pt-1">Всего заявок в базе: {orders.length} · из них с привязкой к клиенту: {orders.filter(o => o.clientId).length}</div>
+              <div className="font-medium text-gray-700">Восстанавливать нечего.</div>
+              <div>Все заявки привязаны к существующим карточкам — значит у удалённого клиента <b>не было ни одной заявки</b>. Заведи его заново через «+ Новый клиент».</div>
+              <div className="text-xs text-gray-400 pt-1">Всего заявок: {orders.length} · с привязкой: {orders.filter(o => o.clientId).length} · без привязки: {orders.filter(o => !o.clientId).length}</div>
             </div>
-          ) : orphans.map(g => (
-            <div key={g.id} className="flex items-center justify-between gap-2 border border-gray-100 rounded-xl p-3 mb-2">
-              <div className="min-w-0">
-                <div className="font-bold text-gray-900 truncate">{g.name}</div>
-                <div className="text-xs text-gray-500">{g.orders.length} заявок · последняя {g.lastDate ? g.lastDate.split("-").reverse().join(".") : "—"}</div>
-              </div>
-              <Btn size="sm" onClick={() => restoreClient(g)}>Восстановить</Btn>
-            </div>
-          ))}
+          )}
         </Modal>
       )}
       <div className="space-y-2">
