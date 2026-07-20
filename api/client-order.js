@@ -1,7 +1,7 @@
 // Клиентский заказник: страница /order.html?c=<id>&k=<подпись> зовёт сюда.
 // Без верной подписи (HMAC от id клиента) нельзя ни увидеть прайс, ни отправить заявку.
 // Заявка падает в базу со статусом «новая» и пометкой from_client — админ видит её сразу.
-import { dbList, dbUpsert, configured, orderLinkSig } from "./_lib.js";
+import { dbList, dbUpsert, dbDelete, configured, orderLinkSig } from "./_lib.js";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -24,6 +24,25 @@ export default async function handler(req, res) {
       });
     }
 
+    // История заказов клиента (последние 30 дней + будущие)
+    if (action === "history") {
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+      const mine = (await dbList("orders"))
+        .filter(o => o.clientId === c && !o.isSample && o.date && new Date(o.date) >= cutoff)
+        .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+        .slice(0, 100)
+        .map(o => ({ date: o.date, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags, status: o.status, from_client: !!o.from_client, note: o.note || "" }));
+      return res.status(200).json({ orders: mine });
+    }
+
+    // Отмена заявки: только свои (отправленные по ссылке) и только пока она «новая» (не в обработке)
+    if (action === "cancel") {
+      const targets = (await dbList("orders")).filter(o => o.clientId === c && o.date === String(date) && o.from_client && o.status === "новая");
+      if (!targets.length) return res.status(400).json({ error: "Эту заявку уже нельзя отменить — она в обработке. Позвоните поставщику." });
+      for (const o of targets) await dbDelete("orders", o.id);
+      return res.status(200).json({ ok: true, removed: targets.length });
+    }
+
     if (action === "submit") {
       if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: "Выбери хотя бы одну позицию" });
       if (items.length > 10) return res.status(400).json({ error: "Слишком много позиций" });
@@ -34,6 +53,12 @@ export default async function handler(req, res) {
       if (isNaN(d) || d < today || d > max) { d = new Date(today); d.setDate(d.getDate() + 1); }
       const dstr = d.toISOString().slice(0, 10);
       const cleanNote = String(note || "").slice(0, 300);
+      // Редактирование: клиент меняет свою заявку — старые позиции той даты убираем (только свои и только «новые»)
+      const replaceDate = String((req.body || {}).replaceDate || "");
+      if (/^\d{4}-\d{2}-\d{2}$/.test(replaceDate)) {
+        const olds = (await dbList("orders")).filter(o => o.clientId === c && o.date === replaceDate && o.from_client && o.status === "новая");
+        for (const o of olds) await dbDelete("orders", o.id);
+      }
       let created = 0;
       for (const it of items) {
         // берём только позиции из прайса клиента; цена — серверная из прайса (подменить нельзя)

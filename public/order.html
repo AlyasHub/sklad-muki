@@ -51,7 +51,12 @@
       <label>Комментарий (по желанию)</label>
       <textarea id="note" rows="2" placeholder="например: с отлёжкой, позвонить перед приездом"></textarea>
       <div class="total"><span>Итого:</span><span id="total">0 кг</span></div>
+      <div id="editHint" style="display:none;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:8px 10px;font-size:13px;color:#92400e;margin-bottom:6px">✏️ Редактируешь заявку на <b id="editDateTxt"></b> — после сохранения старая будет заменена. <a href="#" id="editCancel" style="color:#b45309">Отменить редактирование</a></div>
       <button class="btn" id="send" disabled>Отправить заявку</button>
+    </div>
+    <div class="card" id="histCard" style="display:none">
+      <h2 style="font-size:16px;font-weight:800;margin-bottom:8px">📋 Мои заказы</h2>
+      <div id="history"></div>
     </div>
   </div>
   <div id="ok" class="ok card">
@@ -59,6 +64,7 @@
     <h2>Заявка отправлена!</h2>
     <p id="okText"></p>
     <p style="margin-top:8px">Мы получили заказ и свяжемся, если будут вопросы.</p>
+    <button class="btn" style="margin-top:16px" onclick="location.reload()">← Вернуться к заказам</button>
   </div>
 </div>
 <script>
@@ -84,6 +90,61 @@
   }
   function step(i, d) { var el = $("q" + i); el.value = Math.max(0, (Math.round(Number(el.value) || 0)) + d); recalc(); }
   window.__step = step; window.__recalc = recalc;
+
+  var editDate = null; // дата заявки, которую редактируем (null = новый заказ)
+  function setEdit(d) {
+    editDate = d;
+    $("editHint").style.display = d ? "block" : "none";
+    if (d) $("editDateTxt").textContent = d.split("-").reverse().join(".");
+    $("send").textContent = d ? "Сохранить изменения" : "Отправить заявку";
+  }
+  function fmtD(d) { return (d || "").split("-").reverse().join("."); }
+  function statusOf(list) {
+    if (list.every(function (o) { return o.status === "отгружена"; })) return ["✅ доставлена", "#059669"];
+    if (list.some(function (o) { return o.status === "в пути"; })) return ["🚚 в пути", "#b45309"];
+    return ["🕐 ждёт отправки", "#6b7280"];
+  }
+  function loadHistory() {
+    api({ action: "history" }).then(function (d) {
+      var orders = d.orders || [];
+      if (!orders.length) { $("histCard").style.display = "none"; return; }
+      var byDate = {};
+      orders.forEach(function (o) { (byDate[o.date] = byDate[o.date] || []).push(o); });
+      var html = "";
+      Object.keys(byDate).sort(function (a, b) { return b.localeCompare(a); }).forEach(function (d2) {
+        var list = byDate[d2];
+        var st = statusOf(list);
+        var cancellable = list.every(function (o) { return o.from_client && o.status === "новая"; });
+        html += '<div style="border:1px solid #f3f4f6;border-radius:12px;padding:10px;margin-bottom:8px">'
+          + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b style="font-size:14px">на ' + fmtD(d2) + '</b><span style="font-size:12px;font-weight:700;color:' + st[1] + '">' + st[0] + "</span></div>";
+        list.forEach(function (o) { html += '<div style="font-size:13px;color:#4b5563;margin-top:3px">• ' + o.brand + " " + o.grade + " " + o.bag_kg + "кг × " + o.bags + " меш.</div>"; });
+        if (cancellable) html += '<div style="display:flex;gap:8px;margin-top:8px">'
+          + '<button onclick="__edit(\'' + d2 + '\')" style="flex:1;padding:8px;border:0;border-radius:9px;background:#f3f4f6;font-weight:700;font-size:13px">✏️ Изменить</button>'
+          + '<button onclick="__cancel(\'' + d2 + '\')" style="flex:1;padding:8px;border:0;border-radius:9px;background:#fef2f2;color:#dc2626;font-weight:700;font-size:13px">✕ Отменить</button></div>';
+        html += "</div>";
+      });
+      $("history").innerHTML = html;
+      $("histCard").style.display = "block";
+      window.__histData = byDate;
+    }).catch(function () {});
+  }
+  window.__cancel = function (d2) {
+    if (!confirm("Отменить заявку на " + fmtD(d2) + "?")) return;
+    api({ action: "cancel", date: d2 }).then(function () { if (editDate === d2) setEdit(null); loadHistory(); alert("✓ Заявка отменена"); })
+      .catch(function (e) { alert("⚠️ " + e.message); });
+  };
+  window.__edit = function (d2) {
+    var list = (window.__histData || {})[d2] || [];
+    products.forEach(function (p, i) {
+      var match = list.find(function (o) { return o.brand === p.brand && o.grade === p.grade && Number(o.bag_kg) === Number(p.bag_kg); });
+      $("q" + i).value = match ? match.bags : 0;
+    });
+    $("date").value = d2;
+    $("note").value = (list.find(function (o) { return o.note; }) || {}).note || "";
+    setEdit(d2);
+    recalc();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   if (!c || !k) { showErr("Неверная ссылка. Попроси у поставщика новую."); return; }
   var tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
   api({ action: "info" }).then(function (d) {
@@ -100,6 +161,8 @@
     $("date").value = tomorrow.toISOString().slice(0, 10);
     $("loading").style.display = "none";
     $("form").style.display = "block";
+    $("editCancel").addEventListener("click", function (ev) { ev.preventDefault(); setEdit(null); products.forEach(function (_, i) { $("q" + i).value = 0; }); recalc(); });
+    loadHistory();
   }).catch(function (e) { showErr(e.message); });
   $("send").addEventListener("click", function () {
     var items = [];
@@ -109,13 +172,13 @@
     });
     if (!items.length) return;
     $("send").disabled = true; $("send").textContent = "Отправляю…";
-    api({ action: "submit", items: items, date: $("date").value, note: $("note").value })
+    api({ action: "submit", items: items, date: $("date").value, note: $("note").value, replaceDate: editDate || "" })
       .then(function (d) {
         $("form").style.display = "none";
-        $("okText").textContent = "Позиций: " + d.created + " · дата доставки: " + d.date.split("-").reverse().join(".");
+        $("okText").textContent = (editDate ? "Заявка изменена. " : "") + "Позиций: " + d.created + " · дата доставки: " + d.date.split("-").reverse().join(".");
         $("ok").style.display = "block";
       })
-      .catch(function (e) { $("send").disabled = false; $("send").textContent = "Отправить заявку"; var er = $("err"); er.textContent = "⚠️ " + e.message; er.style.display = "block"; });
+      .catch(function (e) { $("send").disabled = false; $("send").textContent = editDate ? "Сохранить изменения" : "Отправить заявку"; var er = $("err"); er.textContent = "⚠️ " + e.message; er.style.display = "block"; });
   });
 })();
 </script>
