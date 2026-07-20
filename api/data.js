@@ -74,7 +74,8 @@ export default async function handler(req, res) {
     if (op === "changes" || op === "restoreChange" || op === "backupNow" || op === "backupList" || op === "backupGet") {
       if (u.role !== "director") return res.status(403).json({ error: "Только для администратора" });
       if (op === "changes") {
-        const rows = (await dbList("changes")).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200);
+        let all = []; try { all = await dbList("changes"); } catch { return res.status(200).json({ rows: [], needTable: "changes" }); }
+        const rows = all.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200);
         // саму запись наружу не отдаём (там могут быть хэши паролей) — только пометку, что откат возможен
         return res.status(200).json({ rows: rows.map(({ data, ...r }) => ({ ...r, canRestore: !!data })) });
       }
@@ -89,7 +90,8 @@ export default async function handler(req, res) {
       }
       if (op === "backupNow") return res.status(200).json({ backup: await makeSnapshot(u.name) });
       if (op === "backupList") {
-        const rows = (await dbList("backups")).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+        let all = []; try { all = await dbList("backups"); } catch { return res.status(200).json({ rows: [], needTable: "backups" }); }
+        const rows = all.sort((a, b) => String(b.at).localeCompare(String(a.at)));
         return res.status(200).json({ rows: rows.map(({ data, ...r }) => r) }); // без содержимого — только список
       }
       if (op === "backupGet") {

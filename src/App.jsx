@@ -2859,10 +2859,12 @@ function BackupLog() {
   const [backups, setBackups] = useState([]);
   const [changes, setChanges] = useState([]);
   const [busy, setBusy] = useState("");
+  const [needTables, setNeedTables] = useState([]);
   const load = async () => {
     try {
       const [b, c] = await Promise.all([apiData("backupList"), apiData("changes")]);
       setBackups(b.rows || []); setChanges(c.rows || []);
+      setNeedTables([b.needTable, c.needTable].filter(Boolean));
     } catch (e) { alert("⚠️ " + (e.message || e)); }
   };
   useEffect(() => { if (open) load(); }, [open]);
@@ -2896,6 +2898,11 @@ function BackupLog() {
       </button>
       {open && (
         <div className="mt-2 space-y-4">
+          {needTables.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
+              ⚠️ Нужно один раз создать таблицы в Supabase ({needTables.join(", ")}) — иначе копии и журнал не сохраняются. Попроси Claude прислать инструкцию.
+            </div>
+          )}
           <div className="bg-white border border-gray-100 rounded-xl p-3">
             <div className="flex items-center justify-between mb-2 gap-2">
               <div className="font-bold text-gray-800 text-sm">💾 Резервные копии</div>
