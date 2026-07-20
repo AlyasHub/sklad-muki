@@ -1634,11 +1634,18 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-2 flex-wrap"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3><div className="flex gap-2">{canEdit && orphans.length > 0 && <Btn size="sm" variant="secondary" onClick={() => setShowRestore(true)}>↩️ Восстановить ({orphans.length})</Btn>}{canEdit && <Btn onClick={openNew}>+ Новый клиент</Btn>}</div></div>
+      <div className="flex items-center justify-between gap-2 flex-wrap"><h3 className="font-bold text-gray-800">Клиенты ({clients.length})</h3><div className="flex gap-2">{canEdit && <Btn size="sm" variant="secondary" onClick={() => setShowRestore(true)}>↩️ Восстановить{orphans.length > 0 ? ` (${orphans.length})` : ""}</Btn>}{canEdit && <Btn onClick={openNew}>+ Новый клиент</Btn>}</div></div>
       {showRestore && (
         <Modal title="↩️ Восстановить удалённого клиента" onClose={() => setShowRestore(false)}>
           <div className="text-xs text-gray-500 mb-3">Эти клиенты удалены из базы, но в заявках сохранилась их история. Восстановление вернёт имя, цены и всю историю (долги, заявки). Реквизиты нужно будет вписать заново.</div>
-          {orphans.length === 0 ? <div className="text-center text-gray-400 py-6">Удалённых клиентов не найдено.</div> : orphans.map(g => (
+          {orphans.length === 0 ? (
+            <div className="text-sm text-gray-500 py-4 space-y-2">
+              <div className="font-medium text-gray-700">Удалённых клиентов с историей не найдено.</div>
+              <div>Это значит, что у удалённого клиента <b>не было ни одной заявки</b> в базе — восстанавливать из истории нечего (но и терять было нечего: ни долгов, ни заказов).</div>
+              <div>Заведи его заново через «+ Новый клиент» — цены и реквизиты впиши вручную.</div>
+              <div className="text-xs text-gray-400 pt-1">Всего заявок в базе: {orders.length} · из них с привязкой к клиенту: {orders.filter(o => o.clientId).length}</div>
+            </div>
+          ) : orphans.map(g => (
             <div key={g.id} className="flex items-center justify-between gap-2 border border-gray-100 rounded-xl p-3 mb-2">
               <div className="min-w-0">
                 <div className="font-bold text-gray-900 truncate">{g.name}</div>
