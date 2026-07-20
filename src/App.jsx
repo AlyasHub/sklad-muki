@@ -2845,7 +2845,93 @@ function UsersTab({ users, drivers, logins = [], reload, currentUser }) {
         })}
       </div>
 
+      <BackupLog />
       <LoginLog logins={logins} />
+    </div>
+  );
+}
+
+// 💾 Резервные копии и 📝 журнал изменений (для администратора)
+const CH_ACTION = { create: ["добавил", "text-emerald-600"], update: ["изменил", "text-blue-600"], delete: ["удалил", "text-red-600"], restore: ["восстановил", "text-amber-600"] };
+const CH_TABLE = { clients: "клиента", users: "пользователя", drivers: "рабочего", trucks: "фуру", orders: "заявку", stock: "движение склада", expenses: "расход" };
+function BackupLog() {
+  const [open, setOpen] = useState(false);
+  const [backups, setBackups] = useState([]);
+  const [changes, setChanges] = useState([]);
+  const [busy, setBusy] = useState("");
+  const load = async () => {
+    try {
+      const [b, c] = await Promise.all([apiData("backupList"), apiData("changes")]);
+      setBackups(b.rows || []); setChanges(c.rows || []);
+    } catch (e) { alert("⚠️ " + (e.message || e)); }
+  };
+  useEffect(() => { if (open) load(); }, [open]);
+  const fmtAt = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" }) + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }); };
+  const makeNow = async () => {
+    setBusy("now");
+    try { await apiData("backupNow"); await load(); alert("✓ Копия сделана"); } catch (e) { alert("⚠️ " + (e.message || e)); }
+    setBusy("");
+  };
+  const download = async b => {
+    setBusy(b.id);
+    try {
+      const d = await apiData("backupGet", null, { id: b.id });
+      downloadFile(`Копия_базы_${(b.at || "").slice(0, 10)}.json`, JSON.stringify(d.backup, null, 2), "application/json;charset=utf-8");
+    } catch (e) { alert("⚠️ " + (e.message || e)); }
+    setBusy("");
+  };
+  const restore = async ch => {
+    if (!confirm(`Восстановить ${CH_TABLE[ch.table] || ch.table} «${ch.title}»?`)) return;
+    setBusy(ch.id);
+    try { const d = await apiData("restoreChange", null, { id: ch.id }); await load(); alert(`✓ «${d.title}» восстановлен. Обнови данные кнопкой 🔄.`); }
+    catch (e) { alert("⚠️ " + (e.message || e)); }
+    setBusy("");
+  };
+  const totalOf = b => Object.values(b.counts || {}).reduce((s, n) => s + n, 0);
+  return (
+    <div className="pt-2">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-3">
+        <span className="font-bold text-gray-800">💾 Копии базы и журнал изменений</span>
+        <span className="text-sm text-gray-400">{open ? "скрыть" : "показать"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-4">
+          <div className="bg-white border border-gray-100 rounded-xl p-3">
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <div className="font-bold text-gray-800 text-sm">💾 Резервные копии</div>
+              <Btn size="sm" onClick={makeNow} disabled={busy === "now"}>{busy === "now" ? "Делаю..." : "Сделать копию"}</Btn>
+            </div>
+            <div className="text-xs text-gray-400 mb-2">Копия базы создаётся автоматически каждый день. Хранятся последние 14.</div>
+            {backups.length === 0 && <div className="text-sm text-gray-400 py-2">Копий пока нет — нажми «Сделать копию».</div>}
+            {backups.map(b => (
+              <div key={b.id} className="flex items-center justify-between gap-2 text-sm py-1.5 border-b border-gray-50 last:border-b-0">
+                <div className="min-w-0">
+                  <div className="font-medium text-gray-800">{fmtAt(b.at)}</div>
+                  <div className="text-xs text-gray-400">{fmt(totalOf(b))} записей · {b.by}</div>
+                </div>
+                <Btn size="sm" variant="secondary" onClick={() => download(b)} disabled={busy === b.id}>{busy === b.id ? "..." : "⬇️ Скачать"}</Btn>
+              </div>
+            ))}
+          </div>
+          <div className="bg-white border border-gray-100 rounded-xl p-3">
+            <div className="font-bold text-gray-800 text-sm mb-1">📝 Журнал изменений</div>
+            <div className="text-xs text-gray-400 mb-2">Кто что удалил или изменил. Удалённое можно вернуть кнопкой «Восстановить».</div>
+            {changes.length === 0 && <div className="text-sm text-gray-400 py-2">Изменений пока нет.</div>}
+            {changes.map(ch => {
+              const [act, color] = CH_ACTION[ch.action] || [ch.action, "text-gray-600"];
+              return (
+                <div key={ch.id} className="flex items-center justify-between gap-2 text-sm py-1.5 border-b border-gray-50 last:border-b-0">
+                  <div className="min-w-0">
+                    <div className="text-gray-800 truncate"><b>{ch.userName}</b> <span className={color}>{act}</span> {CH_TABLE[ch.table] || ch.table} <b>«{ch.title}»</b></div>
+                    <div className="text-xs text-gray-400">{fmtAt(ch.at)}</div>
+                  </div>
+                  {ch.action === "delete" && ch.canRestore && <Btn size="sm" variant="secondary" onClick={() => restore(ch)} disabled={busy === ch.id}>{busy === ch.id ? "..." : "↩️ Вернуть"}</Btn>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,39 @@ import { verifyToken, signToken, dbList, dbUpsert, dbDelete, configured, orderLi
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+// Журнал изменений. Удаления пишем ВСЕГДА и вместе с самой записью — чтобы можно было откатить.
+// Правки пишем только по важным справочникам (заявки/склад слишком «шумные», у них своя сверка).
+const LOGGED = new Set(["clients", "users", "drivers", "trucks"]);
+const NEVER_LOG = new Set(["changes", "backups", "logins"]);
+const titleOf = r => (r && (r.name || r.clientName || r.username || r.note || r.category || r.id)) || "";
+async function logChange(u, action, table, record) {
+  if (NEVER_LOG.has(table)) return;
+  try {
+    await dbUpsert("changes", {
+      id: uid(), at: new Date().toISOString(), action, table,
+      userId: u.uid, userName: u.name, role: u.role,
+      recordId: (record && record.id) || "",
+      title: String(titleOf(record)).slice(0, 120),
+      data: action === "delete" ? record : null, // полная копия удалённой записи для восстановления
+    });
+  } catch {}
+}
+
+// Снимок всей базы (для резервной копии)
+export async function makeSnapshot(by) {
+  const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"];
+  const data = {}, counts = {};
+  for (const t of tables) { const rows = await dbList(t); data[t] = rows; counts[t] = rows.length; }
+  const snap = { id: uid(), at: new Date().toISOString(), by: by || "автоматически", counts, data };
+  await dbUpsert("backups", snap);
+  // держим последние 14 копий, старые чистим
+  try {
+    const all = (await dbList("backups")).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    for (const old of all.slice(14)) await dbDelete("backups", old.id);
+  } catch {}
+  return { id: snap.id, at: snap.at, counts };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   if (!configured()) return res.status(500).json({ error: "Сервер не настроен" });
@@ -36,6 +69,35 @@ export default async function handler(req, res) {
       // Пока человек пользуется приложением, его больше не выкинет на вход.
       const fresh_token = (u.exp && u.exp - Date.now() < 7 * 864e5) ? signToken({ uid: u.uid, role: u.role, driverId: u.driverId || "", name: u.name, exp: Date.now() + 30 * 864e5 }) : null;
       return res.status(200).json(fresh_token ? { data: out, fresh_token } : { data: out });
+    }
+    // Журнал изменений и резервные копии — только администратор
+    if (op === "changes" || op === "restoreChange" || op === "backupNow" || op === "backupList" || op === "backupGet") {
+      if (u.role !== "director") return res.status(403).json({ error: "Только для администратора" });
+      if (op === "changes") {
+        const rows = (await dbList("changes")).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200);
+        // саму запись наружу не отдаём (там могут быть хэши паролей) — только пометку, что откат возможен
+        return res.status(200).json({ rows: rows.map(({ data, ...r }) => ({ ...r, canRestore: !!data })) });
+      }
+      if (op === "restoreChange") {
+        const ch = (await dbList("changes")).find(x => x.id === id);
+        if (!ch || !ch.data) return res.status(400).json({ error: "Эту запись восстановить нельзя" });
+        const exists = (await dbList(ch.table)).some(r => r.id === ch.data.id);
+        if (exists) return res.status(400).json({ error: "Такая запись уже есть — восстанавливать не нужно" });
+        await dbUpsert(ch.table, ch.data);
+        await logChange(u, "restore", ch.table, ch.data);
+        return res.status(200).json({ ok: true, table: ch.table, title: ch.title });
+      }
+      if (op === "backupNow") return res.status(200).json({ backup: await makeSnapshot(u.name) });
+      if (op === "backupList") {
+        const rows = (await dbList("backups")).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+        return res.status(200).json({ rows: rows.map(({ data, ...r }) => r) }); // без содержимого — только список
+      }
+      if (op === "backupGet") {
+        const b = (await dbList("backups")).find(x => x.id === id);
+        if (!b) return res.status(404).json({ error: "Копия не найдена" });
+        const data = { ...b.data, users: (b.data.users || []).map(({ passhash, ...r }) => r) }; // пароли не выгружаем
+        return res.status(200).json({ backup: { id: b.id, at: b.at, by: b.by, counts: b.counts, data } });
+      }
     }
     // Подпись клиентской заказ-ссылки (только администратор)
     if (op === "orderLink") {
@@ -98,7 +160,9 @@ async function upsertFor(u, table, item) {
       const photo_at = { ...(existing.photo_at || {}), ...(item.photo_at || {}) }; // время загрузки каждого документа
       item = { ...item, delivered_by_driver: !!existing.delivered_by_driver || !!item.delivered_by_driver, delivered_at: item.delivered_at || existing.delivered_at, photos, photo_at };
     }
-    return dbUpsert(table, item);
+    const out = await dbUpsert(table, item);
+    if (LOGGED.has(table)) await logChange(u, existing ? "update" : "create", table, item);
+    return out;
   }
   if (u.role === "driver" && table === "orders") {
     const existing = (await dbList("orders")).find(o => o.id === item.id);
@@ -118,6 +182,9 @@ async function upsertFor(u, table, item) {
 }
 
 async function deleteFor(u, table, id) {
-  if (u.role === "director") return dbDelete(table, id);
-  throw new Error("Нет прав на удаление");
+  if (u.role !== "director") throw new Error("Нет прав на удаление");
+  // Сохраняем удаляемую запись целиком — чтобы удаление можно было откатить одной кнопкой
+  const existing = (await dbList(table)).find(r => r.id === id);
+  if (existing) await logChange(u, "delete", table, existing);
+  return dbDelete(table, id);
 }
