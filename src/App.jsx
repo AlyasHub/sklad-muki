@@ -292,6 +292,11 @@ function buildGisRouteUrl(points) {
   const seg = all.map(p => `|${p.lon},${p.lat}`).join(";");
   return `https://2gis.kz/astana/directions/points/${encodeURIComponent(seg)}`;
 }
+// Маршрут до одной точки БЕЗ склада: старт пустой — 2ГИС берёт текущее местоположение водителя
+function buildGisToPointUrl(p) {
+  const seg = `|;|${p.lon},${p.lat}`;
+  return `https://2gis.kz/astana/directions/points/${encodeURIComponent(seg)}`;
+}
 
 async function parseOrderWithAI(text, clients) {
   // Разбор идёт через нашу серверную функцию /api/parse-order — ключ Anthropic живёт там, не в браузере
@@ -364,6 +369,47 @@ function MiniBar({ value, max, color = "bg-amber-400" }) {
 }
 
 const TABS = [{ id: "today", label: "🏠 Сегодня" }, { id: "calendar", label: "📅 Календарь" }, { id: "stock", label: "🏭 Склад" }, { id: "clients", label: "🏢 Клиенты" }, { id: "reactivate", label: "🔔 Напомнить" }, { id: "reports", label: "📊 Отчёты" }, { id: "debts", label: "💰 Долги" }, { id: "contracts", label: "📄 Договоры" }, { id: "supply", label: "🚚 Поставки" }, { id: "karaganda", label: "🏬 Караганда" }, { id: "drivers", label: "🚛 Водители" }, { id: "expenses", label: "💸 Расходы" }, { id: "access", label: "⚙️ Доступ" }];
+
+// Просмотр фото накладной с увеличением: щипок двумя пальцами, двойное касание, кнопки + −
+function PhotoViewer({ url, onClose }) {
+  const [zoom, setZoom] = useState(1);
+  const boxRef = useRef(null);
+  const pinch = useRef(null);
+  // Щипок двумя пальцами
+  const onTouchStart = e => { if (e.touches.length === 2) pinch.current = { d: Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY), z: zoom }; };
+  const onTouchMove = e => {
+    if (e.touches.length === 2 && pinch.current) {
+      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      setZoom(Math.min(5, Math.max(1, pinch.current.z * (d / pinch.current.d))));
+    }
+  };
+  const onTouchEnd = () => { pinch.current = null; };
+  const toggle = () => setZoom(z => (z > 1 ? 1 : 2.5)); // двойное касание / клик по фото
+  return (
+    <div className="fixed inset-0 z-50" style={{ background: "rgba(0,0,0,0.92)" }}>
+      <div
+        ref={boxRef}
+        className="w-full h-full overflow-auto flex items-center justify-center p-2"
+        style={{ touchAction: "pan-x pan-y pinch-zoom", WebkitOverflowScrolling: "touch" }}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+      >
+        <img
+          src={url} alt="фото"
+          onDoubleClick={toggle} onClick={e => { if (zoom > 1) e.stopPropagation(); }}
+          style={{ width: `${zoom * 100}%`, maxWidth: zoom === 1 ? "100%" : "none", height: "auto", transition: "width .15s", borderRadius: 8 }}
+        />
+      </div>
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 rounded-full px-2 py-1.5">
+        <button onClick={() => setZoom(z => Math.max(1, z - 0.5))} className="text-white text-2xl w-10 h-10 leading-none">−</button>
+        <span className="text-white text-sm font-bold w-12 text-center">{Math.round(zoom * 100)}%</span>
+        <button onClick={() => setZoom(z => Math.min(5, z + 0.5))} className="text-white text-2xl w-10 h-10 leading-none">+</button>
+        <a href={url} target="_blank" rel="noreferrer" className="text-white text-sm font-medium px-3">Открыть</a>
+      </div>
+      <button className="absolute top-4 right-4 text-white text-4xl leading-none" onClick={onClose}>&times;</button>
+      {zoom === 1 && <div className="absolute top-5 left-1/2 -translate-x-1/2 text-white/70 text-xs">Щипок или двойное касание — увеличить</div>}
+    </div>
+  );
+}
 
 function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
   const [cursor, setCursor] = useState(new Date());
@@ -755,7 +801,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
                     {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
-                    {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisRouteUrl([co])} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
+                    {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
                     {!driverMode && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
                     {!driverMode && canEdit && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
@@ -961,12 +1007,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
         );
       })()}
 
-      {photoView && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }} onClick={() => setPhotoView(null)}>
-          <img src={photoView} className="max-w-full max-h-full rounded-lg" alt="фото" />
-          <button className="absolute top-4 right-4 text-white text-3xl" onClick={() => setPhotoView(null)}>&times;</button>
-        </div>
-      )}
+      {photoView && <PhotoViewer url={photoView} onClose={() => setPhotoView(null)} />}
       {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} />}
     </div>
   );
