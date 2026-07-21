@@ -1232,7 +1232,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   );
 }
 
-function StockTab({ stock, orders = [], reload, canEdit = true }) {
+function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1271,7 +1271,17 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
       (inMap[k] = inMap[k] || []).push(s);
     });
     const inDups = Object.values(inMap).filter(g2 => g2.length > 1).sort((a, b) => b[0].weight_kg * b.length - a[0].weight_kg * a.length);
-    return { groups: out.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)), inDups };
+    // 👻 Движения-сироты: привязаны по id к заявке/фуре, которых уже нет (остались от удаления до исправления)
+    const orderIds = new Set(orders.map(o => o.id));
+    const truckIds = new Set(trucks.map(t => t.id));
+    const orphanStock = stock.filter(s => {
+      if (typeof s.id !== "string") return false;
+      if (s.id.startsWith("mv_")) return !orderIds.has(s.id.slice(3)); // расход удалённой заявки
+      if (s.id.startsWith("tin_")) return !truckIds.has(s.id.slice(4).replace(/_\d+$/, "")); // приход удалённой фуры
+      return false;
+    });
+    const orphanExp = expenses.filter(x => typeof x.id === "string" && x.id.startsWith("texp_") && !truckIds.has(x.id.slice(5))); // расход за удалённую фуру
+    return { groups: out.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)), inDups, orphanStock, orphanExp };
   })();
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
@@ -1295,6 +1305,18 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
   const deleteMovement = async id => {
     if (!confirm("Удалить эту запись со склада? Остаток пересчитается.")) return;
     try { await dbDelete("stock", id); await reload("stock"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
+  };
+  // Убрать все движения-сироты разом (расходы/приходы от удалённых заявок и фур + расходы за фуры)
+  const clearOrphans = async () => {
+    const { orphanStock, orphanExp } = dupReport || {};
+    const n = (orphanStock?.length || 0) + (orphanExp?.length || 0);
+    if (!n || !confirm(`Убрать ${n} движений-сирот от удалённых заявок/фур? Остатки и расходы пересчитаются.`)) return;
+    try {
+      for (const s of orphanStock) await dbDelete("stock", s.id);
+      for (const x of orphanExp) await dbDelete("expenses", x.id);
+      await reload("stock"); await reload("expenses");
+      alert("✓ Готово — склад и расходы очищены от следов удалённых записей.");
+    } catch (e) { alert("⚠️ Не получилось: " + (e && e.message ? e.message : e)); }
   };
 
   const balances = {};
@@ -1442,9 +1464,32 @@ function StockTab({ stock, orders = [], reload, canEdit = true }) {
       </div>
       {dupCheck && dupReport && (
         <Modal title="🔎 Проверка списаний (дубли)" onClose={() => setDupCheck(false)}>
-          <div className="text-xs text-gray-500 mb-3">Сверяю: по каждой связке «клиент + позиция» списано со склада должно быть ровно столько, сколько отгружено по заявкам. <b>Лишнее = дубли</b> — их можно удалить прямо здесь. Учти: если отгруженную заявку потом удалили, её списание остаётся — это не дубль.</div>
-          {dupReport.groups.length === 0 && dupReport.inDups.length === 0 ? (
-            <div className="bg-emerald-50 text-emerald-700 rounded-xl p-4 text-center font-bold">✓ Всё сходится — лишних списаний и приходов не найдено</div>
+          <div className="text-xs text-gray-500 mb-3">Сверяю склад с заявками и ищу следы удалённых записей. Найденное можно убрать прямо здесь.</div>
+
+          {(dupReport.orphanStock.length > 0 || dupReport.orphanExp.length > 0) && (
+            <div className="border border-red-300 bg-red-50 rounded-xl p-3 mb-3">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="font-bold text-red-700 text-sm">👻 Следы удалённых заявок/фур</div>
+                {canEdit && <Btn size="sm" variant="danger" onClick={clearOrphans}>Убрать все ({dupReport.orphanStock.length + dupReport.orphanExp.length})</Btn>}
+              </div>
+              <div className="text-xs text-gray-600 mb-2">Эти движения остались от заявок и фур, которые удалили <b>до</b> исправления. Их безопасно убрать — родителей уже нет.</div>
+              {dupReport.orphanStock.map((s, i) => (
+                <div key={"s" + i} className="flex items-center justify-between gap-2 text-xs bg-white rounded-lg px-2 py-1.5 mb-1">
+                  <span className="text-gray-600 min-w-0 truncate">{(s.date || "").split("-").reverse().join(".")} · {s.brand} {s.grade} {s.bag_kg}кг · {s.note || (s.weight_kg > 0 ? "приход" : "расход")}</span>
+                  <span className="flex items-center gap-2 whitespace-nowrap"><b className={s.weight_kg > 0 ? "text-emerald-600" : "text-red-600"}>{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)} кг</b>{canEdit && <button onClick={() => deleteMovement(s.id)} className="text-red-400 hover:text-red-600 font-bold">✕</button>}</span>
+                </div>
+              ))}
+              {dupReport.orphanExp.map((x, i) => (
+                <div key={"e" + i} className="flex items-center justify-between gap-2 text-xs bg-white rounded-lg px-2 py-1.5 mb-1">
+                  <span className="text-gray-600 min-w-0 truncate">{(x.date || "").split("-").reverse().join(".")} · расход: {x.note || x.category}</span>
+                  <span className="flex items-center gap-2 whitespace-nowrap"><b className="text-red-600">{fmt(x.amount)} тг</b>{canEdit && <button onClick={async () => { if (confirm("Убрать этот расход за удалённую фуру?")) { await dbDelete("expenses", x.id); reload("expenses"); } }} className="text-red-400 hover:text-red-600 font-bold">✕</button>}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {dupReport.groups.length === 0 && dupReport.inDups.length === 0 && dupReport.orphanStock.length === 0 && dupReport.orphanExp.length === 0 ? (
+            <div className="bg-emerald-50 text-emerald-700 rounded-xl p-4 text-center font-bold">✓ Всё сходится — лишних движений не найдено</div>
           ) : dupReport.groups.map((g, gi) => {
             // строки с одинаковой датой и весом внутри группы — вероятные дубли
             const cnt = {};
@@ -4429,7 +4474,7 @@ export default function App() {
           <>
             {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
-            {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} reload={reload} canEdit={isDirector} />}
+            {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
