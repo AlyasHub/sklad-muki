@@ -1550,9 +1550,34 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
           .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.id || "").replace(/^mv_/, "").localeCompare((b.id || "").replace(/^mv_/, "")));
         let run = 0;
         const lines = rows.map(s => { run += s.weight_kg || 0; return { ...s, run }; });
+        // Диагностика: где дыра — в приходе или в расходе
+        const totalIn = rows.filter(s => s.weight_kg > 0).reduce((a, s) => a + s.weight_kg, 0);
+        const outByOrders = rows.filter(s => s.weight_kg < 0 && (String(s.id).startsWith("mv_") || /^(Отгрузка|Реализация)/.test(s.note || ""))).reduce((a, s) => a - s.weight_kg, 0);
+        const outManual = rows.filter(s => s.weight_kg < 0 && !(String(s.id).startsWith("mv_") || /^(Отгрузка|Реализация)/.test(s.note || ""))).reduce((a, s) => a - s.weight_kg, 0);
+        // Сколько ДОЛЖНО быть списано по реально существующим отгруженным заявкам этой позиции
+        const shippedByOrders = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && o.brand === audit.brand && o.grade === audit.grade && String(o.bag_kg) === String(audit.bag_kg)).reduce((a, o) => a + o.bags * o.bag_kg, 0);
+        const outGap = outByOrders - shippedByOrders; // >0 — списано больше, чем есть заявок (лишний расход); <0 — недосписано
         return (
           <Modal title={`🔍 Сверка: ${audit.brand} ${audit.grade} ${audit.bag_kg}кг`} onClose={() => setAudit(null)}>
-            <div className="text-xs text-gray-500 mb-2">Все движения по позиции от первого до последнего. «Остаток» — сколько стало после операции. Если ждёшь приход, а его тут нет — он записан на другой сорт/фасовку (посмотри сверку соседней строки).</div>
+            <div className="bg-gray-50 rounded-xl p-3 mb-3 text-sm space-y-1">
+              <div className="flex justify-between"><span className="text-gray-500">▲ Приходов всего</span><b className="text-emerald-600">+{fmt(totalIn)} кг</b></div>
+              <div className="flex justify-between"><span className="text-gray-500">▼ Расход по заявкам</span><b className="text-red-600">−{fmt(outByOrders)} кг</b></div>
+              <div className="flex justify-between"><span className="text-gray-500">▼ Расход вручную (брак/списания)</span><b className="text-red-600">−{fmt(outManual)} кг</b></div>
+              <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold text-gray-700">Остаток сейчас</span><b className={run < 0 ? "text-red-600" : "text-gray-900"}>{fmt(run)} кг</b></div>
+              <div className="flex justify-between text-xs pt-1"><span className="text-gray-400">Отгружено по заявкам (из самих заявок)</span><span className="text-gray-500">{fmt(shippedByOrders)} кг</span></div>
+            </div>
+            {Math.abs(outGap) >= 1 ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3 text-sm text-amber-800">
+                {outGap > 0
+                  ? <>▼ Списано <b>на {fmt(outGap)} кг больше</b>, чем отгружено по заявкам — лишний расход. Найди строку списания без своей заявки в списке ниже и убери её.</>
+                  : <>▼ Списано <b>на {fmt(-outGap)} кг меньше</b>, чем отгружено — где-то не хватает списания.</>}
+              </div>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-3 text-sm text-emerald-800">
+                ✓ Расход сходится с заявками — списано ровно столько, сколько отгружено. Значит, если на складе не хватает, дело в <b>потерянном приходе</b>: его не внесли, внесли на другой сорт/фасовку, или удалили. Проверь <b>⚙️ Доступ → Журнал изменений</b> (удалённый приход можно вернуть) и сверку соседних сортов/фасовок.
+              </div>
+            )}
+            <div className="text-xs text-gray-500 mb-2">Все движения по позиции от первого до последнего. «Остаток» — сколько стало после операции.</div>
             <div className="grid grid-cols-[4rem_1fr_4.2rem_4.2rem] gap-x-2 text-[11px] text-gray-400 px-1 mb-1">
               <span>дата</span><span>операция</span><span className="text-right">кг</span><span className="text-right">остаток</span>
             </div>
