@@ -192,5 +192,21 @@ async function deleteFor(u, table, id) {
   // Сохраняем удаляемую запись целиком — чтобы удаление можно было откатить одной кнопкой
   const existing = (await dbList(table)).find(r => r.id === id);
   if (existing) await logChange(u, "delete", table, existing);
+
+  // КАСКАД: удаляя заявку/фуру, отменяем и её движения по складу/расходы,
+  // чтобы не оставалось «висячих» приходов и расходов. Движения привязаны к записи по id.
+  if (table === "orders") {
+    // списание отгрузки этой заявки (если было отгружено)
+    try { await dbDelete("stock", "mv_" + id); } catch {}
+  }
+  if (table === "trucks") {
+    // приходы фуры (tin_<id>_0..N) и расход за фуру (texp_<id>)
+    try {
+      const st = await dbList("stock");
+      for (const s of st) if (typeof s.id === "string" && s.id.startsWith("tin_" + id + "_")) await dbDelete("stock", s.id);
+    } catch {}
+    try { await dbDelete("expenses", "texp_" + id); } catch {}
+  }
+
   return dbDelete(table, id);
 }

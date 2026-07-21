@@ -481,7 +481,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     } catch (e) { notifyErr(e); }
   };
   const assignDriver = async (o, driverId) => { try { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
-  const deleteOrder = async (id) => { try { await dbDelete("orders", id); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const deleteOrder = async (id) => { try { await dbDelete("orders", id); await reload("orders"); reload("stock"); } catch (e) { notifyErr(e); } };
 
   // Действия на всю заявку клиента (несколько позиций). Оптимистично: экран меняется сразу, запись — в фоне.
   const assignDriverGroup = async (g, driverId) => {
@@ -495,10 +495,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, loaderId }))); } catch (e) { notifyErr(e); reload("orders"); }
   };
   const deleteGroup = async g => {
-    if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return;
+    const shipped = g.orders.some(o => o.status === "отгружена" && !o.fromKaraganda);
+    if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?${shipped ? "\nЗаявка была отгружена — мука вернётся на склад." : ""}`)) return;
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.filter(o => !ids.has(o.id)));
-    try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); } catch (e) { notifyErr(e); reload("orders"); }
+    try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); reload("stock"); } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
   };
   // Разовый покупатель понравился → заводим в базу клиентов и привязываем его заявки
   const addOneOffToClients = async g => {
@@ -2679,7 +2680,13 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
-  const deleteTruck = async id => { if (!confirm("Удалить фуру?")) return; await dbDelete("trucks", id); await reload("trucks"); };
+  const deleteTruck = async id => {
+    const t = trucks.find(x => x.id === id);
+    const accepted = t && t.status === "принята";
+    if (!confirm(`Удалить фуру?${accepted ? "\nФура была принята на склад — её приход спишется со склада, а расход за фуру уберётся." : ""}`)) return;
+    try { await dbDelete("trucks", id); await reload("trucks"); if (accepted) { reload("stock"); reload("expenses"); } }
+    catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
+  };
 
   const totalKg = t => (t.items || []).reduce((s, i) => s + itemKg(i), 0);
   const sorted = [...trucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
@@ -3981,10 +3988,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
     try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, date }))); } catch (e) { notifyErr(e); reload("orders"); }
   };
   const deleteGroup = async g => {
-    if (!confirm(`Удалить заявку «${g.clientName || "Клиент"}» на сегодня (${g.orders.length} поз.)?`)) return;
+    const shipped = g.orders.some(o => o.status === "отгружена" && !o.fromKaraganda);
+    if (!confirm(`Удалить заявку «${g.clientName || "Клиент"}» на сегодня (${g.orders.length} поз.)?${shipped ? "\nЗаявка была отгружена — мука вернётся на склад." : ""}`)) return;
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.filter(o => !ids.has(o.id)));
-    try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); } catch (e) { notifyErr(e); reload("orders"); }
+    try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); reload("stock"); } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
   };
 
   // Разовый покупатель понравился → одним нажатием заводим его в базу клиентов
