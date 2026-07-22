@@ -3935,6 +3935,30 @@ function EditGroupModal({ group, clients, reload, onClose }) {
   );
 }
 
+// 📝 Простой блокнот на главной: пиши что угодно (кому доложить мешок, кому перезвонить и т.п.)
+function NotesBlock() {
+  const [text, setText] = useState(() => { try { return localStorage.getItem("sklad_notes") || ""; } catch { return ""; } });
+  const [open, setOpen] = useState(() => { try { return !!(localStorage.getItem("sklad_notes") || "").trim(); } catch { return false; } });
+  const onChange = e => { const v = e.target.value; setText(v); try { localStorage.setItem("sklad_notes", v); } catch {} };
+  const clearAll = () => { if (confirm("Очистить все заметки?")) { setText(""); try { localStorage.removeItem("sklad_notes"); } catch {} } };
+  if (!open) return (
+    <button onClick={() => setOpen(true)} className="w-full text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl py-2.5 font-medium hover:bg-amber-100">📝 Заметки — открыть блокнот</button>
+  );
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-bold text-amber-900">📝 Заметки</div>
+        <div className="flex gap-3 text-xs">
+          {text.trim() && <button onClick={clearAll} className="text-gray-400 hover:text-red-500">очистить</button>}
+          <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">свернуть</button>
+        </div>
+      </div>
+      <textarea value={text} onChange={onChange} rows={5} placeholder={"Пиши что угодно:\n• Сегафредо — доложить +2 мешка, заменить испорченные\n• Мамыр — перезвонить насчёт оплаты\n• заказать поддоны"} className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap" }} />
+      <div className="text-xs text-gray-400 mt-1">Сохраняется автоматически на этом устройстве.</div>
+    </div>
+  );
+}
+
 function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -4144,6 +4168,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">Заявки сегодня</div><div className="text-3xl font-black text-gray-900">{groupCount(todayList)}</div></div>
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">На завтра</div><div className="text-3xl font-black text-gray-900">{groupCount(tomorrowList)}</div></div>
       </div>
+
+      {canEdit && <NotesBlock />}
 
       {canEdit && (
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
