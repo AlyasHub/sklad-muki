@@ -3941,7 +3941,9 @@ function NotesBlock() {
   const [open, setOpen] = useState(() => { try { return !!(localStorage.getItem("sklad_notes") || "").trim(); } catch { return false; } });
   const onChange = e => { const v = e.target.value; setText(v); try { localStorage.setItem("sklad_notes", v); } catch {} };
   const clearAll = () => { if (confirm("Очистить все заметки?")) { setText(""); try { localStorage.removeItem("sklad_notes"); } catch {} } };
-  if (!open) return (
+  const hasNotes = !!text.trim();
+  // Пока есть заметки — блок всегда открыт и не сворачивается
+  if (!open && !hasNotes) return (
     <button onClick={() => setOpen(true)} className="w-full text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl py-2.5 font-medium hover:bg-amber-100">📝 Заметки — открыть блокнот</button>
   );
   return (
@@ -3949,8 +3951,8 @@ function NotesBlock() {
       <div className="flex items-center justify-between mb-2">
         <div className="font-bold text-amber-900">📝 Заметки</div>
         <div className="flex gap-3 text-xs">
-          {text.trim() && <button onClick={clearAll} className="text-gray-400 hover:text-red-500">очистить</button>}
-          <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">свернуть</button>
+          {hasNotes && <button onClick={clearAll} className="text-gray-400 hover:text-red-500">очистить</button>}
+          {!hasNotes && <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">свернуть</button>}
         </div>
       </div>
       <textarea value={text} onChange={onChange} rows={5} placeholder={"Пиши что угодно:\n• Сегафредо — доложить +2 мешка, заменить испорченные\n• Мамыр — перезвонить насчёт оплаты\n• заказать поддоны"} className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap" }} />
