@@ -323,6 +323,14 @@ async function parseClientWithAI(text) {
   return JSON.parse(data.raw);
 }
 
+async function parseTruckWithAI(text) {
+  // Разбор поставки (фуры) из WhatsApp — через серверную функцию /api/parse-truck
+  const res = await fetch("/api/parse-truck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, today: TODAY(), tomorrow: TOMORROW(), weekday: TODAY_WEEKDAY() }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Не удалось разобрать поставку");
+  return JSON.parse(data.raw);
+}
+
 // Чистим ответ ИИ от markdown (звёздочки, заголовки, таблицы, линии) — чтобы показывался простым текстом
 function cleanAdvice(t) {
   return (t || "")
@@ -2706,9 +2714,37 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
   const [f, setF] = useState({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" });
   const [items, setItems] = useState([]);
   const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" });
+  const [aiText, setAiText] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiErr, setAiErr] = useState("");
+  const handleParseTruck = async () => {
+    if (!aiText.trim()) return;
+    setAiLoading(true); setAiErr("");
+    try {
+      const d = await parseTruckWithAI(aiText);
+      setF(prev => ({
+        ...prev,
+        date: d.date || prev.date,
+        driver_name: d.driver_name || prev.driver_name,
+        car_number: d.car_number || prev.car_number,
+        whatsapp: d.whatsapp || prev.whatsapp,
+        logist_phone: d.logist_phone || prev.logist_phone,
+        price: d.price ? String(d.price) : prev.price,
+      }));
+      const parsed = (d.items || []).filter(i => Number(i.kg) > 0).map(i => ({
+        brand: BRANDS.includes(i.brand) ? i.brand : BRANDS[0],
+        grade: GRADES.includes(i.grade) ? i.grade : GRADES[0],
+        bag_kg: WEIGHTS.includes(Number(i.bag_kg)) ? Number(i.bag_kg) : 50,
+        kg: Number(i.kg),
+      }));
+      if (parsed.length) setItems(parsed);
+      setAiText("");
+    } catch (e) { setAiErr(e.message || "Не удалось разобрать. Проверь текст."); }
+    setAiLoading(false);
+  };
 
   const itemKg = i => (i.kg != null && i.kg !== "") ? Number(i.kg) : Number(i.tonnes || 0) * 1000; // старые записи были в тоннах
-  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setEditItemIdx(null); };
+  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setEditItemIdx(null); setAiText(""); setAiErr(""); };
   const saveItem = () => {
     if (!it.kg) return;
     const ni = { brand: it.brand, grade: it.grade, bag_kg: Number(it.bag_kg), kg: Number(it.kg) };
@@ -2768,6 +2804,15 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
       {showAdd && (
         <Modal title={editId ? "Изменить фуру" : "Новая фура"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
+            {!editId && (
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                <div className="text-sm font-medium text-gray-700 mb-1">📲 Разобрать из WhatsApp</div>
+                <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={3} placeholder="Вставь сообщение о фуре, напр.: ДАРАД первый сорт 50кг - 10 тонн, высший 25кг - 5 тонн, фурист Асхат 87011234567, машина 123 ABC 01, цена 250000" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
+                {aiErr && <div className="text-xs text-red-500 mt-1">{aiErr}</div>}
+                <button onClick={handleParseTruck} disabled={aiLoading || !aiText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2 text-sm">{aiLoading ? "Разбираю..." : "✨ Разобрать и заполнить"}</button>
+                <div className="text-xs text-gray-400 mt-1">Заполнит позиции и данные фуриста ниже — проверь и поправь перед сохранением.</div>
+              </div>
+            )}
             <Inp label="Дата прихода" type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
             <div className="grid grid-cols-2 gap-2">
               <Inp label="Фурист (имя)" value={f.driver_name} onChange={e => setF({ ...f, driver_name: e.target.value })} />
