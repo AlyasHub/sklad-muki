@@ -363,10 +363,26 @@ function Inp({ label, ...p }) {
 function Sel({ label, options, ...p }) {
   return <div className="flex flex-col gap-1">{label && <label className="text-sm font-medium text-gray-700">{label}</label>}<select className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" {...p}>{options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}</select></div>;
 }
-function Btn({ variant = "primary", size = "md", children, ...p }) {
+function Btn({ variant = "primary", size = "md", children, onClick, disabled, ...p }) {
   const sz = { sm: "px-3 py-1.5 text-xs", md: "px-4 py-2 text-sm", lg: "px-6 py-3 text-base" };
   const vr = { primary: "bg-amber-500 hover:bg-amber-600 text-white", secondary: "bg-gray-100 hover:bg-gray-200 text-gray-700", danger: "bg-red-500 hover:bg-red-600 text-white", ghost: "hover:bg-gray-100 text-gray-600" };
-  return <button className={`rounded-lg font-medium transition-all focus:outline-none ${sz[size]} ${vr[variant]}`} {...p}>{children}</button>;
+  const [busy, setBusy] = useState(false);
+  // Если onClick — асинхронный (возвращает промис), сами показываем «крутилку» и блокируем повторные нажатия
+  const handleClick = async e => {
+    if (busy || disabled || !onClick) return;
+    let r;
+    try { r = onClick(e); } catch (err) { return; }
+    if (r && typeof r.then === "function") {
+      setBusy(true);
+      try { await r; } catch (err) {} finally { setBusy(false); }
+    }
+  };
+  return (
+    <button onClick={handleClick} disabled={disabled || busy} className={`relative rounded-lg font-medium transition-all focus:outline-none active:scale-95 disabled:opacity-60 disabled:cursor-default inline-flex items-center justify-center gap-1.5 ${sz[size]} ${vr[variant]}`} {...p}>
+      {busy && <span className={`inline-block ${size === "sm" ? "w-3 h-3 border-2" : "w-3.5 h-3.5 border-2"} border-current border-t-transparent rounded-full animate-spin`} style={{ opacity: 0.85 }} aria-hidden="true"></span>}
+      {children}
+    </button>
+  );
 }
 function Spinner() {
   return <div className="flex flex-col items-center justify-center py-16 gap-3"><div className="w-8 h-8 border-4 border-amber-400 border-t-transparent rounded-full animate-spin"></div><p className="text-sm text-gray-400">Загружаю данные...</p></div>;
