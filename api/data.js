@@ -66,7 +66,7 @@ export default async function handler(req, res) {
     }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
-      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins"];
+      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes"];
       const out = {};
       await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
       // Автопродление входа: токену осталось меньше 7 дней — выдаём свежий, клиент тихо подхватит.

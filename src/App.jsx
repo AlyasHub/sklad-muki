@@ -3935,33 +3935,74 @@ function EditGroupModal({ group, clients, reload, onClose }) {
   );
 }
 
-// 📝 Простой блокнот на главной: пиши что угодно (кому доложить мешок, кому перезвонить и т.п.)
-function NotesBlock() {
-  const [text, setText] = useState(() => { try { return localStorage.getItem("sklad_notes") || ""; } catch { return ""; } });
-  const [open, setOpen] = useState(() => { try { return !!(localStorage.getItem("sklad_notes") || "").trim(); } catch { return false; } });
-  const onChange = e => { const v = e.target.value; setText(v); try { localStorage.setItem("sklad_notes", v); } catch {} };
-  const clearAll = () => { if (confirm("Очистить все заметки?")) { setText(""); try { localStorage.removeItem("sklad_notes"); } catch {} } };
+// 📝 ОБЩИЙ блокнот на главной: заметки в базе — видят и правят все администраторы.
+// Пишешь ты — видит коллега, и наоборот. Автоподхват чужих правок, пока сам не печатаешь.
+function NotesBlock({ notes = [], me = "", canEdit = true, reload = () => {} }) {
+  const shared = notes.find(n => n.id === "shared") || null;
+  const serverText = shared ? (shared.text || "") : "";
+  const [text, setText] = useState(serverText);
+  const [open, setOpen] = useState(!!serverText.trim());
+  const focusedRef = useRef(false);
+  const timerRef = useRef(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  // Чужие правки подтягиваем, только когда сам не печатаешь (чтобы не перебивать ввод)
+  useEffect(() => {
+    if (!focusedRef.current) { setText(serverText); if (serverText.trim()) setOpen(true); }
+  }, [serverText, shared && shared.at]);
+
+  // Разовый перенос старых личных заметок (localStorage) в общие, если общие пусты
+  useEffect(() => {
+    if (!canEdit) return;
+    try {
+      const local = localStorage.getItem("sklad_notes") || "";
+      if (local.trim() && !serverText.trim()) { setText(local); setOpen(true); saveNow(local); localStorage.removeItem("sklad_notes"); }
+    } catch {}
+  }, []); // один раз при монтировании
+
+  const saveNow = async (v) => {
+    try { await dbUpsert("notes", { id: "shared", text: v, at: new Date().toISOString(), by: me }); reload("notes"); setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1200); }
+    catch (e) {
+      const msg = String((e && e.message) || e);
+      if (/notes/i.test(msg) || /PGRST205/.test(msg)) alert("Чтобы заметки были общими для всех, нужно один раз создать таблицу «notes» в Supabase. Скажи — пришлю инструкцию.");
+      else alert("⚠️ Не сохранилось: " + msg);
+    }
+  };
+  const onChange = e => { const v = e.target.value; setText(v); clearTimeout(timerRef.current); timerRef.current = setTimeout(() => saveNow(v), 700); };
+  const clearAll = () => { if (confirm("Очистить общие заметки для всех?")) { setText(""); saveNow(""); } };
+  const fmtAt = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }); };
   const hasNotes = !!text.trim();
-  // Пока есть заметки — блок всегда открыт и не сворачивается
+
   if (!open && !hasNotes) return (
-    <button onClick={() => setOpen(true)} className="w-full text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl py-2.5 font-medium hover:bg-amber-100">📝 Заметки — открыть блокнот</button>
+    <button onClick={() => setOpen(true)} className="w-full text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl py-2.5 font-medium hover:bg-amber-100">📝 Общие заметки — открыть</button>
   );
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
       <div className="flex items-center justify-between mb-2">
-        <div className="font-bold text-amber-900">📝 Заметки</div>
-        <div className="flex gap-3 text-xs">
-          {hasNotes && <button onClick={clearAll} className="text-gray-400 hover:text-red-500">очистить</button>}
+        <div className="font-bold text-amber-900">📝 Общие заметки</div>
+        <div className="flex gap-3 text-xs items-center">
+          {savedFlash && <span className="text-emerald-600">✓ сохранено</span>}
+          {canEdit && hasNotes && <button onClick={clearAll} className="text-gray-400 hover:text-red-500">очистить</button>}
           {!hasNotes && <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">свернуть</button>}
         </div>
       </div>
-      <textarea value={text} onChange={onChange} rows={5} placeholder={"Пиши что угодно:\n• Сегафредо — доложить +2 мешка, заменить испорченные\n• Мамыр — перезвонить насчёт оплаты\n• заказать поддоны"} className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-amber-300" style={{ whiteSpace: "pre-wrap" }} />
-      <div className="text-xs text-gray-400 mt-1">Сохраняется автоматически на этом устройстве.</div>
+      <textarea
+        value={text}
+        readOnly={!canEdit}
+        onFocus={() => { focusedRef.current = true; }}
+        onBlur={() => { focusedRef.current = false; }}
+        onChange={onChange}
+        rows={5}
+        placeholder={"Пиши что угодно — видят все:\n• Сегафредо — доложить +2 мешка, заменить испорченные\n• Мамыр — перезвонить насчёт оплаты\n• заказать поддоны"}
+        className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-amber-300"
+        style={{ whiteSpace: "pre-wrap" }}
+      />
+      <div className="text-xs text-gray-400 mt-1">{shared && shared.by ? `Видят все · последним правил(а): ${shared.by}${shared.at ? ` · ${fmtAt(shared.at)}` : ""}` : "Видят все администраторы · сохраняется автоматически"}</div>
     </div>
   );
 }
 
-function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0 }) {
+function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = "", reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0 }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -4171,7 +4212,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">На завтра</div><div className="text-3xl font-black text-gray-900">{groupCount(tomorrowList)}</div></div>
       </div>
 
-      {canEdit && <NotesBlock />}
+      <NotesBlock notes={notes} me={me} canEdit={canEdit} reload={reload} />
 
       {canEdit && (
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
@@ -4388,7 +4429,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], reload, applyLoca
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -4417,7 +4458,7 @@ export default function App() {
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [] };
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [] };
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
         return same ? prev : next;
@@ -4482,7 +4523,7 @@ export default function App() {
     setTimeout(() => setSyncDone(false), 2000);
   };
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -4525,7 +4566,7 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
