@@ -20,7 +20,12 @@ export default async function handler(req, res) {
       try { logins_count = (await dbList("logins")).length; } catch { logins_ok = false; }
       // Проверка записи: пробуем записать и сразу удалить тестовую строку
       try { const pid = "probe_" + uid(); await dbUpsert("logins", { id: pid, kind: "probe", at: new Date().toISOString() }); const { dbDelete } = await import("./_lib.js"); await dbDelete("logins", pid); } catch (e) { write_ok = false; write_err = String(e.message || e).slice(0, 200); }
-      return res.status(200).json({ bootstrap: users.length === 0, logins_ok, logins_count, write_ok, write_err });
+      // Какие из дополнительных таблиц созданы (наружу — только да/нет)
+      const tables = {};
+      for (const t of ["logins", "backups", "changes", "notes", "kgd_clients"]) {
+        try { await dbList(t); tables[t] = true; } catch { tables[t] = false; }
+      }
+      return res.status(200).json({ bootstrap: users.length === 0, logins_ok, logins_count, write_ok, write_err, tables });
     }
 
     if (!username || !password) return res.status(400).json({ error: "Введи логин и пароль" });
