@@ -66,7 +66,7 @@ export default async function handler(req, res) {
     }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
-      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients"];
+      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients", "kgd_docs"];
       const out = {};
       await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
       // Автопродление входа: токену осталось меньше 7 дней — выдаём свежий, клиент тихо подхватит.
@@ -128,8 +128,15 @@ async function listFor(u, table) {
     return await dbList(table);
   }
   if (u.role === "kgdmanager") {
-    // Менеджер Караганда: видит ТОЛЬКО свой справочник клиентов, больше ничего
-    return table === "kgd_clients" ? await dbList(table) : [];
+    // Младший менеджер Караганда: справочник клиентов + СВОЯ история документов
+    if (table === "kgd_clients") return await dbList(table);
+    if (table === "kgd_docs") return (await dbList("kgd_docs")).filter(d => d.byId === u.uid);
+    return [];
+  }
+  if (u.role === "kgdsenior") {
+    // Старший менеджер Караганда: справочник + история ВСЕХ менеджеров
+    if (table === "kgd_clients" || table === "kgd_docs") return await dbList(table);
+    return [];
   }
   if (u.role === "viewer") {
     // Директор-просмотрщик: видит все данные, но НЕ логины/пароли и НЕ журнал входов
@@ -174,8 +181,9 @@ async function upsertFor(u, table, item) {
     if (LOGGED.has(table)) await logChange(u, existing ? "update" : "create", table, item);
     return out;
   }
-  if (u.role === "kgdmanager" && table === "kgd_clients") {
-    // Менеджер Караганда ведёт свой справочник клиентов сам
+  if ((u.role === "kgdmanager" || u.role === "kgdsenior") && (table === "kgd_clients" || table === "kgd_docs")) {
+    // Справочник клиентов ведут оба; документ в историю подписываем автором на сервере
+    if (table === "kgd_docs") return dbUpsert("kgd_docs", { ...item, byId: u.uid, by: u.name });
     return dbUpsert("kgd_clients", item);
   }
   if (u.role === "driver" && table === "orders") {
@@ -196,10 +204,15 @@ async function upsertFor(u, table, item) {
 }
 
 async function deleteFor(u, table, id) {
-  if (u.role === "kgdmanager" && table === "kgd_clients") {
+  if ((u.role === "kgdmanager" || u.role === "kgdsenior") && table === "kgd_clients") {
     const ex = (await dbList("kgd_clients")).find(r => r.id === id);
     if (ex) await logChange(u, "delete", "kgd_clients", ex);
     return dbDelete("kgd_clients", id);
+  }
+  if (u.role === "kgdsenior" && table === "kgd_docs") { // историю чистит только старший
+    const ex = (await dbList("kgd_docs")).find(r => r.id === id);
+    if (ex) await logChange(u, "delete", "kgd_docs", ex);
+    return dbDelete("kgd_docs", id);
   }
   if (u.role !== "director") throw new Error("Нет прав на удаление");
   // Сохраняем удаляемую запись целиком — чтобы удаление можно было откатить одной кнопкой

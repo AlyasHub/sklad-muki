@@ -174,14 +174,15 @@ async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель", kgdmanager: "Менеджер Караганда" };
+const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
   director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "access"],
   viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
-  kgdmanager: ["kgdm"], // менеджеры Караганды видят только свой раздел
+  kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
+  kgdsenior: ["kgdm"], // старший менеджер Караганды: тот же раздел + история всех
 };
 // Что показываем в нижней панели (остальное — под «Ещё»)
 const PRIMARY_NAV = {
@@ -190,6 +191,7 @@ const PRIMARY_NAV = {
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
   kgdmanager: ["kgdm"],
+  kgdsenior: ["kgdm"],
 };
 const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", access: "⚙️" };
 const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Рабочие", expenses: "Расходы", access: "Доступ" };
@@ -3587,8 +3589,35 @@ function loadPdfMakeKgd() {
   });
 }
 
-function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
-  const [view, setView] = useState("new"); // new | clients
+// Офлайн-очередь документов Караганды: если сети нет — складываем на устройство,
+// при появлении связи отправляем в историю автоматически.
+const KGD_QUEUE = "kgd_queue";
+const kgdQueueRead = () => { try { return JSON.parse(localStorage.getItem(KGD_QUEUE) || "[]"); } catch { return []; } };
+const kgdQueueWrite = list => { try { localStorage.setItem(KGD_QUEUE, JSON.stringify(list)); } catch {} };
+async function kgdFlushQueue(reload) {
+  const q = kgdQueueRead();
+  if (!q.length) return 0;
+  const left = [];
+  let sent = 0;
+  for (const doc of q) {
+    try { await dbUpsert("kgd_docs", doc); sent++; } catch { left.push(doc); }
+  }
+  kgdQueueWrite(left);
+  if (sent && reload) reload("kgd_docs");
+  return sent;
+}
+
+function KgdManagersTab({ kgdClients = [], kgdDocs = [], reload, canManage = true, isSenior = false, me = "" }) {
+  const [view, setView] = useState("new"); // new | clients | history
+  const [pending, setPending] = useState(kgdQueueRead().length);
+  // При появлении связи автоматически отправляем накопленные документы в историю
+  useEffect(() => {
+    const flush = async () => { const n = await kgdFlushQueue(reload); setPending(kgdQueueRead().length); if (n) console.log("Отправлено в историю:", n); };
+    flush();
+    window.addEventListener("online", flush);
+    const t = setInterval(flush, 60000);
+    return () => { window.removeEventListener("online", flush); clearInterval(t); };
+  }, []);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [cf, setCf] = useState({ name: "", bin: "", address: "", products: [] });
@@ -3611,6 +3640,19 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
   const dateDisp = (date || "").split("-").reverse().join(".");
 
   const pickClient = id => { setClientId(id); setQty({}); };
+
+  // Запись документа в историю. Нет связи — кладём в очередь на устройстве, уйдёт само при появлении сети.
+  const saveToHistory = async kind => {
+    const doc = {
+      id: uid(), at: new Date().toISOString(), by: me, kind,
+      clientId: client.id, clientName: client.name, bin: client.bin || "", address: client.address || "",
+      deal, docNum, carNum, date,
+      rows: rows.map(r => ({ name: r.name, kg: r.kg, price_kg: Number(r.price_kg) || 0 })),
+      totalKg, total,
+    };
+    try { await dbUpsert("kgd_docs", doc); reload("kgd_docs"); }
+    catch { kgdQueueWrite([...kgdQueueRead(), doc]); setPending(kgdQueueRead().length); } // офлайн — в очередь
+  };
 
   // ─── Справочник клиентов ───
   const openNewClient = () => { setEditId(null); setCf({ name: "", bin: "", address: "", products: [] }); setPf({ name: "", price_kg: "" }); setShowAdd(true); };
@@ -3665,6 +3707,7 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
       const copy = withSignatures => [header(), buyer(), tbl(), ...(withSignatures ? signatures() : [sig("Примечание:  ______________________________________________________________________________/", "")])];
       const dd = { pageSize: "A4", pageMargins: [28, 22, 28, 20], content: [...copy(true), { text: "", margin: [0, 26, 0, 0] }, { canvas: [{ type: "line", x1: 0, y1: 0, x2: 539, y2: 0, dash: { length: 4 }, lineWidth: 0.5, lineColor: "#999" }] }, { text: "", margin: [0, 14, 0, 0] }, ...copy(false)] };
       pdfMake.createPdf(dd).download(`Пропуск_${(client.name || "").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
+      await saveToHistory("Пропуск");
     } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
     setPdfBusy("");
   };
@@ -3709,6 +3752,7 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
       const short = [header(), buyer(), addr(), tblNoPrice(), cashier()];
       const dd = { pageSize: "A4", pageMargins: [28, 22, 28, 20], content: [...full, { text: "", margin: [0, 18, 0, 0] }, { canvas: [{ type: "line", x1: 0, y1: 0, x2: 539, y2: 0, dash: { length: 4 }, lineWidth: 0.5, lineColor: "#999" }] }, { text: "", margin: [0, 12, 0, 0] }, ...short] };
       pdfMake.createPdf(dd).download(`Накладная_${(client.name || "").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
+      await saveToHistory("Накладная");
     } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
     setPdfBusy("");
   };
@@ -3716,9 +3760,13 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
   return (
     <div className="space-y-4">
       <div className="flex gap-2">
-        <button onClick={() => setView("new")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "new" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📄 Новая отгрузка</button>
+        <button onClick={() => setView("new")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "new" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📄 Отгрузка</button>
         <button onClick={() => setView("clients")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "clients" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>🏢 Клиенты ({kgdClients.length})</button>
+        <button onClick={() => setView("history")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "history" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📋 История{pending > 0 ? ` (${pending}⏳)` : ""}</button>
       </div>
+      {pending > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm text-amber-800">⏳ {pending} документ(ов) ждут отправки в историю — уйдут сами, когда появится интернет.</div>
+      )}
 
       {view === "new" && (
         <>
@@ -3813,6 +3861,46 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
           </div>
         </>
       )}
+
+      {view === "history" && (() => {
+        const queued = kgdQueueRead();
+        const list = [...kgdDocs].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+        const fmtAt = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" }) + " " + d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }); };
+        const sumAll = list.reduce((s, d) => s + (d.total || 0), 0);
+        const kgAll = list.reduce((s, d) => s + (d.totalKg || 0), 0);
+        const card = (d, isQueued) => (
+          <div key={d.id} className={`rounded-2xl p-4 border ${isQueued ? "bg-amber-50 border-amber-200" : "bg-white border-gray-100 shadow-sm"}`}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-bold text-gray-900">{d.clientName}{d.deal ? <span className="font-normal text-gray-500"> · сделка #{d.deal}</span> : ""}</div>
+                <div className="text-xs text-gray-500">{isQueued ? "⏳ ждёт отправки" : fmtAt(d.at)}{d.by ? ` · ${d.by}` : ""}{d.kind ? ` · ${d.kind}` : ""}</div>
+                <div className="text-sm text-gray-600 mt-1">{(d.rows || []).map((r, i) => <div key={i}>• {r.name} — {fmt(r.kg)} кг{r.price_kg ? ` × ${fmt(r.price_kg)} тг` : ""}</div>)}</div>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <div className="font-bold text-gray-900">{fmt(d.total)} тг</div>
+                <div className="text-xs text-gray-500">{fmt(d.totalKg)} кг</div>
+                {isSenior && !isQueued && <button onClick={async () => { if (confirm("Удалить запись из истории?")) { try { await dbDelete("kgd_docs", d.id); reload("kgd_docs"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } } }} className="text-red-400 hover:text-red-600 text-sm mt-1">✕</button>}
+              </div>
+            </div>
+          </div>
+        );
+        return (
+          <div className="space-y-3">
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">
+              {isSenior ? "📋 История всех менеджеров: кто, когда и что выбил." : "📋 Твоя история сформированных документов."} Эти данные <b>не попадают</b> в склад и отчёты компании.
+            </div>
+            {list.length > 0 && (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-emerald-50 rounded-xl p-3"><div className="text-xs text-emerald-700">Всего документов</div><div className="text-lg font-bold text-emerald-800">{list.length}</div></div>
+                <div className="bg-amber-50 rounded-xl p-3"><div className="text-xs text-amber-700">Общий объём / сумма</div><div className="text-sm font-bold text-amber-800">{fmt(kgAll)} кг · {fmt(sumAll)} тг</div></div>
+              </div>
+            )}
+            {queued.map(d => card(d, true))}
+            {list.length === 0 && queued.length === 0 && <div className="text-center py-10 text-gray-400">Пока пусто — сформируй первый документ.</div>}
+            {list.map(d => card(d, false))}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -4777,7 +4865,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -4807,7 +4895,7 @@ export default function App() {
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [] };
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [] };
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
         // Сохраняем копию для офлайна (нужно менеджерам Караганды в поле)
@@ -4885,7 +4973,7 @@ export default function App() {
     setTimeout(() => setSyncDone(false), 2000);
   };
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -4938,7 +5026,7 @@ export default function App() {
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
-            {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} reload={reload} canManage={isDirector || user.role === "kgdmanager"} />}
+            {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
             {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
