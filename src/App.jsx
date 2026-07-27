@@ -3638,26 +3638,27 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
     try {
       const pdfMake = await loadPdfMakeKgd();
       const cell = (t, extra = {}) => ({ text: String(t ?? ""), fontSize: 9, ...extra });
-      const header = { table: { widths: [90, "*", 80, 90], body: [[
+      // ВАЖНО: каждая копия строится заново (фабрики) — pdfmake портит объекты при повторном использовании
+      const header = () => ({ table: { widths: [90, "*", 80, 90], body: [[
         { stack: [cell("Сделка", { fontSize: 8, color: "#555" }), cell(deal ? `Сделка #${deal}` : " ")], margin: [2, 2, 2, 2] },
         { stack: [cell("Пропуск на погрузку товара №________", { bold: true, alignment: "center", margin: [0, 8, 0, 0] })] },
         { stack: [cell("№ а/м", { fontSize: 8, color: "#555" }), cell(carNum || " ")], margin: [2, 2, 2, 2] },
         { stack: [cell("Дата составления", { fontSize: 8, color: "#555" }), cell(dateDisp)], margin: [2, 2, 2, 2] },
-      ]] } };
-      const buyer = { text: [{ text: "Покупатель:  ", bold: true, fontSize: 9 }, { text: `${client.name}${client.bin ? `, БИН/ИИН ${client.bin}` : ""}`, fontSize: 9 }], margin: [0, 8, 0, 6] };
-      const tbl = { table: { widths: [16, "*", 26, 52, 52, 56, 52], body: [
+      ]] } });
+      const buyer = () => ({ text: [{ text: "Покупатель:  ", bold: true, fontSize: 9 }, { text: `${client.name}${client.bin ? `, БИН/ИИН ${client.bin}` : ""}`, fontSize: 9 }], margin: [0, 8, 0, 6] });
+      const tbl = () => ({ table: { widths: [16, "*", 26, 52, 52, 56, 52], body: [
         ["№", "Наименование", "Ед.", "Кол-во кг", "Кол-во шт.", "Дата выбоя", "Факт. вес"].map(h => cell(h, { bold: true, alignment: "center", fontSize: 8.5 })),
         ...rows.map((r, i) => [cell(i + 1, { alignment: "center" }), cell(r.name), cell("кг", { alignment: "center" }), cell(fmt(r.kg), { alignment: "center" }), cell(" "), cell(" "), cell(" ")]),
-      ] } };
+      ] } });
       const sig = (l, r) => ({ columns: [{ text: l, fontSize: 9, width: "55%" }, { text: r || "", fontSize: 9, width: "*" }], margin: [0, 9, 0, 0] });
-      const signatures = [
+      const signatures = () => [
         sig("Въезд разрешил менеджер:  _______________________/", "Выезд разрешил менеджер:  ____________________/"),
         sig("Отгружено зав. складом:     _______________________/", "Б/н расчёт  ______________________________/"),
         sig("Ответственный лаборант:   _______________________/", "Опломбировано  ___________________________/"),
         sig("Оператор весовой:              _______________________/", ""),
         sig("Примечание:  ______________________________________________________________________________/", ""),
       ];
-      const copy = extra => [header, buyer, tbl, ...(extra ? signatures : [sig("Примечание:  ______________________________________________________________________________/", "")])];
+      const copy = withSignatures => [header(), buyer(), tbl(), ...(withSignatures ? signatures() : [sig("Примечание:  ______________________________________________________________________________/", "")])];
       const dd = { pageSize: "A4", pageMargins: [28, 22, 28, 20], content: [...copy(true), { text: "", margin: [0, 26, 0, 0] }, { canvas: [{ type: "line", x1: 0, y1: 0, x2: 539, y2: 0, dash: { length: 4 }, lineWidth: 0.5, lineColor: "#999" }] }, { text: "", margin: [0, 14, 0, 0] }, ...copy(false)] };
       pdfMake.createPdf(dd).download(`Пропуск_${(client.name || "").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
     } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
@@ -3671,32 +3672,37 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
       const pdfMake = await loadPdfMakeKgd();
       const cell = (t, extra = {}) => ({ text: String(t ?? ""), fontSize: 9, ...extra });
       const money = n => (Number(n) || 0).toLocaleString("ru-RU").replace(/ /g, " ");
-      const header = { table: { widths: ["*", 90, 90], body: [[
+      // Каждая копия строится заново (фабрики) — pdfmake портит объекты при повторном использовании
+      const header = () => ({ table: { widths: ["*", 90, 90], body: [[
         { stack: [cell("Сделка", { fontSize: 8, color: "#555" }), cell(deal ? `Сделка #${deal}` : " ", { bold: true })], margin: [2, 2, 2, 2] },
         { stack: [cell("Номер документа", { fontSize: 8, color: "#555", alignment: "center" }), cell(docNum || " ", { alignment: "center" })], margin: [2, 2, 2, 2] },
         { stack: [cell("Дата составления", { fontSize: 8, color: "#555", alignment: "center" }), cell(dateDisp, { alignment: "center" })], margin: [2, 2, 2, 2] },
-      ]] } };
-      const buyer = { text: [{ text: "Покупатель:  ", bold: true, fontSize: 9 }, { text: `${client.name}${client.bin ? `, БИН/ИИН ${client.bin}` : ""}`, fontSize: 9 }], margin: [0, 8, 0, 2] };
-      const addr = { text: [{ text: "Адрес поставки:  ", bold: true, fontSize: 9 }, { text: client.address || " ", fontSize: 9 }], margin: [0, 0, 0, 6] };
-      const tbl = { table: { widths: [16, 44, "*", 52, 26, 44, 66], body: [
+      ]] } });
+      const buyer = () => ({ text: [{ text: "Покупатель:  ", bold: true, fontSize: 9 }, { text: `${client.name}${client.bin ? `, БИН/ИИН ${client.bin}` : ""}`, fontSize: 9 }], margin: [0, 8, 0, 2] });
+      const addr = () => ({ text: [{ text: "Адрес поставки:  ", bold: true, fontSize: 9 }, { text: client.address || " ", fontSize: 9 }], margin: [0, 0, 0, 6] });
+      // Верхняя таблица — с ценой и суммой
+      const tbl = () => ({ table: { widths: [16, 44, "*", 52, 26, 44, 66], body: [
         ["№", "Код", "Наименование", "Кол-во", "Ед.", "Цена", "Сумма"].map(h => cell(h, { bold: true, alignment: "center", fontSize: 8.5 })),
         ...rows.map((r, i) => [cell(i + 1, { alignment: "center" }), cell(" "), cell(r.name), cell(fmt(r.kg), { alignment: "center" }), cell("кг", { alignment: "center" }), cell(money(r.price_kg), { alignment: "right" }), cell(money(r.kg * r.price_kg), { alignment: "right" })]),
-      ] } };
+      ] } });
+      // Нижняя таблица — БЕЗ цен (только ассортимент и тоннаж)
+      const tblNoPrice = () => ({ table: { widths: [16, 44, "*", 60, 30], body: [
+        ["№", "Код", "Наименование", "Кол-во", "Ед."].map(h => cell(h, { bold: true, alignment: "center", fontSize: 8.5 })),
+        ...rows.map((r, i) => [cell(i + 1, { alignment: "center" }), cell(" "), cell(r.name), cell(fmt(r.kg), { alignment: "center" }), cell("кг", { alignment: "center" })]),
+      ] } });
       const totalLine = t => ({ columns: [{ text: "", width: "*" }, { text: t, bold: true, fontSize: 9.5, width: "auto" }], margin: [0, 5, 4, 0] });
+      const cashier = () => ({ columns: [{ text: "Кассир     _______________________/", fontSize: 9, width: "55%" }, { text: "Менеджер  ___________________/", fontSize: 9, width: "*" }], margin: [0, 16, 0, 0] });
       const full = [
-        header, buyer, addr, tbl,
+        header(), buyer(), addr(), tbl(),
         totalLine(`Итого:  ${money(total)}.00 тенге`),
         totalLine(`Итого к оплате:  ${money(total)}.00 тенге`),
         { text: `Всего наименований ${countInWords(rows.length)}, на сумму ${money(total)}.00 тенге`, fontSize: 9, margin: [0, 8, 0, 0] },
         { text: "Всего к оплате: (сумма прописью)", fontSize: 9, margin: [0, 2, 0, 0] },
         { text: tengeInWords(total), fontSize: 9, bold: true, margin: [0, 2, 0, 0] },
-        { columns: [{ text: "Кассир     _______________________/", fontSize: 9, width: "55%" }, { text: "Менеджер  ___________________/", fontSize: 9, width: "*" }], margin: [0, 16, 0, 0] },
+        cashier(),
       ];
-      const short = [
-        header, buyer, addr, tbl,
-        totalLine(`Итого:  ${money(total)}.00 тенге`),
-        { columns: [{ text: "Кассир     _______________________/", fontSize: 9, width: "55%" }, { text: "Менеджер  ___________________/", fontSize: 9, width: "*" }], margin: [0, 16, 0, 0] },
-      ];
+      // Нижняя копия — без цен и без итогов (для водителя)
+      const short = [header(), buyer(), addr(), tblNoPrice(), cashier()];
       const dd = { pageSize: "A4", pageMargins: [28, 22, 28, 20], content: [...full, { text: "", margin: [0, 18, 0, 0] }, { canvas: [{ type: "line", x1: 0, y1: 0, x2: 539, y2: 0, dash: { length: 4 }, lineWidth: 0.5, lineColor: "#999" }] }, { text: "", margin: [0, 12, 0, 0] }, ...short] };
       pdfMake.createPdf(dd).download(`Накладная_${(client.name || "").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
     } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
