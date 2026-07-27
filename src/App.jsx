@@ -3601,6 +3601,8 @@ function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
   const [date, setDate] = useState(TODAY());
   const [qty, setQty] = useState({}); // индекс товара -> кг
   const [pdfBusy, setPdfBusy] = useState("");
+  // Заранее подтягиваем генератор PDF, пока есть связь — чтобы офлайн документы собирались сразу
+  useEffect(() => { loadPdfMakeKgd().catch(() => {}); }, []);
 
   const client = kgdClients.find(c => c.id === clientId);
   const rows = client ? (client.products || []).map((p, i) => ({ ...p, kg: Number(qty[i]) || 0 })).filter(r => r.kg > 0) : [];
@@ -4784,6 +4786,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false); // ручное обновление: крутим значок и показываем ✓
   const [syncDone, setSyncDone] = useState(false);
   const [updateReady, setUpdateReady] = useState(false); // на сервере вышла новая версия приложения
+  const [offline, setOffline] = useState(false); // нет связи — работаем на сохранённых данных
   const [openOrderSignal, setOpenOrderSignal] = useState(0);
   const [openExpenseSignal, setOpenExpenseSignal] = useState(0);
   const goTab = id => { setTab(id); setMoreOpen(false); setFabOpen(false); };
@@ -4807,15 +4810,28 @@ export default function App() {
         const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [] };
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
+        // Сохраняем копию для офлайна (нужно менеджерам Караганды в поле)
+        try { localStorage.setItem("sklad_cache", JSON.stringify(next)); } catch {}
         return same ? prev : next;
       });
+      setOffline(false);
       setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) {
       // apiData сбрасывает токен на 401 (сессия истекла / доступ закрыт) → выкидываем на экран входа
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; }
-      setError("Нет связи с базой: " + e.message);
+      // Нет сети — поднимаем последние сохранённые данные и работаем офлайн
+      const isOffline = /offline|Failed to fetch|NetworkError|Сервер не/i.test(String(e.message || e)) || !navigator.onLine;
+      if (isOffline) {
+        setOffline(true);
+        try { const c = JSON.parse(localStorage.getItem("sklad_cache") || "null"); if (c) setData(prev => (prev.kgd_clients?.length || prev.orders?.length) ? prev : c); } catch {}
+      } else setError("Нет связи с базой: " + e.message);
     }
     if (showSpinner) setLoading(false);
+  }, []);
+
+  // На старте: поднять сохранённые данные (чтобы офлайн сразу было что показать)
+  useEffect(() => {
+    try { const c = JSON.parse(localStorage.getItem("sklad_cache") || "null"); if (c) setData(c); } catch {}
   }, []);
 
   // На старте: восстановить сессию из токена (без обращения к базе)
@@ -4907,6 +4923,11 @@ export default function App() {
         <button onClick={() => window.location.reload()} className="w-full bg-amber-500 text-white text-sm font-bold px-4 py-2.5 text-center">
           ✨ Вышло обновление приложения — нажми здесь, чтобы обновиться
         </button>
+      )}
+      {offline && (
+        <div className="bg-gray-700 text-white text-sm px-4 py-2 text-center">
+          📴 Нет связи — работаем на сохранённых данных. Документы формируются, изменения не сохраняются.
+        </div>
       )}
       {error && <div className="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-600 text-center">{error}</div>}
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
