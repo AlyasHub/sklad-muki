@@ -204,7 +204,12 @@ const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Груз
 // Старые записи сохранены как «Поддоны/Склад» — показываем и считаем их как «Склад»
 const catName = c => (c === "Поддоны/Склад" ? "Склад" : c);
 
-const WAREHOUSE = { lat: 51.17833, lon: 71.460803 };
+// Адрес склада (точка старта маршрутов). Мутируемый объект — обновляется из настроек при загрузке.
+const WAREHOUSE = { lat: 51.17833, lon: 71.460803, address: "" };
+function applyWarehouse(notes) {
+  const w = (notes || []).find(n => n.id === "warehouse");
+  if (w && w.coords && typeof w.coords.lat === "number") { WAREHOUSE.lat = w.coords.lat; WAREHOUSE.lon = w.coords.lon; WAREHOUSE.address = w.address || ""; WAREHOUSE.gis_link = w.gis_link || ""; }
+}
 
 function parseCoordsFromGisLink(link) {
   if (!link) return null;
@@ -2818,6 +2823,13 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
     catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
   };
 
+  // Быстрая смена даты прихода прямо в списке
+  const changeDate = async (t, newDate) => {
+    if (!newDate || newDate === t.date) return;
+    try { await dbUpsert("trucks", { ...t, date: newDate }); await reload("trucks"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e)); }
+  };
+
   const totalKg = t => (t.items || []).reduce((s, i) => s + itemKg(i), 0);
   const sorted = [...trucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
   const waLink = n => "https://wa.me/" + String(n || "").replace(/\D/g, "");
@@ -2890,6 +2902,13 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
                 <Btn size="sm" onClick={() => setTruckStatus(t, "принята")} disabled={saving}>✓ Принять на склад</Btn>
               </div>
             )}
+            {canEdit && t.status !== "принята" && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 flex-wrap pt-2 border-t border-gray-100">
+                <span>📅 Дата прихода:</span>
+                <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={t.date || ""} onChange={e => changeDate(t, e.target.value)} />
+                <button className="text-amber-600 hover:text-amber-700 font-medium" onClick={() => changeDate(t, TOMORROW())}>→ на завтра</button>
+              </div>
+            )}
             {canEdit && (
               <div className="mt-2 flex gap-2">
                 {t.status !== "принята" && <Btn size="sm" variant="secondary" onClick={() => openEdit(t)}>✏️ Изменить</Btn>}
@@ -2903,7 +2922,54 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
   );
 }
 
-function UsersTab({ users, drivers, logins = [], reload, currentUser }) {
+// Настройка адреса склада (точка старта маршрутов). Хранится в notes id="warehouse".
+function WarehouseSettings({ notes = [], reload }) {
+  const w = notes.find(n => n.id === "warehouse");
+  const [link, setLink] = useState(w?.gis_link || "");
+  const [addr, setAddr] = useState(w?.address || "");
+  const [coords, setCoords] = useState(w?.coords || null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const resolve = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const c = parseCoordsFromGisLink(link) || parseCoordsFromText(link) || await resolveGisCoords(link);
+      setCoords(c); setMsg("✓ точка найдена");
+    } catch (e) { setMsg("⚠️ " + (e.message || "не удалось определить точку")); }
+    setBusy(false);
+  };
+  const save = async () => {
+    if (!coords) { setMsg("Сначала определи точку по ссылке 2ГИС"); return; }
+    setBusy(true); setMsg("");
+    try {
+      await dbUpsert("notes", { id: "warehouse", coords, address: addr.trim(), gis_link: link.trim(), at: new Date().toISOString() });
+      WAREHOUSE.lat = coords.lat; WAREHOUSE.lon = coords.lon; WAREHOUSE.address = addr.trim();
+      await reload("notes"); setMsg("✓ адрес склада сохранён — маршруты теперь строятся отсюда");
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      setMsg(/notes|PGRST205/i.test(m) ? "Нужна таблица notes в Supabase" : "⚠️ " + m);
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl p-4">
+      <div className="font-bold text-gray-800 mb-1">🏭 Адрес склада (старт маршрутов)</div>
+      <div className="text-xs text-gray-400 mb-3">Отсюда строится маршрут доставки. Вставь ссылку 2ГИС на склад и определи точку.{coords ? "" : " Сейчас — адрес по умолчанию."}</div>
+      <div className="space-y-2">
+        <Inp label="Название/адрес склада" value={addr} onChange={e => setAddr(e.target.value)} placeholder="напр. Астана, ул. …" />
+        <Inp label="Ссылка 2ГИС на склад" value={link} onChange={e => { setLink(e.target.value); setCoords(null); }} placeholder="https://2gis.kz/astana/geo/..." />
+        <div className="flex items-center gap-2 flex-wrap">
+          <Btn size="sm" variant="secondary" onClick={resolve} disabled={busy || !link.trim()}>📍 Определить точку</Btn>
+          <Btn size="sm" onClick={save} disabled={busy || !coords}>Сохранить</Btn>
+          {coords && <span className="text-xs text-emerald-600">точка: {coords.lat.toFixed(5)}, {coords.lon.toFixed(5)}</span>}
+        </div>
+        {msg && <div className={`text-xs ${msg.startsWith("✓") ? "text-emerald-600" : "text-red-500"}`}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -2991,6 +3057,7 @@ function UsersTab({ users, drivers, logins = [], reload, currentUser }) {
         })}
       </div>
 
+      <WarehouseSettings notes={notes} reload={reload} />
       <BackupLog />
       <LoginLog logins={logins} />
     </div>
@@ -3089,25 +3156,44 @@ function BackupLog() {
   );
 }
 
-// Журнал входов: кто и когда заходил в приложение (для администратора)
+// Журнал входов: кто и когда заходил в приложение (для администратора), с фильтрами
 function LoginLog({ logins }) {
   const [open, setOpen] = useState(true);
-  const sorted = [...(logins || [])].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+  const [who, setWho] = useState(""); // фильтр по человеку (userId)
+  const [kind, setKind] = useState("all"); // all | login | open
+  const [day, setDay] = useState(""); // конкретная дата (YYYY-MM-DD)
   const fmt = iso => {
     const d = new Date(iso);
     if (isNaN(d)) return iso || "";
     return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
   };
+  // уникальные люди из журнала
+  const people = [];
+  (logins || []).forEach(l => { const id = l.userId || l.username || l.name; if (id && !people.some(p => p.id === id)) people.push({ id, name: l.name || l.username }); });
+  people.sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru"));
+  const filtered = [...(logins || [])]
+    .filter(l => !who || (l.userId || l.username || l.name) === who)
+    .filter(l => kind === "all" || (kind === "login" ? l.kind === "login" : l.kind !== "login"))
+    .filter(l => !day || String(l.at || "").slice(0, 10) === day)
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
   return (
     <div className="pt-2">
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-3">
         <span className="font-bold text-gray-800">🕐 Кто когда заходил</span>
-        <span className="text-sm text-gray-400">{sorted.length} · {open ? "скрыть" : "показать"}</span>
+        <span className="text-sm text-gray-400">{filtered.length} · {open ? "скрыть" : "показать"}</span>
       </button>
       {open && (
-        <div className="mt-2 space-y-1">
-          {sorted.length === 0 && <p className="text-sm text-gray-400 px-1">Пока нет записей о входах.</p>}
-          {sorted.slice(0, 200).map(l => (
+        <div className="mt-2 space-y-2">
+          <div className="bg-white border border-gray-100 rounded-xl p-3 space-y-2">
+            <Sel label="Кто" value={who} onChange={e => setWho(e.target.value)} options={[{ value: "", label: "— все —" }, ...people.map(p => ({ value: p.id, label: p.name }))]} />
+            <div className="grid grid-cols-2 gap-2">
+              <Sel label="Тип" value={kind} onChange={e => setKind(e.target.value)} options={[{ value: "all", label: "Все" }, { value: "open", label: "📱 Открыл приложение" }, { value: "login", label: "🔑 Вход по паролю" }]} />
+              <Inp label="За дату" type="date" value={day} onChange={e => setDay(e.target.value)} />
+            </div>
+            {(who || kind !== "all" || day) && <button onClick={() => { setWho(""); setKind("all"); setDay(""); }} className="text-xs text-amber-600 font-medium">Сбросить фильтры</button>}
+          </div>
+          {filtered.length === 0 && <p className="text-sm text-gray-400 px-1">Нет записей по фильтру.</p>}
+          {filtered.slice(0, 300).map(l => (
             <div key={l.id} className="bg-white border border-gray-100 rounded-lg px-3 py-2 flex items-center justify-between text-sm">
               <div>
                 <span className="mr-1" title={l.kind === "login" ? "вход по паролю" : "открыл приложение"}>{l.kind === "login" ? "🔑" : "📱"}</span>
@@ -3117,7 +3203,7 @@ function LoginLog({ logins }) {
               <span className="text-gray-500">{fmt(l.at)}</span>
             </div>
           ))}
-          {sorted.length > 200 && <p className="text-xs text-gray-400 px-1">Показаны последние 200 входов.</p>}
+          {filtered.length > 300 && <p className="text-xs text-gray-400 px-1">Показаны последние 300 записей.</p>}
         </div>
       )}
     </div>
@@ -4927,6 +5013,7 @@ export default function App() {
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
         const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [] };
+        applyWarehouse(next.notes); // подхватываем сохранённый адрес склада
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
         // Сохраняем копию для офлайна (нужно менеджерам Караганды в поле)
@@ -4950,7 +5037,7 @@ export default function App() {
 
   // На старте: поднять сохранённые данные (чтобы офлайн сразу было что показать)
   useEffect(() => {
-    try { const c = JSON.parse(localStorage.getItem("sklad_cache") || "null"); if (c) setData(c); } catch {}
+    try { const c = JSON.parse(localStorage.getItem("sklad_cache") || "null"); if (c) { setData(c); applyWarehouse(c.notes); } } catch {}
   }, []);
 
   // На старте: восстановить сессию из токена (без обращения к базе)
@@ -5066,7 +5153,7 @@ export default function App() {
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
-            {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} reload={reload} currentUser={user} />}
+            {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} />}
           </>
         )}
       </div>

@@ -15,13 +15,39 @@ function buildShortages(orders, stock) {
   return out.sort((a, b) => b.lack - a.lack);
 }
 
+// Остатки на складе на текущий момент, сгруппированы по бренду → сорту → фасовке
+function buildStockBlock(stock, orders) {
+  const bal = {};
+  (stock || []).forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; if (!bal[k]) bal[k] = { brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, kg: 0, bags: 0 }; bal[k].kg += Number(s.weight_kg) || 0; bal[k].bags += Number(s.bags) || 0; });
+  // бронь под неотгруженные заявки
+  const reserved = {};
+  (orders || []).filter(o => (o.status === "новая" || o.status === "в пути") && !o.fromKaraganda).forEach(o => { const k = `${o.brand}|${o.grade}|${o.bag_kg}`; reserved[k] = (reserved[k] || 0) + (Number(o.bags) || 0); });
+  const items = Object.values(bal);
+  if (!items.length) return "\n\n🏭 ОСТАТКИ НА СКЛАДЕ:\nСклад пуст.";
+  const brands = [...new Set(items.map(b => b.brand))].sort((a, b) => String(a).localeCompare(String(b), "ru"));
+  const totalKg = items.reduce((s, b) => s + b.kg, 0);
+  const L = ["", "", `🏭 ОСТАТКИ НА СКЛАДЕ (всего ${fmt(totalKg)} кг):`];
+  brands.forEach(brand => {
+    const rows = items.filter(b => b.brand === brand);
+    L.push(`\n${brand} — ${fmt(rows.reduce((s, b) => s + b.kg, 0))} кг:`);
+    rows.sort((a, b) => String(a.grade).localeCompare(String(b.grade), "ru") || b.bag_kg - a.bag_kg).forEach(b => {
+      const need = reserved[`${b.brand}|${b.grade}|${b.bag_kg}`] || 0;
+      const bagsAvail = Math.max(0, b.bags);
+      const warn = b.kg < 0 ? " ⛔ МИНУС!" : (need > bagsAvail ? ` ⚠️ не хватает ${need - bagsAvail} меш.` : (need ? ` (в заявках ${need}, своб. ${bagsAvail - need})` : ""));
+      L.push(`  • ${b.grade} ${b.bag_kg}кг — ${fmt(b.kg)} кг (${fmt(b.bags)} меш.)${warn}`);
+    });
+  });
+  return L.join("\n");
+}
+
 function buildText(dateStr, day, clients, drivers, orders, stock) {
   const dDisplay = dateStr.split("-").reverse().join(".");
+  const stockBlock = buildStockBlock(stock, orders);
   const shortages = buildShortages(orders || [], stock);
   const shortBlock = shortages.length
     ? "\n\n⚠️ НЕ ХВАТАЕТ МУКИ ПОД ЗАЯВКИ:\n" + shortages.map(s => `• ${s.brand} ${s.grade} ${s.bag_kg}кг — нужно ${s.need} меш., на складе ${s.have} → не хватает ${s.lack} меш.`).join("\n") + "\nЗакажи приход или перенеси часть заявок."
     : "";
-  if (!day.length) return `Отчёт за ${dDisplay}\n\nЗа день отгрузок нет.${shortBlock}`;
+  if (!day.length) return `Отчёт за ${dDisplay}\n\nЗа день отгрузок нет.${shortBlock}${stockBlock}`;
   const totalKg = day.reduce((s, o) => s + o.bags * o.bag_kg, 0);
   const totalSum = day.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
   const groups = {};
@@ -39,7 +65,7 @@ function buildText(dateStr, day, clients, drivers, orders, stock) {
   const byDrv = {};
   day.forEach(o => { if (!o.driverId) return; const dr = drivers.find(x => x.id === o.driverId); if (!dr) return; byDrv[o.driverId] = byDrv[o.driverId] || { name: dr.name, kg: 0, pay: 0 }; const kg = o.bags * o.bag_kg; byDrv[o.driverId].kg += kg; byDrv[o.driverId].pay += kg * (dr.rate_per_kg || 0); });
   if (Object.keys(byDrv).length) { L.push("", "Водители:"); Object.values(byDrv).forEach(v => L.push(`• ${v.name}: ${fmt(v.kg)} кг · к оплате ${fmt(v.pay)} тг`)); }
-  return L.join("\n") + shortBlock;
+  return L.join("\n") + shortBlock + stockBlock;
 }
 
 function buildCsv(day, clients, drivers) {
