@@ -198,7 +198,9 @@ const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
 const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Прочее"];
-const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Поддоны/Склад", "Аренда", "Зарплата", "Прочее"];
+const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
+// Старые записи сохранены как «Поддоны/Склад» — показываем и считаем их как «Склад»
+const catName = c => (c === "Поддоны/Склад" ? "Склад" : c);
 
 const WAREHOUSE = { lat: 51.17833, lon: 71.460803 };
 
@@ -2266,7 +2268,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
   // Расходы за период
   const expInPeriod = expenses.filter(filterFn);
   const expByCat = {};
-  expInPeriod.forEach(x => { expByCat[x.category] = (expByCat[x.category] || 0) + (x.amount || 0); });
+  expInPeriod.forEach(x => { const k = catName(x.category); expByCat[k] = (expByCat[k] || 0) + (x.amount || 0); });
 
   // 🎁 «На пробу» — бесплатно отгруженная мука. Оцениваем по закупочной цене (средней из приходов склада).
   const costPerKg = {};
@@ -3184,7 +3186,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
   useEffect(() => { if (openSignal) { setEditId(null); setForm(blank); setShowAdd(true); } }, [openSignal]);
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
-  const openEdit = x => { setEditId(x.id); setForm({ date: x.date, category: x.category, amount: x.amount, note: x.note || "" }); setShowAdd(true); };
+  const openEdit = x => { setEditId(x.id); setForm({ date: x.date, category: catName(x.category), amount: x.amount, note: x.note || "" }); setShowAdd(true); };
   const save = async () => {
     if (!form.amount) return;
     setSaving(true);
@@ -3221,7 +3223,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
         {sorted.map(x => (
           <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
             <div>
-              <div className="font-medium text-gray-900">{x.category} — {fmt(x.amount)} тг</div>
+              <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг</div>
               <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}</div>
             </div>
             {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}>✕</Btn></div>}
