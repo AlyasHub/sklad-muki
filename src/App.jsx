@@ -834,6 +834,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                     {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
                     {!driverMode && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                    {!driverMode && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">🧾 Накладная PDF</button>}
                     {!driverMode && canEdit && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
@@ -943,6 +944,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     </div>
                     <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-2 flex-wrap">
                       {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                      {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">🧾 Накладная PDF</button>}
                       <span className="text-orange-600">🏬 фура из Караганды</span>
                     </div>
                     {canEdit && (
@@ -3360,6 +3362,74 @@ const CONTRACT_TEMPLATES = [
 // 🧾 Мягкая накладная — точная копия Excel-шаблона «расх. накладная на выезд»:
 // две копии на листе, те же колонки/шрифты/высоты строк. Позиции подставляются из заявок клиента за дату.
 const MONTHS_GEN = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+
+// Генератор PDF (pdfmake с кириллицей) — подгружается один раз
+function loadPdfMake() {
+  return new Promise((resolve, reject) => {
+    if (window.pdfMake && window.pdfMake.vfs) return resolve(window.pdfMake);
+    const s1 = document.createElement("script");
+    s1.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js";
+    s1.onload = () => {
+      const s2 = document.createElement("script");
+      s2.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js";
+      s2.onload = () => resolve(window.pdfMake);
+      s2.onerror = () => reject(new Error("Не удалось загрузить шрифты PDF"));
+      document.body.appendChild(s2);
+    };
+    s1.onerror = () => reject(new Error("Не удалось загрузить генератор PDF"));
+    document.body.appendChild(s1);
+  });
+}
+
+// Мягкая накладная: две копии на листе. rows = [{name, qty(мешков), price(за мешок), bag_kg}]
+async function buildSoftInvoicePdf({ buyer, rows, date, docNum = "1" }) {
+  const pdfMake = await loadPdfMake();
+  const fmt2 = n => (Number(n) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const filled = rows.filter(r => Number(r.qty) > 0);
+  const total = filled.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.price) || 0), 0);
+  const d = new Date(date + "T00:00:00");
+  const day = isNaN(d) ? "" : d.getDate();
+  const monthYear = isNaN(d) ? "" : `${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()} г`;
+  const cell = (t, extra = {}) => ({ text: String(t ?? ""), fontSize: 10.5, ...extra });
+  const copyContent = () => [
+    { text: "Основное подразделение", bold: true, fontSize: 14, margin: [300, 0, 0, 6] },
+    { table: { widths: [80, 45, 95], body: [
+      [cell("Номер документа", { bold: true, fontSize: 8.5, alignment: "center" }), { ...cell("Дата составления", { bold: true, fontSize: 8.5, alignment: "center" }), colSpan: 2 }, {}],
+      [cell(docNum, { alignment: "center" }), cell(day, { alignment: "center" }), cell(monthYear, { alignment: "center" })],
+    ] }, margin: [240, 0, 0, 16] },
+    { columns: [{ width: 78, text: "Покупатель:", bold: true, fontSize: 11 }, { width: "auto", text: buyer, fontSize: 11, decoration: "underline" }], margin: [0, 0, 0, 12] },
+    { table: { widths: [20, "*", 58, 66, 52, 70], body: [
+      ["№", "Наименование, сорт, размер", "Кол-во мешков", "Цена за мешок", "Кол-во кг", "Сумма"].map(h => cell(h, { bold: true, alignment: "center", fontSize: 10 })),
+      ...filled.map((r, i) => {
+        const qty = Number(r.qty) || 0, price = Number(r.price) || 0, kg = qty * (Number(r.bag_kg) || 0);
+        return [cell(i + 1, { alignment: "center" }), cell(r.name), cell(fmt2(qty), { alignment: "center" }), cell(fmt2(price), { alignment: "center" }), cell(kg ? fmt(kg) : "", { alignment: "center" }), cell(fmt(qty * price), { alignment: "center" })];
+      }),
+    ] } },
+    { columns: [{ width: "*", text: "" }, { width: "auto", text: `Итого: ${fmt(total)} тенге`, bold: true, fontSize: 12 }], margin: [0, 8, 12, 0] },
+    { text: "Принял______________/", fontSize: 11, margin: [40, 26, 0, 0] },
+    { columns: [{ width: 230, text: "Кассир ______________/", fontSize: 11 }, { width: "auto", text: "Менеджер ______________/", fontSize: 11 }], margin: [40, 14, 0, 0] },
+  ];
+  const dd = { pageSize: "A4", pageMargins: [28, 24, 28, 20], content: [...copyContent(), { text: "", margin: [0, 26, 0, 0] }, ...copyContent()] };
+  pdfMake.createPdf(dd).download(`Накладная_${(buyer || "клиент").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
+}
+
+// Мягкая накладная прямо из заявки клиента (позиции берём из самой заявки)
+async function softInvoiceFromOrders(group, client) {
+  const orders = (group.orders || []).filter(o => !o.trial && !o.isSample); // бесплатные пробы в накладную не идут
+  if (!orders.length) { alert("В этой заявке нечего выставлять — только бесплатные пробы."); return; }
+  // Объединяем одинаковые позиции (тот же сорт/фасовка/цена)
+  const m = {};
+  orders.forEach(o => {
+    const k = `${o.brand}|${o.grade}|${o.bag_kg}|${o.price_per_kg || 0}`;
+    if (!m[k]) m[k] = { name: `${o.brand} ${o.bag_kg} кг ${o.grade}`, bag_kg: Number(o.bag_kg) || 0, qty: 0, price: Math.round((o.price_per_kg || 0) * (Number(o.bag_kg) || 0)) };
+    m[k].qty += Number(o.bags) || 0;
+  });
+  await buildSoftInvoicePdf({
+    buyer: (client && (client.org_name || client.name)) || group.clientName || "Клиент",
+    rows: Object.values(m),
+    date: orders[0].date || TODAY(),
+  });
+}
 function SoftInvoiceTab({ clients, orders }) {
   const [clientId, setClientId] = useState("");
   const [buyer, setBuyer] = useState("");
@@ -3385,51 +3455,11 @@ function SoftInvoiceTab({ clients, orders }) {
   const total = filled.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.price) || 0), 0);
   const fmt2 = n => (Number(n) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // Генератор PDF (pdfmake с кириллицей) подгружается один раз при первом скачивании
-  const loadPdfMake = () => new Promise((resolve, reject) => {
-    if (window.pdfMake && window.pdfMake.vfs) return resolve(window.pdfMake);
-    const s1 = document.createElement("script");
-    s1.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js";
-    s1.onload = () => {
-      const s2 = document.createElement("script");
-      s2.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js";
-      s2.onload = () => resolve(window.pdfMake);
-      s2.onerror = () => reject(new Error("Не удалось загрузить шрифты PDF"));
-      document.body.appendChild(s2);
-    };
-    s1.onerror = () => reject(new Error("Не удалось загрузить генератор PDF"));
-    document.body.appendChild(s1);
-  });
   const [pdfBusy, setPdfBusy] = useState(false);
   const downloadPdf = async () => {
     setPdfBusy(true);
-    try {
-      const pdfMake = await loadPdfMake();
-      const d = new Date(date + "T00:00:00");
-      const day = isNaN(d) ? "" : d.getDate();
-      const monthYear = isNaN(d) ? "" : `${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()} г`;
-      const cell = (t, extra = {}) => ({ text: String(t ?? ""), fontSize: 10.5, ...extra });
-      const copyContent = () => [
-        { text: "Основное подразделение", bold: true, fontSize: 14, margin: [300, 0, 0, 6] },
-        { table: { widths: [80, 45, 95], body: [
-          [cell("Номер документа", { bold: true, fontSize: 8.5, alignment: "center" }), { ...cell("Дата составления", { bold: true, fontSize: 8.5, alignment: "center" }), colSpan: 2 }, {}],
-          [cell(docNum, { alignment: "center" }), cell(day, { alignment: "center" }), cell(monthYear, { alignment: "center" })],
-        ] }, margin: [240, 0, 0, 16] },
-        { columns: [{ width: 78, text: "Покупатель:", bold: true, fontSize: 11 }, { width: "auto", text: buyer, fontSize: 11, decoration: "underline" }], margin: [0, 0, 0, 12] },
-        { table: { widths: [20, "*", 58, 66, 52, 70], body: [
-          ["№", "Наименование, сорт, размер", "Кол-во мешков", "Цена за мешок", "Кол-во кг", "Сумма"].map(h => cell(h, { bold: true, alignment: "center", fontSize: 10 })),
-          ...filled.map((r, i) => {
-            const qty = Number(r.qty) || 0, price = Number(r.price) || 0, kg = qty * (Number(r.bag_kg) || 0);
-            return [cell(i + 1, { alignment: "center" }), cell(r.name), cell(fmt2(qty), { alignment: "center" }), cell(fmt2(price), { alignment: "center" }), cell(kg ? fmt(kg) : "", { alignment: "center" }), cell(fmt(qty * price), { alignment: "center" })];
-          }),
-        ] } },
-        { columns: [{ width: "*", text: "" }, { width: "auto", text: `Итого: ${fmt(total)} тенге`, bold: true, fontSize: 12 }], margin: [0, 8, 12, 0] },
-        { text: "Принял______________/", fontSize: 11, margin: [40, 26, 0, 0] },
-        { columns: [{ width: 230, text: "Кассир ______________/", fontSize: 11 }, { width: "auto", text: "Менеджер ______________/", fontSize: 11 }], margin: [40, 14, 0, 0] },
-      ];
-      const dd = { pageSize: "A4", pageMargins: [28, 24, 28, 20], content: [...copyContent(), { text: "", margin: [0, 26, 0, 0] }, ...copyContent()] };
-      pdfMake.createPdf(dd).download(`Накладная_${(buyer || "клиент").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
-    } catch (e) { alert("⚠️ " + (e.message || e) + "\nПроверь интернет и попробуй ещё раз."); }
+    try { await buildSoftInvoicePdf({ buyer, rows, date, docNum }); }
+    catch (e) { alert("⚠️ " + (e.message || e) + "\nПроверь интернет и попробуй ещё раз."); }
     setPdfBusy(false);
   };
 
@@ -4745,6 +4775,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                         {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>{isPickup ? "✓ Отгрузить" : "✓ Доставлено"}</Btn>}
                         {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, (isPickup || isOneOff) ? "новая" : "в пути")}>↩ {(isPickup || isOneOff) ? "Отменить" : "Не доставлено"}</Btn>}
                         {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}>➕ В клиенты</Btn>}
+                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => softInvoiceFromOrders(g, clients.find(c => c.id === g.clientId))}>🧾 Накладная</Btn>}
                         <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}>✏️ Изменить</Btn>
                         <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>🗑</Btn>
                       </div>
