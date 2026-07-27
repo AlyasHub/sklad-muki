@@ -66,7 +66,7 @@ export default async function handler(req, res) {
     }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
-      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes"];
+      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients"];
       const out = {};
       await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
       // Автопродление входа: токену осталось меньше 7 дней — выдаём свежий, клиент тихо подхватит.
@@ -127,6 +127,10 @@ async function listFor(u, table) {
     if (table === "logins") return (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 300); // только свежие — не гоняем весь журнал
     return await dbList(table);
   }
+  if (u.role === "kgdmanager") {
+    // Менеджер Караганда: видит ТОЛЬКО свой справочник клиентов, больше ничего
+    return table === "kgd_clients" ? await dbList(table) : [];
+  }
   if (u.role === "viewer") {
     // Директор-просмотрщик: видит все данные, но НЕ логины/пароли и НЕ журнал входов
     if (table === "users" || table === "logins") return [];
@@ -170,6 +174,10 @@ async function upsertFor(u, table, item) {
     if (LOGGED.has(table)) await logChange(u, existing ? "update" : "create", table, item);
     return out;
   }
+  if (u.role === "kgdmanager" && table === "kgd_clients") {
+    // Менеджер Караганда ведёт свой справочник клиентов сам
+    return dbUpsert("kgd_clients", item);
+  }
   if (u.role === "driver" && table === "orders") {
     const existing = (await dbList("orders")).find(o => o.id === item.id);
     if (!existing || existing.driverId !== u.driverId) throw new Error("Нет доступа к этой отгрузке");
@@ -188,6 +196,11 @@ async function upsertFor(u, table, item) {
 }
 
 async function deleteFor(u, table, id) {
+  if (u.role === "kgdmanager" && table === "kgd_clients") {
+    const ex = (await dbList("kgd_clients")).find(r => r.id === id);
+    if (ex) await logChange(u, "delete", "kgd_clients", ex);
+    return dbDelete("kgd_clients", id);
+  }
   if (u.role !== "director") throw new Error("Нет прав на удаление");
   // Сохраняем удаляемую запись целиком — чтобы удаление можно было откатить одной кнопкой
   const existing = (await dbList(table)).find(r => r.id === id);

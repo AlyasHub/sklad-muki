@@ -174,13 +174,14 @@ async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель" };
+const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель", kgdmanager: "Менеджер Караганда" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "drivers", "expenses", "access"],
+  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "access"],
   viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
+  kgdmanager: ["kgdm"], // менеджеры Караганды видят только свой раздел
 };
 // Что показываем в нижней панели (остальное — под «Ещё»)
 const PRIMARY_NAV = {
@@ -188,9 +189,10 @@ const PRIMARY_NAV = {
   viewer: ["today", "calendar", "stock", "clients", "reports"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
+  kgdmanager: ["kgdm"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", drivers: "Рабочие", expenses: "Расходы", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Рабочие", expenses: "Расходы", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -3530,6 +3532,281 @@ function SoftInvoiceTab({ clients, orders }) {
   );
 }
 
+// ═══════════ 🗂️ МЕНЕДЖЕРЫ КАРАГАНДА ═══════════
+// Отдельный мир: свой справочник клиентов (kgd_clients), свои накладные-PDF по образцам BM.
+// НИЧЕГО не сохраняется в заявки/склад/отчёты — сформировал два PDF и всё.
+
+// Сумма прописью: 1800000 → «Один миллион восемьсот тысяч тенге 00 тиын»
+function tengeInWords(n) {
+  n = Math.floor(Number(n) || 0);
+  const ones = ["", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"];
+  const onesF = ["", "одна", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"];
+  const teens = ["десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать", "пятнадцать", "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать"];
+  const tens = ["", "", "двадцать", "тридцать", "сорок", "пятьдесят", "шестьдесят", "семьдесят", "восемьдесят", "девяносто"];
+  const hundreds = ["", "сто", "двести", "триста", "четыреста", "пятьсот", "шестьсот", "семьсот", "восемьсот", "девятьсот"];
+  const triple = (num, female) => {
+    const o = female ? onesF : ones;
+    const parts = [hundreds[Math.floor(num / 100)]];
+    const r = num % 100;
+    if (r >= 10 && r < 20) parts.push(teens[r - 10]);
+    else { parts.push(tens[Math.floor(r / 10)]); parts.push(o[r % 10]); }
+    return parts.filter(Boolean).join(" ");
+  };
+  const plural = (num, f) => { const r100 = num % 100, r10 = num % 10; if (r100 >= 11 && r100 <= 14) return f[2]; if (r10 === 1) return f[0]; if (r10 >= 2 && r10 <= 4) return f[1]; return f[2]; };
+  if (n === 0) return "Ноль тенге 00 тиын";
+  const out = [];
+  const bln = Math.floor(n / 1e9), mln = Math.floor(n / 1e6) % 1000, th = Math.floor(n / 1000) % 1000, rest = n % 1000;
+  if (bln) out.push(triple(bln, false), plural(bln, ["миллиард", "миллиарда", "миллиардов"]));
+  if (mln) out.push(triple(mln, false), plural(mln, ["миллион", "миллиона", "миллионов"]));
+  if (th) out.push(triple(th, true), plural(th, ["тысяча", "тысячи", "тысяч"]));
+  if (rest) out.push(triple(rest, false));
+  const s = out.filter(Boolean).join(" ") + " тенге 00 тиын";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function countInWords(n) {
+  const w = ["", "Один", "Два", "Три", "Четыре", "Пять", "Шесть", "Семь", "Восемь", "Девять", "Десять"];
+  return w[n] || String(n);
+}
+// Генератор PDF (pdfmake) — тот же, что в накладных, отдельная копия для этого раздела
+function loadPdfMakeKgd() {
+  return new Promise((resolve, reject) => {
+    if (window.pdfMake && window.pdfMake.vfs) return resolve(window.pdfMake);
+    const s1 = document.createElement("script");
+    s1.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js";
+    s1.onload = () => {
+      const s2 = document.createElement("script");
+      s2.src = "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js";
+      s2.onload = () => resolve(window.pdfMake);
+      s2.onerror = () => reject(new Error("Не удалось загрузить шрифты PDF"));
+      document.body.appendChild(s2);
+    };
+    s1.onerror = () => reject(new Error("Не удалось загрузить генератор PDF"));
+    document.body.appendChild(s1);
+  });
+}
+
+function KgdManagersTab({ kgdClients = [], reload, canManage = true }) {
+  const [view, setView] = useState("new"); // new | clients
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [cf, setCf] = useState({ name: "", bin: "", address: "", products: [] });
+  const [pf, setPf] = useState({ name: "", price_kg: "" });
+  // форма отгрузки
+  const [clientId, setClientId] = useState("");
+  const [deal, setDeal] = useState("");
+  const [docNum, setDocNum] = useState("");
+  const [carNum, setCarNum] = useState("");
+  const [date, setDate] = useState(TODAY());
+  const [qty, setQty] = useState({}); // индекс товара -> кг
+  const [pdfBusy, setPdfBusy] = useState("");
+
+  const client = kgdClients.find(c => c.id === clientId);
+  const rows = client ? (client.products || []).map((p, i) => ({ ...p, kg: Number(qty[i]) || 0 })).filter(r => r.kg > 0) : [];
+  const total = rows.reduce((s, r) => s + r.kg * (Number(r.price_kg) || 0), 0);
+  const totalKg = rows.reduce((s, r) => s + r.kg, 0);
+  const dateDisp = (date || "").split("-").reverse().join(".");
+
+  const pickClient = id => { setClientId(id); setQty({}); };
+
+  // ─── Справочник клиентов ───
+  const openNewClient = () => { setEditId(null); setCf({ name: "", bin: "", address: "", products: [] }); setPf({ name: "", price_kg: "" }); setShowAdd(true); };
+  const openEditClient = c => { setEditId(c.id); setCf({ name: c.name || "", bin: c.bin || "", address: c.address || "", products: [...(c.products || [])] }); setPf({ name: "", price_kg: "" }); setShowAdd(true); };
+  const addProduct = () => {
+    if (!pf.name.trim() || !pf.price_kg) return;
+    setCf(f => ({ ...f, products: [...f.products, { name: pf.name.trim(), price_kg: Number(pf.price_kg) }] }));
+    setPf({ name: "", price_kg: "" });
+  };
+  const saveClient = async () => {
+    if (!cf.name.trim()) { alert("Впиши название покупателя."); return; }
+    try {
+      await dbUpsert("kgd_clients", { id: editId || uid(), name: cf.name.trim(), bin: cf.bin.trim(), address: cf.address.trim(), products: cf.products });
+      setShowAdd(false); await reload("kgd_clients");
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (/kgd_clients|PGRST205/i.test(msg)) alert("Нужно один раз создать таблицу kgd_clients в Supabase — попроси у администратора инструкцию.");
+      else alert("⚠️ Не сохранилось: " + msg);
+    }
+  };
+  const deleteKgdClient = async c => {
+    if (!confirm(`Удалить клиента «${c.name}» из справочника Караганды?`)) return;
+    try { await dbDelete("kgd_clients", c.id); await reload("kgd_clients"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+  };
+
+  // ─── PDF: Пропуск на погрузку (2 копии) ───
+  const pdfPass = async () => {
+    setPdfBusy("pass");
+    try {
+      const pdfMake = await loadPdfMakeKgd();
+      const cell = (t, extra = {}) => ({ text: String(t ?? ""), fontSize: 9, ...extra });
+      const header = { table: { widths: [90, "*", 80, 90], body: [[
+        { stack: [cell("Сделка", { fontSize: 8, color: "#555" }), cell(deal ? `Сделка #${deal}` : " ")], margin: [2, 2, 2, 2] },
+        { stack: [cell("Пропуск на погрузку товара №________", { bold: true, alignment: "center", margin: [0, 8, 0, 0] })] },
+        { stack: [cell("№ а/м", { fontSize: 8, color: "#555" }), cell(carNum || " ")], margin: [2, 2, 2, 2] },
+        { stack: [cell("Дата составления", { fontSize: 8, color: "#555" }), cell(dateDisp)], margin: [2, 2, 2, 2] },
+      ]] } };
+      const buyer = { text: [{ text: "Покупатель:  ", bold: true, fontSize: 9 }, { text: `${client.name}${client.bin ? `, БИН/ИИН ${client.bin}` : ""}`, fontSize: 9 }], margin: [0, 8, 0, 6] };
+      const tbl = { table: { widths: [16, "*", 26, 52, 52, 56, 52], body: [
+        ["№", "Наименование", "Ед.", "Кол-во кг", "Кол-во шт.", "Дата выбоя", "Факт. вес"].map(h => cell(h, { bold: true, alignment: "center", fontSize: 8.5 })),
+        ...rows.map((r, i) => [cell(i + 1, { alignment: "center" }), cell(r.name), cell("кг", { alignment: "center" }), cell(fmt(r.kg), { alignment: "center" }), cell(" "), cell(" "), cell(" ")]),
+      ] } };
+      const sig = (l, r) => ({ columns: [{ text: l, fontSize: 9, width: "55%" }, { text: r || "", fontSize: 9, width: "*" }], margin: [0, 9, 0, 0] });
+      const signatures = [
+        sig("Въезд разрешил менеджер:  _______________________/", "Выезд разрешил менеджер:  ____________________/"),
+        sig("Отгружено зав. складом:     _______________________/", "Б/н расчёт  ______________________________/"),
+        sig("Ответственный лаборант:   _______________________/", "Опломбировано  ___________________________/"),
+        sig("Оператор весовой:              _______________________/", ""),
+        sig("Примечание:  ______________________________________________________________________________/", ""),
+      ];
+      const copy = extra => [header, buyer, tbl, ...(extra ? signatures : [sig("Примечание:  ______________________________________________________________________________/", "")])];
+      const dd = { pageSize: "A4", pageMargins: [28, 22, 28, 20], content: [...copy(true), { text: "", margin: [0, 26, 0, 0] }, { canvas: [{ type: "line", x1: 0, y1: 0, x2: 539, y2: 0, dash: { length: 4 }, lineWidth: 0.5, lineColor: "#999" }] }, { text: "", margin: [0, 14, 0, 0] }, ...copy(false)] };
+      pdfMake.createPdf(dd).download(`Пропуск_${(client.name || "").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
+    } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+    setPdfBusy("");
+  };
+
+  // ─── PDF: Расходная накладная с ценами (2 копии) ───
+  const pdfInvoice = async () => {
+    setPdfBusy("inv");
+    try {
+      const pdfMake = await loadPdfMakeKgd();
+      const cell = (t, extra = {}) => ({ text: String(t ?? ""), fontSize: 9, ...extra });
+      const money = n => (Number(n) || 0).toLocaleString("ru-RU").replace(/ /g, " ");
+      const header = { table: { widths: ["*", 90, 90], body: [[
+        { stack: [cell("Сделка", { fontSize: 8, color: "#555" }), cell(deal ? `Сделка #${deal}` : " ", { bold: true })], margin: [2, 2, 2, 2] },
+        { stack: [cell("Номер документа", { fontSize: 8, color: "#555", alignment: "center" }), cell(docNum || " ", { alignment: "center" })], margin: [2, 2, 2, 2] },
+        { stack: [cell("Дата составления", { fontSize: 8, color: "#555", alignment: "center" }), cell(dateDisp, { alignment: "center" })], margin: [2, 2, 2, 2] },
+      ]] } };
+      const buyer = { text: [{ text: "Покупатель:  ", bold: true, fontSize: 9 }, { text: `${client.name}${client.bin ? `, БИН/ИИН ${client.bin}` : ""}`, fontSize: 9 }], margin: [0, 8, 0, 2] };
+      const addr = { text: [{ text: "Адрес поставки:  ", bold: true, fontSize: 9 }, { text: client.address || " ", fontSize: 9 }], margin: [0, 0, 0, 6] };
+      const tbl = { table: { widths: [16, 44, "*", 52, 26, 44, 66], body: [
+        ["№", "Код", "Наименование", "Кол-во", "Ед.", "Цена", "Сумма"].map(h => cell(h, { bold: true, alignment: "center", fontSize: 8.5 })),
+        ...rows.map((r, i) => [cell(i + 1, { alignment: "center" }), cell(" "), cell(r.name), cell(fmt(r.kg), { alignment: "center" }), cell("кг", { alignment: "center" }), cell(money(r.price_kg), { alignment: "right" }), cell(money(r.kg * r.price_kg), { alignment: "right" })]),
+      ] } };
+      const totalLine = t => ({ columns: [{ text: "", width: "*" }, { text: t, bold: true, fontSize: 9.5, width: "auto" }], margin: [0, 5, 4, 0] });
+      const full = [
+        header, buyer, addr, tbl,
+        totalLine(`Итого:  ${money(total)}.00 тенге`),
+        totalLine(`Итого к оплате:  ${money(total)}.00 тенге`),
+        { text: `Всего наименований ${countInWords(rows.length)}, на сумму ${money(total)}.00 тенге`, fontSize: 9, margin: [0, 8, 0, 0] },
+        { text: "Всего к оплате: (сумма прописью)", fontSize: 9, margin: [0, 2, 0, 0] },
+        { text: tengeInWords(total), fontSize: 9, bold: true, margin: [0, 2, 0, 0] },
+        { columns: [{ text: "Кассир     _______________________/", fontSize: 9, width: "55%" }, { text: "Менеджер  ___________________/", fontSize: 9, width: "*" }], margin: [0, 16, 0, 0] },
+      ];
+      const short = [
+        header, buyer, addr, tbl,
+        totalLine(`Итого:  ${money(total)}.00 тенге`),
+        { columns: [{ text: "Кассир     _______________________/", fontSize: 9, width: "55%" }, { text: "Менеджер  ___________________/", fontSize: 9, width: "*" }], margin: [0, 16, 0, 0] },
+      ];
+      const dd = { pageSize: "A4", pageMargins: [28, 22, 28, 20], content: [...full, { text: "", margin: [0, 18, 0, 0] }, { canvas: [{ type: "line", x1: 0, y1: 0, x2: 539, y2: 0, dash: { length: 4 }, lineWidth: 0.5, lineColor: "#999" }] }, { text: "", margin: [0, 12, 0, 0] }, ...short] };
+      pdfMake.createPdf(dd).download(`Накладная_${(client.name || "").replace(/[\\/:*?"<>|]/g, "")}_${date}.pdf`);
+    } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+    setPdfBusy("");
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <button onClick={() => setView("new")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "new" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📄 Новая отгрузка</button>
+        <button onClick={() => setView("clients")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "clients" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>🏢 Клиенты ({kgdClients.length})</button>
+      </div>
+
+      {view === "new" && (
+        <>
+          <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">Выбери клиента и проставь количество кг — система посчитает суммы и соберёт два PDF: пропуск на погрузку и расходную накладную. <b>Ничего никуда не сохраняется</b> — скачал и распечатал.</div>
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
+            <Sel label="Покупатель" value={clientId} onChange={e => pickClient(e.target.value)} options={[{ value: "", label: "— выбери клиента —" }, ...[...kgdClients].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru")).map(c => ({ value: c.id, label: c.name }))]} />
+            <div className="grid grid-cols-2 gap-3">
+              <Inp label="Сделка №" value={deal} onChange={e => setDeal(e.target.value)} placeholder="4474" />
+              <Inp label="Номер документа" value={docNum} onChange={e => setDocNum(e.target.value)} />
+              <Inp label="№ а/м" value={carNum} onChange={e => setCarNum(e.target.value)} placeholder="123 ABC 01" />
+              <Inp label="Дата составления" type="date" value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+          </div>
+          {client && (
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+              <div className="font-bold text-gray-800 mb-2">Товары клиента — проставь кг</div>
+              {(client.products || []).length === 0 && <div className="text-sm text-gray-400 py-3">У клиента нет товаров — добавь их во вкладке «Клиенты».</div>}
+              {(client.products || []).map((p, i) => {
+                const kg = Number(qty[i]) || 0;
+                return (
+                  <div key={i} className={`border rounded-xl p-3 mb-2 ${kg > 0 ? "border-emerald-300 bg-emerald-50" : "border-gray-100"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 truncate">{p.name}</div>
+                        <div className="text-xs text-gray-500">{fmt(p.price_kg)} тг/кг</div>
+                      </div>
+                      <div className="w-28"><Inp label="Кол-во, кг" type="number" value={qty[i] ?? ""} onChange={e => setQty(q => ({ ...q, [i]: e.target.value }))} placeholder="0" /></div>
+                    </div>
+                    {kg > 0 && <div className="text-xs text-emerald-700 font-medium mt-1">= {fmt(kg * (Number(p.price_kg) || 0))} тг</div>}
+                  </div>
+                );
+              })}
+              {rows.length > 0 && <div className="text-right font-bold text-gray-800 mt-2">{fmt(totalKg)} кг · Итого: {fmt(total)} тенге</div>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button onClick={pdfPass} disabled={!client || rows.length === 0 || !!pdfBusy} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl font-semibold px-4 py-3">{pdfBusy === "pass" ? "Собираю..." : "⬇️ Пропуск (PDF)"}</button>
+            <button onClick={pdfInvoice} disabled={!client || rows.length === 0 || !!pdfBusy} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl font-semibold px-4 py-3">{pdfBusy === "inv" ? "Собираю..." : "⬇️ Накладная (PDF)"}</button>
+          </div>
+        </>
+      )}
+
+      {view === "clients" && (
+        <>
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-gray-800">Клиенты Караганды</h3>
+            {canManage && <Btn onClick={openNewClient}>+ Клиент</Btn>}
+          </div>
+          {showAdd && (
+            <Modal title={editId ? "Редактировать клиента" : "Новый клиент"} onClose={() => setShowAdd(false)}>
+              <div className="space-y-3">
+                <Inp label="Покупатель (как в накладной)" value={cf.name} onChange={e => setCf({ ...cf, name: e.target.value })} placeholder="Мекембаева ФЛ" />
+                <Inp label="БИН/ИИН" value={cf.bin} onChange={e => setCf({ ...cf, bin: e.target.value })} placeholder="930125302042" />
+                <Inp label="Адрес поставки" value={cf.address} onChange={e => setCf({ ...cf, address: e.target.value })} />
+                <div>
+                  <p className="text-sm font-medium text-gray-700 mb-2">Товары и цены (за кг)</p>
+                  {cf.products.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 bg-gray-50 rounded-lg px-3 py-2 mb-1 text-sm">
+                      <span className="min-w-0 truncate">{p.name}</span>
+                      <span className="whitespace-nowrap font-medium">{fmt(p.price_kg)} тг/кг</span>
+                      <button onClick={() => setCf(f => ({ ...f, products: f.products.filter((_, j) => j !== i) }))} className="text-red-400 hover:text-red-600 flex-shrink-0">✕</button>
+                    </div>
+                  ))}
+                  <div className="grid grid-cols-[1fr_5.5rem] gap-2 mt-2">
+                    <Inp label="" value={pf.name} onChange={e => setPf({ ...pf, name: e.target.value })} placeholder="ОТРУБИ фасованные 20 кг" />
+                    <Inp label="" type="number" value={pf.price_kg} onChange={e => setPf({ ...pf, price_kg: e.target.value })} placeholder="тг/кг" />
+                  </div>
+                  <Btn size="sm" variant="secondary" onClick={addProduct}>+ Добавить товар</Btn>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <Btn onClick={saveClient}>Сохранить</Btn>
+                <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+              </div>
+            </Modal>
+          )}
+          <div className="space-y-2">
+            {kgdClients.length === 0 && <div className="text-center py-10 text-gray-400">Клиентов пока нет — добавь первого.</div>}
+            {[...kgdClients].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru")).map(c => (
+              <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-gray-900">{c.name}</div>
+                    {c.bin && <div className="text-sm text-gray-500">БИН/ИИН {c.bin}</div>}
+                    {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
+                    {(c.products || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.products.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.name} — {fmt(p.price_kg)} тг/кг</span>)}</div>}
+                  </div>
+                  {canManage && <div className="flex gap-1 flex-shrink-0"><Btn size="sm" variant="secondary" onClick={() => openEditClient(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteKgdClient(c)}>✕</Btn></div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ContractsTab({ clients }) {
   const taRef = useRef(null);
   const backRef = useRef(null);
@@ -4490,7 +4767,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -4519,7 +4796,7 @@ export default function App() {
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [] };
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [] };
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
         return same ? prev : next;
@@ -4584,7 +4861,7 @@ export default function App() {
     setTimeout(() => setSyncDone(false), 2000);
   };
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -4632,6 +4909,7 @@ export default function App() {
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
+            {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} reload={reload} canManage={isDirector || user.role === "kgdmanager"} />}
             {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
