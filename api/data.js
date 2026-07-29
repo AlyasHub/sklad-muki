@@ -1,6 +1,6 @@
 // Привратник базы. Все чтения/записи идут сюда. Проверяет токен и роль,
 // отдаёт только то, что роли положено. Водитель НЕ может прочитать клиентов/цены/чужие отгрузки.
-import { verifyToken, signToken, dbList, dbUpsert, dbDelete, configured, orderLinkSig } from "./_lib.js";
+import { verifyToken, signToken, dbList, dbGet, dbFindBy, dbUpsert, dbDelete, configured, orderLinkSig } from "./_lib.js";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -38,7 +38,7 @@ export async function makeSnapshot(by) {
 }
 // Снимок целиком (для скачивания и отправки на почту)
 export async function getSnapshot(id) {
-  return (await dbList("backups")).find(x => x.id === id) || null;
+  return await dbGet("backups", id);
 }
 
 export default async function handler(req, res) {
@@ -51,8 +51,7 @@ export default async function handler(req, res) {
 
   try {
     // Пользователь удалён в «Доступе» → доступ закрыт сразу (при ближайшем запросе выкинет на вход)
-    const allUsers = await dbList("users");
-    const me = allUsers.find(x => x.id === u.uid);
+    const me = await dbGet("users", u.uid); // точечно по id, не грузим всех пользователей
     if (!me) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
     // Последняя активность (не чаще раза в 5 минут).
     // ВАЖНО: пишем с await — Vercel замораживает функцию после ответа, и «фоновые» записи погибают.
@@ -84,9 +83,9 @@ export default async function handler(req, res) {
         return res.status(200).json({ rows: rows.map(({ data, ...r }) => ({ ...r, canRestore: !!data })) });
       }
       if (op === "restoreChange") {
-        const ch = (await dbList("changes")).find(x => x.id === id);
+        const ch = await dbGet("changes", id);
         if (!ch || !ch.data) return res.status(400).json({ error: "Эту запись восстановить нельзя" });
-        const exists = (await dbList(ch.table)).some(r => r.id === ch.data.id);
+        const exists = await dbGet(ch.table, ch.data.id);
         if (exists) return res.status(400).json({ error: "Такая запись уже есть — восстанавливать не нужно" });
         await dbUpsert(ch.table, ch.data);
         await logChange(u, "restore", ch.table, ch.data);
@@ -99,7 +98,7 @@ export default async function handler(req, res) {
         return res.status(200).json({ rows: rows.map(({ data, ...r }) => r) }); // без содержимого — только список
       }
       if (op === "backupGet") {
-        const b = (await dbList("backups")).find(x => x.id === id);
+        const b = await dbGet("backups", id);
         if (!b) return res.status(404).json({ error: "Копия не найдена" });
         const data = { ...b.data, users: (b.data.users || []).map(({ passhash, ...r }) => r) }; // пароли не выгружаем
         return res.status(200).json({ backup: { id: b.id, at: b.at, by: b.by, counts: b.counts, data } });
@@ -130,7 +129,7 @@ async function listFor(u, table) {
   if (u.role === "kgdmanager") {
     // Младший менеджер Караганда: справочник клиентов + СВОЯ история документов
     if (table === "kgd_clients") return await dbList(table);
-    if (table === "kgd_docs") return (await dbList("kgd_docs")).filter(d => d.byId === u.uid);
+    if (table === "kgd_docs") return await dbFindBy("kgd_docs", "byId", u.uid); // фильтр на сервере БД
     return [];
   }
   if (u.role === "kgdsenior") {
@@ -147,12 +146,16 @@ async function listFor(u, table) {
     return ["orders", "clients", "drivers"].includes(table) ? await dbList(table) : [];
   }
   if (u.role === "driver") {
-    const myOrders = () => dbList("orders").then(rows => rows.filter(o => o.driverId === u.driverId));
+    // Заявки водителя — фильтром на сервере БД (не тянем всю таблицу заявок)
+    const myOrders = () => dbFindBy("orders", "driverId", u.driverId);
     if (table === "orders") return await myOrders();
-    if (table === "drivers") return (await dbList("drivers")).filter(d => d.id === u.driverId);
+    if (table === "drivers") { const d = await dbGet("drivers", u.driverId); return d ? [d] : []; }
     if (table === "clients") {
       const ids = new Set((await myOrders()).map(o => o.clientId).filter(Boolean));
-      return (await dbList("clients")).filter(c => ids.has(c.id)); // только клиенты его доставок
+      if (!ids.size) return [];
+      // клиенты его доставок — точечно по id (обычно их немного)
+      const list = await Promise.all([...ids].map(cid => dbGet("clients", cid).catch(() => null)));
+      return list.filter(Boolean);
     }
     return [];
   }
@@ -162,7 +165,7 @@ async function listFor(u, table) {
 async function upsertFor(u, table, item) {
   if (!item || !item.id) throw new Error("Нет данных");
   if (u.role === "director") {
-    const existing = (await dbList(table)).find(r => r.id === item.id);
+    const existing = await dbGet(table, item.id); // точечно по id, не грузим всю таблицу
     if (table === "users" && !item.passhash) item = { ...item, passhash: existing?.passhash }; // без нового пароля — старый хэш
     // Авторство: проставляем «кто добавил» только на новой записи; у существующей сохраняем оригинального автора
     if (existing?.created_by_name) {
@@ -187,7 +190,7 @@ async function upsertFor(u, table, item) {
     return dbUpsert("kgd_clients", item);
   }
   if (u.role === "driver" && table === "orders") {
-    const existing = (await dbList("orders")).find(o => o.id === item.id);
+    const existing = await dbGet("orders", item.id); // точечно по id
     if (!existing || existing.driverId !== u.driverId) throw new Error("Нет доступа к этой отгрузке");
     // водителю можно менять только отметку доставки, отметку загрузки в машину и фото
     const merged = {
@@ -205,18 +208,18 @@ async function upsertFor(u, table, item) {
 
 async function deleteFor(u, table, id) {
   if ((u.role === "kgdmanager" || u.role === "kgdsenior") && table === "kgd_clients") {
-    const ex = (await dbList("kgd_clients")).find(r => r.id === id);
+    const ex = await dbGet("kgd_clients", id);
     if (ex) await logChange(u, "delete", "kgd_clients", ex);
     return dbDelete("kgd_clients", id);
   }
   if (u.role === "kgdsenior" && table === "kgd_docs") { // историю чистит только старший
-    const ex = (await dbList("kgd_docs")).find(r => r.id === id);
+    const ex = await dbGet("kgd_docs", id);
     if (ex) await logChange(u, "delete", "kgd_docs", ex);
     return dbDelete("kgd_docs", id);
   }
   if (u.role !== "director") throw new Error("Нет прав на удаление");
   // Сохраняем удаляемую запись целиком — чтобы удаление можно было откатить одной кнопкой
-  const existing = (await dbList(table)).find(r => r.id === id);
+  const existing = await dbGet(table, id); // точечно по id
   if (existing) await logChange(u, "delete", table, existing);
 
   // КАСКАД: удаляя заявку/фуру, отменяем и её движения по складу/расходы,

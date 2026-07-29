@@ -42,6 +42,19 @@ export async function dbList(table) {
   if (!r.ok) throw new Error(await r.text());
   return (await r.json()).map(row => row.data);
 }
+// Одна запись по id — вместо «скачать всю таблицу и найти». Быстро (индекс по первичному ключу).
+export async function dbGet(table, id) {
+  const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}&select=data&limit=1`, { headers: svc() });
+  if (!r.ok) throw new Error(await r.text());
+  const rows = await r.json();
+  return rows.length ? rows[0].data : null;
+}
+// Записи по значению поля внутри data (jsonb) — фильтрует сервер БД, а не мы в памяти.
+export async function dbFindBy(table, field, value) {
+  const r = await fetch(`${SUPA_URL}/rest/v1/${table}?data->>${encodeURIComponent(field)}=eq.${encodeURIComponent(value)}&select=data`, { headers: svc() });
+  if (!r.ok) throw new Error(await r.text());
+  return (await r.json()).map(row => row.data);
+}
 export async function dbUpsert(table, item) {
   const r = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
     method: "POST",
