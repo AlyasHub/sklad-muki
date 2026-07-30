@@ -177,8 +177,8 @@ async function sha256(str) {
 const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "access"],
-  viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses"], // директор — только просмотр
+  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
+  viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
@@ -193,8 +193,8 @@ const PRIMARY_NAV = {
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Рабочие", expenses: "Расходы", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", cashbox: "💵", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Рабочие", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -3266,6 +3266,79 @@ function LoginScreen({ onLogin }) {
   );
 }
 
+// 💵 Касса (подотчётные деньги): тебе дали сумму — ты тратишь, всегда виден остаток.
+// Полностью отдельно от расходов компании и отчётов склада.
+function CashboxTab({ cashbox = [], reload, canEdit = true }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [dir, setDir] = useState("out"); // in — приход (дали), out — трата
+  const [form, setForm] = useState({ date: TODAY(), amount: "", note: "" });
+  const openNew = d => { setDir(d); setForm({ date: TODAY(), amount: "", note: "" }); setShowAdd(true); };
+  const save = async () => {
+    if (!form.amount || Number(form.amount) <= 0) return;
+    try {
+      await dbUpsert("cashbox", { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim() });
+      setShowAdd(false); await reload("cashbox");
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      alert(/cashbox|PGRST205/i.test(m) ? "Нужно один раз создать таблицу «cashbox» в Supabase — попроси инструкцию." : "⚠️ Не сохранилось: " + m);
+    }
+  };
+  const del = async id => { if (!confirm("Удалить эту запись из кассы?")) return; try { await dbDelete("cashbox", id); await reload("cashbox"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
+
+  const totalIn = cashbox.filter(x => x.dir === "in").reduce((s, x) => s + (x.amount || 0), 0);
+  const totalOut = cashbox.filter(x => x.dir !== "in").reduce((s, x) => s + (x.amount || 0), 0);
+  const balance = totalIn - totalOut;
+  const list = [...cashbox].sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.id).localeCompare(String(a.id)));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">💵 Касса</h3></div>
+      <div className={`rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br ${balance < 0 ? "from-red-500 to-red-600" : "from-emerald-500 to-emerald-600"}`}>
+        <div className="text-sm font-medium opacity-90">Остаток в кассе</div>
+        <div className="text-4xl font-black mt-1">{fmt(balance)} тг</div>
+        <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Получено: <b>{fmt(totalIn)}</b> · Потрачено: <b>{fmt(totalOut)}</b></div>
+      </div>
+      {canEdit && (
+        <div className="flex gap-2">
+          <Btn onClick={() => openNew("in")} size="lg">+ Приход</Btn>
+          <button onClick={() => openNew("out")} className="flex-1 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium px-6 py-3 text-base active:scale-95 transition-all">− Трата</button>
+        </div>
+      )}
+      {showAdd && (
+        <Modal title={dir === "in" ? "💵 Приход — дали денег" : "− Трата"} onClose={() => setShowAdd(false)}>
+          <div className="space-y-3">
+            <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            <Inp label="Сумма, тг" type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
+            <Inp label={dir === "in" ? "От кого / за что (по желанию)" : "На что потратил"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={dir === "in" ? "напр. от Эрика на закуп" : "напр. роутер, камеры"} />
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={save} disabled={!form.amount}>Сохранить</Btn>
+            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
+      <div className="space-y-2">
+        {list.length === 0 && <div className="text-center py-12 text-gray-400">Пока пусто. Нажми «+ Приход», когда дадут денег.</div>}
+        {list.map(x => {
+          const isIn = x.dir === "in";
+          return (
+            <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
+              <div className="min-w-0">
+                <div className="font-medium text-gray-900">{isIn ? "▲ Приход" : "▼ Трата"}{x.note ? ` — ${x.note}` : ""}</div>
+                <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}</div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`font-bold ${isIn ? "text-emerald-600" : "text-red-500"}`}>{isIn ? "+" : "−"}{fmt(x.amount)} тг</span>
+                {canEdit && <button onClick={() => del(x.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -4980,7 +5053,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -5010,7 +5083,7 @@ export default function App() {
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [] };
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [] };
         applyWarehouse(next.notes); // подхватываем сохранённый адрес склада
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
@@ -5089,7 +5162,7 @@ export default function App() {
     setTimeout(() => setSyncDone(false), 2000);
   };
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -5150,6 +5223,7 @@ export default function App() {
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} canEdit={isDirector} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
+            {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} reload={reload} canEdit={isDirector} />}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} />}
           </>
