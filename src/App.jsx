@@ -545,7 +545,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
       const prices = [];
       g.orders.forEach(o => { if ((o.price_per_kg || 0) > 0 && !prices.some(p => p.brand === o.brand && p.grade === o.grade && p.bag_kg === Number(o.bag_kg))) prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); });
       await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices });
-      for (const o of g.orders) await dbUpsert("orders", { ...o, clientId: id });
+      await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, clientId: id })));
       await reload("clients"); await reload("orders");
       alert(`✓ «${g.clientName}» теперь в базе клиентов. Дополни карточку (телефон, реквизиты) во вкладке «Клиенты».`);
     } catch (e) { notifyErr(e); }
@@ -1128,8 +1128,8 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   const assignDriver = async (o, driverId) => { try { await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
   const deleteOrder = async id => { try { await dbDelete("orders", id); await reload("orders"); } catch (e) { notifyErr(e); } };
   // Действия на всю заявку клиента (несколько позиций)
-  const assignDriverGroup = async (g, driverId) => { try { for (const o of g.orders) await dbUpsert("orders", { ...o, driverId }); await reload("orders"); } catch (e) { notifyErr(e); } };
-  const deleteGroup = async g => { if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return; try { for (const o of g.orders) await dbDelete("orders", o.id); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const assignDriverGroup = async (g, driverId) => { try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, driverId }))); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const deleteGroup = async g => { if (!confirm(`Удалить всю заявку «${g.clientName}» (${g.orders.length} поз.)?`)) return; try { await Promise.all(g.orders.map(o => dbDelete("orders", o.id))); await reload("orders"); } catch (e) { notifyErr(e); } };
   const setGroupStatus = async (g, status) => {
     try {
       for (const o of g.orders) {
@@ -1141,7 +1141,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
     } catch (e) { notifyErr(e); }
   };
   // Перенести заявку на другую дату (все позиции)
-  const rescheduleGroup = async (g, date) => { if (!date) return; try { for (const o of g.orders) await dbUpsert("orders", { ...o, date }); await reload("orders"); } catch (e) { notifyErr(e); } };
+  const rescheduleGroup = async (g, date) => { if (!date) return; try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, date }))); await reload("orders"); } catch (e) { notifyErr(e); } };
 
   const filtered = orders.filter(o => !filterDate || o.date === filterDate);
   const totalKg = filtered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
@@ -1740,7 +1740,7 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
         const withAddr = g.orders.find(o => o.oneOffAddress || o.gis_link || o.coords) || {};
         await dbUpsert("clients", { id, name: g.name, org_name: "", contact_name: "", address: withAddr.oneOffAddress || "", contact: "", gis_link: withAddr.gis_link || "", coords: withAddr.coords || null, default_brand: freqOf(g.orders, "brand"), default_bag_kg: freqOf(g.orders, "bag_kg", true), prices: pricesFromOrders(g.orders) });
       }
-      for (const o of g.orders) await dbUpsert("orders", { ...o, clientId: id });
+      await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, clientId: id })));
       await reload("clients"); await reload("orders");
       setShowRestore(false);
       alert(`✓ Готово: «${g.name}» ${exist ? "получил" : "создан и получил"} ${g.orders.length} заявок из истории. Допиши реквизиты в карточке (✏️).`);
@@ -1766,7 +1766,7 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
   // Отметить поставку (все позиции за дату) оплаченной — с указанием способа (нал/безнал)
   const markPaid = async (clientId, date, paid, method = "") => {
     try {
-      for (const o of orders.filter(o => o.clientId === clientId && o.date === date)) await dbUpsert("orders", { ...o, paid, pay_method: paid ? method : "" });
+      await Promise.all(orders.filter(o => o.clientId === clientId && o.date === date).map(o => dbUpsert("orders", { ...o, paid, pay_method: paid ? method : "" })));
       await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
@@ -4211,7 +4211,7 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
 
   const markPaid = async (c, date, method) => {
     try {
-      for (const o of orders.filter(o => (o.clientId ? o.clientId === c.clientId : o.clientName === c.name) && o.date === date && o.status === "отгружена")) await dbUpsert("orders", { ...o, paid: true, pay_method: method });
+      await Promise.all(orders.filter(o => (o.clientId ? o.clientId === c.clientId : o.clientName === c.name) && o.date === date && o.status === "отгружена").map(o => dbUpsert("orders", { ...o, paid: true, pay_method: method })));
       await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
@@ -4320,7 +4320,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   };
   // Караганда: статус НЕ трогает склад Астаны. «Отгружено» → сумма вешается клиенту в долг.
   const setGroupStatus = async (ordersArr, status) => {
-    try { for (const o of ordersArr) await dbUpsert("orders", { ...o, status }); await reload("orders"); }
+    try { await Promise.all(ordersArr.map(o => dbUpsert("orders", { ...o, status }))); await reload("orders"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
   const del = async o => { if (!confirm("Удалить эту отгрузку из Караганды?")) return; try { await dbDelete("orders", o.id); await reload("orders"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
@@ -4439,21 +4439,19 @@ function EditGroupModal({ group, clients, reload, onClose }) {
     // Фото (накладные) и отметку доставки собираем со всей заявки и переносим на первую позицию — чтобы не потерять при удалении позиции
     const allPhotos = [...new Set(group.orders.flatMap(o => o.photos || []))];
     const anyDelivered = group.orders.some(o => o.delivered_by_driver);
-    let carried = false;
     try {
-      for (const p of valid) {
+      // Позиции сохраняем разом; фото/отметку доставки цепляем только к первой (carry на индексе 0)
+      await Promise.all(valid.map((p, idx) => {
         const price = p.trial ? 0 : (p.price_per_kg !== "" && p.price_per_kg != null ? Number(p.price_per_kg) : (priceFor(client, p.brand, p.grade, Number(p.bag_kg)) || 0));
-        const carry = !carried ? { photos: allPhotos, delivered_by_driver: anyDelivered } : {};
-        carried = true;
+        const carry = idx === 0 ? { photos: allPhotos, delivered_by_driver: anyDelivered } : {};
         if (p.id) {
           const orig = group.orders.find(o => o.id === p.id);
-          await dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
-        } else {
-          await dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
+          return dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
         }
-      }
+        return dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
+      }));
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
-      for (const o of group.orders) if (!keep.has(o.id)) await dbDelete("orders", o.id);
+      await Promise.all(group.orders.filter(o => !keep.has(o.id)).map(o => dbDelete("orders", o.id)));
       onClose(); await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
@@ -4694,7 +4692,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
       const prices = [];
       g.orders.forEach(o => { if ((o.price_per_kg || 0) > 0 && !prices.some(p => p.brand === o.brand && p.grade === o.grade && p.bag_kg === Number(o.bag_kg))) prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); });
       await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices });
-      for (const o of g.orders) await dbUpsert("orders", { ...o, clientId: id });
+      await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, clientId: id })));
       await reload("clients"); await reload("orders");
       alert(`✓ «${g.clientName}» теперь в базе клиентов. Дополни карточку (телефон, реквизиты) во вкладке «Клиенты».`);
     } catch (e) { notifyErr(e); }
