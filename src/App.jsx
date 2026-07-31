@@ -33,6 +33,13 @@ async function apiData(op, table, extra = {}) {
 async function dbGetAll(table) { return (await apiData("list", table)).rows || []; }
 async function dbUpsert(table, item) { await apiData("upsert", table, { item }); }
 async function dbDelete(table, id) { await apiData("delete", table, { id }); }
+// 🤖 ИИ-помощник: свободный текст → распознанное действие/ответ (сервер только распознаёт)
+async function askAssistant(message) {
+  const res = await fetch("/api/assistant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken, message }) });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) { if (res.status === 401) setAuthToken(null); throw new Error(d.error || "Ошибка помощника"); }
+  return d; // { result?, error? }
+}
 
 // Дата в местном времени (не UTC) — иначе в Астане вечером дата уезжала на день вперёд
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -3396,6 +3403,123 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
   );
 }
 
+// 🤖 ИИ-помощник: пишешь задачу простым языком — он определяет раздел и делает (после подтверждения)
+function AssistantModal({ onClose, orders = [], reload }) {
+  const [input, setInput] = useState("");
+  const [phase, setPhase] = useState("input"); // input | loading | result | executing | done
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState("");
+  const [doneMsg, setDoneMsg] = useState("");
+  const examples = [
+    "Мамыр взяли 10 мешков высший на завтра",
+    "Ерлан занёс 200 тысяч в счёт долга",
+    "расход с кассы 15000 за роутер сегодня",
+    "приедет фура 20 тонн высший 25 июля",
+    "сколько осталось первого сорта?",
+  ];
+
+  const ask = async (msg) => {
+    const m = (msg ?? input).trim();
+    if (!m) return;
+    setInput(m); setErr(""); setPhase("loading");
+    try {
+      const d = await askAssistant(m);
+      if (d.error) { setErr(d.error); setPhase("input"); return; }
+      setResult(d.result); setPhase("result");
+    } catch (e) { setErr(String((e && e.message) || e)); setPhase("input"); }
+  };
+
+  const execute = async () => {
+    const a = result || {}; const p = a.params || {};
+    setPhase("executing"); setErr("");
+    try {
+      if (a.action === "create_order") {
+        const positions = (p.positions && p.positions.length) ? p.positions : [{ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.price_per_kg }];
+        await Promise.all(positions.map(pos => dbUpsert("orders", {
+          id: uid(), date: p.date, brand: pos.brand, grade: pos.grade, bag_kg: Number(pos.bag_kg), bags: Number(pos.bags),
+          driverId: "", price_per_kg: Number(p.trial ? 0 : (pos.price_per_kg || 0)), status: "новая",
+          isSample: false, trial: !!p.trial, clientId: p.clientId || null, clientName: p.clientName || "",
+        })));
+        await reload("orders");
+      } else if (a.action === "add_payment") {
+        await dbUpsert("payments", { id: uid(), clientId: p.clientId || "", clientName: p.clientName || "", date: p.date, amount: Number(p.amount), method: p.method || "Наличные", note: p.note || "" });
+        await reload("payments");
+      } else if (a.action === "cashbox") {
+        await dbUpsert("cashbox", { id: uid(), dir: p.dir === "in" ? "in" : "out", date: p.date, amount: Number(p.amount), note: p.note || "" });
+        await reload("cashbox");
+      } else if (a.action === "add_expense") {
+        await dbUpsert("expenses", { id: uid(), date: p.date, category: p.category || "Прочее", amount: Number(p.amount), note: p.note || "" });
+        await reload("expenses");
+      } else if (a.action === "add_truck") {
+        await dbUpsert("trucks", { id: uid(), date: p.date, driver_name: p.driver_name || "", car_number: p.car_number || "", whatsapp: "", logist_phone: "", price: Number(p.price) || 0, note: p.note || "", items: (p.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: Number(i.kg) })), status: "запланирована" });
+        await reload("trucks");
+      } else if (a.action === "mark_paid") {
+        const os = orders.filter(o => (p.clientId ? o.clientId === p.clientId : o.clientName === p.clientName) && o.date === p.date && o.status === "отгружена");
+        if (!os.length) { setErr("Не нашёл отгрузок этого клиента за эту дату."); setPhase("result"); return; }
+        await Promise.all(os.map(o => dbUpsert("orders", { ...o, paid: true, pay_method: p.method || "Наличные" })));
+        await reload("orders");
+      } else { setErr("Неизвестное действие."); setPhase("result"); return; }
+      setDoneMsg(a.summary || "Готово"); setPhase("done");
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      setErr(/cashbox|payments|PGRST205/i.test(m) ? "Нужно один раз создать таблицу в Supabase — попроси инструкцию." : "⚠️ Не сохранилось: " + m);
+      setPhase("result");
+    }
+  };
+
+  const reset = () => { setInput(""); setResult(null); setErr(""); setDoneMsg(""); setPhase("input"); };
+  const ACTION_ICON = { create_order: "📋", add_payment: "💰", cashbox: "💵", add_expense: "💸", add_truck: "🏬", mark_paid: "✓" };
+
+  return (
+    <Modal title="🤖 ИИ-помощник" onClose={onClose}>
+      {(phase === "input" || phase === "loading") && (
+        <div className="space-y-3">
+          <div className="text-sm text-gray-500">Напиши задачу простым языком — я пойму, к чему это относится, и покажу, что сделать. Ты подтвердишь.</div>
+          <textarea autoFocus rows={3} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask(); }} placeholder="напр. Ерлан занёс 200 тысяч в счёт долга" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
+          {err && <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{err}</div>}
+          <Btn onClick={() => ask()} disabled={!input.trim() || phase === "loading"} size="lg">{phase === "loading" ? "Думаю…" : "Спросить / Сделать"}</Btn>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {examples.map((ex, i) => <button key={i} onClick={() => ask(ex)} disabled={phase === "loading"} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-full px-2.5 py-1">{ex}</button>)}
+          </div>
+        </div>
+      )}
+
+      {phase === "result" && result && (
+        <div className="space-y-3">
+          <div className="text-xs text-gray-400">Ты попросил: «{input}»</div>
+          {result.kind === "answer" && <div className="text-sm text-gray-800 bg-gray-50 rounded-xl p-3 whitespace-pre-wrap">{result.text}</div>}
+          {result.kind === "clarify" && <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">🤔 {result.text}</div>}
+          {result.kind === "action" && (
+            <div className="border-2 border-amber-300 bg-amber-50 rounded-xl p-3">
+              <div className="text-xs font-semibold text-amber-700 mb-1">Собираюсь сделать:</div>
+              <div className="text-sm font-bold text-gray-900 flex items-start gap-1.5"><span>{ACTION_ICON[result.action] || "•"}</span><span>{result.summary}</span></div>
+              {result.warn && <div className="text-xs text-orange-600 mt-1.5">⚠️ {result.warn}</div>}
+            </div>
+          )}
+          {err && <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{err}</div>}
+          <div className="flex gap-2">
+            {result.kind === "action" && <Btn onClick={execute}>✓ Подтвердить и сделать</Btn>}
+            <Btn variant="secondary" onClick={reset}>{result.kind === "action" ? "Отмена" : "Новая задача"}</Btn>
+          </div>
+        </div>
+      )}
+
+      {phase === "executing" && <div className="text-center py-8 text-gray-500">Выполняю…</div>}
+
+      {phase === "done" && (
+        <div className="space-y-4 text-center py-4">
+          <div className="text-5xl">✅</div>
+          <div className="text-sm font-medium text-gray-800">{doneMsg}</div>
+          <div className="flex gap-2 justify-center">
+            <Btn onClick={reset}>Ещё задача</Btn>
+            <Btn variant="secondary" onClick={onClose}>Закрыть</Btn>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -5182,6 +5306,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
   const [fabOpen, setFabOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [syncing, setSyncing] = useState(false); // ручное обновление: крутим значок и показываем ✓
   const [syncDone, setSyncDone] = useState(false);
@@ -5360,6 +5485,7 @@ export default function App() {
             <div className="fixed inset-0 z-40" onClick={() => setFabOpen(false)} style={{ background: "rgba(0,0,0,0.35)" }}>
               <div className="max-w-2xl mx-auto px-4 relative h-full">
                 <div className="absolute right-4 bottom-40 flex flex-col items-end gap-3" onClick={e => e.stopPropagation()}>
+                  <button onClick={() => { setFabOpen(false); setAssistantOpen(true); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-bold text-amber-700">🤖 ИИ-помощник</span><span className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center text-xl shadow-lg ring-2 ring-amber-200">🤖</span></button>
                   <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">📲</span></button>
                   <button onClick={() => { goTab("today"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">✍️</span></button>
                   <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">💸</span></button>
@@ -5368,6 +5494,7 @@ export default function App() {
             </div>
           )}
           <button onClick={() => setFabOpen(v => !v)} className="fixed z-40 right-4 bottom-24 w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-3xl leading-none flex items-center justify-center shadow-xl transition-transform" style={{ transform: fabOpen ? "rotate(45deg)" : "none" }} aria-label="Добавить">+</button>
+          {assistantOpen && <AssistantModal onClose={() => setAssistantOpen(false)} orders={data.orders} reload={reload} />}
         </>
       )}
 
