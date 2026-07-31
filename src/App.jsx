@@ -33,12 +33,9 @@ async function apiData(op, table, extra = {}) {
 async function dbGetAll(table) { return (await apiData("list", table)).rows || []; }
 async function dbUpsert(table, item) { await apiData("upsert", table, { item }); }
 async function dbDelete(table, id) { await apiData("delete", table, { id }); }
-// 🤖 ИИ-помощник: свободный текст → распознанное действие/ответ (сервер только распознаёт)
+// 🤖 ИИ-помощник: свободный текст → распознанное действие/ответ (операция на защищённом /api/data)
 async function askAssistant(message) {
-  const res = await fetch("/api/assistant", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken, message }) });
-  const d = await res.json().catch(() => ({}));
-  if (!res.ok) { if (res.status === 401) setAuthToken(null); throw new Error(d.error || "Ошибка помощника"); }
-  return d; // { result?, error? }
+  return await apiData("assistant", null, { message }); // { result?, error? }
 }
 
 // Дата в местном времени (не UTC) — иначе в Астане вечером дата уезжала на день вперёд
