@@ -201,6 +201,8 @@ const WEIGHTS = [5, 10, 25, 50];
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
 const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Прочее"];
 const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
+// Способы оплаты клиента (для отметки «оплачено»)
+const PAY_METHODS = [["Kaspi перевод", "🔴"], ["Kaspi QR", "📲"], ["Наличные", "💵"], ["Безнал", "🏦"]];
 // Старые записи сохранены как «Поддоны/Склад» — показываем и считаем их как «Склад»
 const catName = c => (c === "Поддоны/Склад" ? "Склад" : c);
 
@@ -832,7 +834,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     ))}
                   </div>
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
-                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
+                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-bold text-amber-900 bg-amber-100 border-2 border-amber-400 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-base leading-none">📝</span><span className="break-words">{n}</span></div>)}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
@@ -1487,7 +1489,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
                             <span className="font-semibold text-gray-900">{b.bag_kg} кг</span>
                             <span className={`text-right font-bold ${empty || short ? "text-red-600" : "text-emerald-600"}`}>{fmt(have)}</span>
                             <span className="text-right text-gray-700">{fmt(b.kg)}</span>
-                            <span className={`text-right text-xs ${short || negative ? "text-red-700 font-semibold" : "text-gray-500"}`}>{negative ? "⛔ минус — внеси приход" : need > 0 ? (short ? `${need} меш. · не хватает ${need - avail}` : `${need} меш. · своб. ${avail - need}`) : "—"}</span>
+                            <span className={`text-right text-xs ${short || negative ? "text-red-700 font-semibold" : "text-gray-500"}`}>{negative ? "⛔ минус — внеси приход" : need > 0 ? (short ? `${fmt(need * b.bag_kg)} кг (${need} меш.) · не хватает ${fmt((need - avail) * b.bag_kg)} кг` : `${fmt(need * b.bag_kg)} кг (${need} меш.) · своб. ${fmt((avail - need) * b.bag_kg)} кг`) : "—"}</span>
                           </div>
                         );
                       })}
@@ -1658,7 +1660,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
   );
 }
 
-function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
+function ClientsTab({ clients, orders = [], payments = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1762,7 +1764,9 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
   };
 
   // Долг клиента = отгружено и не оплачено
-  const clientDebt = c => orders.filter(o => o.clientId === c.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+  // Ручные оплаты клиента «в счёт долга» — уменьшают его долг
+  const paidManual = cid => (payments || []).filter(p => p.clientId === cid).reduce((s, p) => s + (p.amount || 0), 0);
+  const clientDebt = c => orders.filter(o => o.clientId === c.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0) - paidManual(c.id);
   // Отметить поставку (все позиции за дату) оплаченной — с указанием способа (нал/безнал)
   const markPaid = async (clientId, date, paid, method = "") => {
     try {
@@ -2004,7 +2008,8 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
         const totalKg = delivered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
         const totalDelivered = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
         const totalPaid = delivered.filter(o => o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
-        const debtAll = orders.filter(o => o.clientId === historyClient.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+        const manualPaid = paidManual(historyClient.id); // внесено «в счёт долга» (всего)
+        const debtAll = orders.filter(o => o.clientId === historyClient.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0) - manualPaid;
         const periods = [["day", "День"], ["week", "Неделя"], ["month", "Месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
         return (
           <Modal title={`📋 ${historyClient.name}`} onClose={() => setHistoryClient(null)}>
@@ -2021,7 +2026,8 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
             <div className="text-sm mb-3 space-y-0.5 bg-gray-50 rounded-xl p-3">
               <div>Отгружено за период: <b>{fmt(totalKg)} кг</b> · <b>{fmt(totalDelivered)} тг</b></div>
               <div className="text-emerald-600">Оплачено за период: {fmt(totalPaid)} тг</div>
-              <div className={debtAll > 0 ? "text-red-600 font-bold" : "text-gray-500"}>Текущий долг (всего): {fmt(debtAll)} тг</div>
+              {manualPaid > 0 && <div className="text-emerald-600">Внесено в счёт долга (всего): {fmt(manualPaid)} тг</div>}
+              <div className={debtAll > 0 ? "text-red-600 font-bold" : "text-gray-500"}>{debtAll < 0 ? `Переплата (всего): ${fmt(-debtAll)} тг` : `Текущий долг (всего): ${fmt(debtAll)} тг`}</div>
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {Object.entries(byDate).map(([date, list]) => {
@@ -2029,18 +2035,21 @@ function ClientsTab({ clients, orders = [], reload, canEdit = true }) {
                 const kg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
                 const allPaid = list.every(o => o.paid);
                 const method = list.find(o => o.pay_method)?.pay_method;
+                const isFree = sum <= 0 && list.every(o => o.trial || o.isSample); // вся отгрузка на пробу — платить нечего
                 return (
-                  <div key={date} className={`border rounded-xl p-3 text-sm ${allPaid ? "border-emerald-200 bg-emerald-50" : "border-gray-100"}`}>
+                  <div key={date} className={`border rounded-xl p-3 text-sm ${isFree ? "border-orange-200 bg-orange-50" : allPaid ? "border-emerald-200 bg-emerald-50" : "border-gray-100"}`}>
                     <div className="flex items-center justify-between">
                       <span className="font-medium">{date.split("-").reverse().join(".")}</span>
                       <span className="text-gray-500">{fmt(kg)} кг · {fmt(sum)} тг</span>
                     </div>
                     {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} — {o.status}</div>)}
                     <div className="mt-2">
-                      {allPaid
+                      {isFree
+                        ? <span className="text-orange-600 font-medium text-xs">🎁 На пробу — бесплатно</span>
+                        : allPaid
                         ? <div className="flex items-center gap-2 flex-wrap"><span className="text-emerald-700 font-medium text-xs">✓ Оплачено{method ? ` · ${method}` : ""}</span>{canEdit && <Btn size="sm" variant="ghost" onClick={() => markPaid(historyClient.id, date, false)}>отменить</Btn>}</div>
                         : (canEdit
-                          ? <div className="flex gap-2 flex-wrap"><Btn size="sm" onClick={() => markPaid(historyClient.id, date, true, "Нал")}>💵 Нал</Btn><Btn size="sm" variant="secondary" onClick={() => markPaid(historyClient.id, date, true, "Безнал")}>💳 Безнал</Btn></div>
+                          ? <div className="flex gap-2 flex-wrap">{PAY_METHODS.map(([m, ic]) => <Btn key={m} size="sm" variant={m === "Наличные" ? "primary" : "secondary"} onClick={() => markPaid(historyClient.id, date, true, m)}>{ic} {m}</Btn>)}</div>
                           : <span className="text-amber-700 font-medium text-xs">● Не оплачено</span>)}
                     </div>
                   </div>
@@ -2195,7 +2204,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   );
 }
 
-function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () => {}, canEdit = true }) {
+function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [], reload = () => {}, canEdit = true }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   // 🔍 Свой отчёт: фильтры по бренду, сорту и фасовкам (период — общий сверху)
@@ -2267,7 +2276,8 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], reload = () =>
   // Долги клиентов — всё отгруженное и неоплаченное (не зависит от периода)
   const debtByClient = {};
   orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) debtByClient[o.clientName || "?"] = (debtByClient[o.clientName || "?"] || 0) + sum; });
-  const debtList = Object.entries(debtByClient).sort((a, b) => b[1] - a[1]);
+  (payments || []).forEach(p => { const n = p.clientName || "?"; if (debtByClient[n] != null) debtByClient[n] -= (p.amount || 0); }); // ручные оплаты «в счёт долга»
+  const debtList = Object.entries(debtByClient).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const totalDebt = debtList.reduce((s, [, v]) => s + v, 0);
   // Поступления (оплаченные заявки) — всего и по способу нал/безнал
   const paidOrders = orders.filter(o => o.paid && o.bags * o.bag_kg * (o.price_per_kg || 0) > 0);
@@ -4311,10 +4321,13 @@ function ReactivateTab({ clients, orders }) {
   );
 }
 
-function DebtsTab({ orders, clients, reload, canEdit = true }) {
+function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
   const [open, setOpen] = useState({});
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
   const [selected, setSelected] = useState({});
+  const [payClient, setPayClient] = useState(null); // клиент, которому вносим оплату в счёт долга
+  const [payForm, setPayForm] = useState({ amount: "", method: "Наличные", date: TODAY(), note: "" });
+  const [savingPay, setSavingPay] = useState(false);
   // долг = отгружено и не оплачено (новые/в пути в долг НЕ идут)
   const unpaid = orders.filter(o => o.status === "отгружена" && !o.paid && o.bags * o.bag_kg * (o.price_per_kg || 0) > 0);
   const byClient = {};
@@ -4326,8 +4339,14 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
     const d = (byClient[k].byDate[o.date] = byClient[k].byDate[o.date] || { kg: 0, sum: 0, items: [] });
     d.kg += o.bags * o.bag_kg; d.sum += sum; d.items.push(o);
   });
-  const list = Object.values(byClient).sort((a, b) => b.total - a.total);
-  const grand = list.reduce((s, c) => s + c.total, 0);
+  // Ручные оплаты «в счёт долга» — сумма и список по каждому клиенту
+  const paidByClient = {}, paysByClient = {};
+  (payments || []).forEach(p => { const k = p.clientId || ("nm:" + (p.clientName || "")); paidByClient[k] = (paidByClient[k] || 0) + (p.amount || 0); (paysByClient[k] = paysByClient[k] || []).push(p); });
+  // net = отгружено-неоплачено − внесённые оплаты (может уйти в переплату)
+  Object.values(byClient).forEach(c => { c.paid = paidByClient[c.key] || 0; c.net = c.total - c.paid; });
+  // клиенты, у кого оплат больше, чем незакрытых отгрузок (или оплаты без открытых долгов) — показываем как переплату
+  const list = Object.values(byClient).sort((a, b) => b.net - a.net);
+  const grand = list.reduce((s, c) => s + Math.max(0, c.net), 0);
 
   const markPaid = async (c, date, method) => {
     try {
@@ -4335,6 +4354,19 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
       await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
+  const openPay = c => { setPayClient(c); setPayForm({ amount: "", method: "Наличные", date: TODAY(), note: "" }); };
+  const savePay = async () => {
+    if (!payForm.amount || Number(payForm.amount) <= 0) return;
+    setSavingPay(true);
+    try {
+      await dbUpsert("payments", { id: uid(), clientId: payClient.clientId || "", clientName: payClient.name, date: payForm.date, amount: Number(payForm.amount), method: payForm.method, note: payForm.note.trim() });
+      setPayClient(null); await reload("payments");
+    } catch (e) {
+      const m = String((e && e.message) || e);
+      alert(/payments|PGRST205/i.test(m) ? "Нужно один раз создать таблицу «payments» в Supabase — попроси инструкцию." : "⚠️ Не сохранилось: " + m);
+    } finally { setSavingPay(false); }
+  };
+  const delPayment = async id => { if (!confirm("Удалить эту оплату? Долг клиента вырастет обратно.")) return; try { await dbDelete("payments", id); await reload("payments"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
 
   const selectedList = list.filter(c => selected[c.key]);
   const copyReconcile = () => {
@@ -4352,7 +4384,7 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
         <div className="font-bold text-gray-800">💰 Общий долг клиентов</div>
         <div className="text-2xl font-black text-red-600">{fmt(grand)} тг</div>
       </div>
-      <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет.</div>
+      <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «💵 Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium">📄 Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
       )}
@@ -4371,20 +4403,46 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
       ) : list.map(c => {
         const dates = Object.keys(c.byDate).sort((a, b) => b.localeCompare(a));
         const isOpen = open[c.key];
+        const pays = (paysByClient[c.key] || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const settled = c.net <= 0;
         return (
-          <div key={c.key} className={`bg-white border rounded-2xl shadow-sm overflow-hidden ${reconcile && selected[c.key] ? "border-amber-400 ring-1 ring-amber-300" : "border-gray-100"}`}>
+          <div key={c.key} className={`bg-white border rounded-2xl shadow-sm overflow-hidden ${reconcile && selected[c.key] ? "border-amber-400 ring-1 ring-amber-300" : settled ? "border-emerald-200" : "border-gray-100"}`}>
             <button onClick={() => reconcile ? setSelected(s => ({ ...s, [c.key]: !s[c.key] })) : setOpen(o => ({ ...o, [c.key]: !o[c.key] }))} className="w-full flex items-center justify-between p-4 text-left">
               <div className="flex items-center gap-3 min-w-0">
                 {reconcile && <span className={`w-5 h-5 flex-shrink-0 rounded-md border-2 flex items-center justify-center text-white text-xs font-bold ${selected[c.key] ? "bg-amber-500 border-amber-500" : "border-gray-300"}`}>{selected[c.key] ? "✓" : ""}</span>}
                 <div>
                   <div className="font-bold text-gray-900">{c.name}{c.org && <span className="text-sm text-gray-500 font-normal"> · {c.org}</span>}</div>
-                  <div className="text-xs text-gray-400">{dates.length} {dates.length === 1 ? "отгрузка не оплачена" : "отгрузок не оплачено"}</div>
+                  <div className="text-xs text-gray-400">{dates.length} {dates.length === 1 ? "отгрузка не оплачена" : "отгрузок не оплачено"}{c.paid > 0 ? ` · внесено ${fmt(c.paid)} тг` : ""}</div>
                 </div>
               </div>
-              <div className="text-right"><div className="font-bold text-red-600">{fmt(c.total)} тг</div>{!reconcile && <div className="text-xs text-gray-400">{isOpen ? "▲ свернуть" : "▼ открыть"}</div>}</div>
+              <div className="text-right">
+                {settled
+                  ? <div className="font-bold text-emerald-600">{c.net < 0 ? `переплата ${fmt(-c.net)}` : "оплачено ✓"}</div>
+                  : <div className="font-bold text-red-600">{fmt(c.net)} тг</div>}
+                {!reconcile && <div className="text-xs text-gray-400">{isOpen ? "▲ свернуть" : "▼ открыть"}</div>}
+              </div>
             </button>
             {isOpen && (
               <div className="px-4 pb-4 space-y-2 border-t border-gray-50 pt-3">
+                {c.paid > 0 && (
+                  <div className="bg-emerald-50 rounded-xl p-3 text-sm">
+                    <div className="flex justify-between"><span className="text-gray-600">Отгружено не оплачено</span><b>{fmt(c.total)} тг</b></div>
+                    <div className="flex justify-between text-emerald-700"><span>− внесено оплат</span><b>{fmt(c.paid)} тг</b></div>
+                    <div className="flex justify-between border-t border-emerald-200 mt-1 pt-1"><span className="font-medium">Остаток долга</span><b className={c.net > 0 ? "text-red-600" : "text-emerald-600"}>{c.net > 0 ? fmt(c.net) + " тг" : (c.net < 0 ? "переплата " + fmt(-c.net) : "0 тг")}</b></div>
+                  </div>
+                )}
+                {canEdit && <Btn size="sm" onClick={() => openPay(c)}>💵 Внести оплату в счёт долга</Btn>}
+                {pays.length > 0 && (
+                  <div className="space-y-1">
+                    {pays.map(p => (
+                      <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
+                        <span className="text-gray-600">💵 {(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
+                        <span className="flex items-center gap-2"><b className="text-emerald-600">{fmt(p.amount)} тг</b>{canEdit && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить оплату">✕</button>}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-xs font-semibold text-gray-400 pt-1">Отгрузки:</div>
                 {dates.map(date => {
                   const d = c.byDate[date];
                   return (
@@ -4394,7 +4452,7 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
                         <div className="font-bold text-gray-800">{fmt(d.sum)} тг</div>
                       </div>
                       <div className="text-xs text-gray-500 mt-1">{d.items.map((o, i) => `${i ? ", " : ""}${o.brand} ${o.grade} ${o.bag_kg}кг×${o.bags}`).join("")}</div>
-                      {canEdit && <div className="flex gap-2 mt-2"><Btn size="sm" onClick={() => markPaid(c, date, "Нал")}>💵 Оплатил нал</Btn><Btn size="sm" variant="secondary" onClick={() => markPaid(c, date, "Безнал")}>💳 Безнал</Btn></div>}
+                      {canEdit && <div className="flex gap-2 mt-2 flex-wrap">{PAY_METHODS.map(([m, ic]) => <Btn key={m} size="sm" variant={m === "Наличные" ? "primary" : "secondary"} onClick={() => markPaid(c, date, m)}>{ic} {m}</Btn>)}</div>}
                     </div>
                   );
                 })}
@@ -4403,6 +4461,25 @@ function DebtsTab({ orders, clients, reload, canEdit = true }) {
           </div>
         );
       })}
+
+      {payClient && (
+        <Modal title={`💵 Оплата — ${payClient.name}`} onClose={() => setPayClient(null)}>
+          <div className="text-xs text-gray-500 mb-3">Клиент прислал сумму в счёт общего долга. Она уменьшит его долг, конкретные отгрузки отмечать не нужно.</div>
+          <div className="space-y-3">
+            <Inp label="Сколько прислал, тг" type="number" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} />
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-1">Как оплатил</div>
+              <div className="flex gap-2 flex-wrap">{PAY_METHODS.map(([m, ic]) => <button key={m} onClick={() => setPayForm({ ...payForm, method: m })} className={`px-3 py-1.5 rounded-lg text-sm font-medium ${payForm.method === m ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{ic} {m}</button>)}</div>
+            </div>
+            <Inp label="Дата" type="date" value={payForm.date} onChange={e => setPayForm({ ...payForm, date: e.target.value })} />
+            <Inp label="Заметка (по желанию)" value={payForm.note} onChange={e => setPayForm({ ...payForm, note: e.target.value })} placeholder="напр. частично, остаток на след. неделе" />
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={savePay} disabled={!payForm.amount || savingPay}>{savingPay ? "Сохраняю…" : "Записать оплату"}</Btn>
+            <Btn variant="secondary" onClick={() => setPayClient(null)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -4969,7 +5046,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                       </div>
                     ))}
                   </div>
-                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-xs text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-1">📝 {n}</div>)}
+                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-bold text-amber-900 bg-amber-100 border-2 border-amber-400 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-base leading-none">📝</span><span className="break-words">{n}</span></div>)}
                   {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
                   {canEdit && (
@@ -5100,7 +5177,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -5130,7 +5207,7 @@ export default function App() {
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [] };
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [], payments: d.payments || [] };
         applyWarehouse(next.notes); // подхватываем сохранённый адрес склада
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
@@ -5209,7 +5286,7 @@ export default function App() {
     setTimeout(() => setSyncDone(false), 2000);
   };
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -5263,15 +5340,15 @@ export default function App() {
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
-            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
+            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} payments={data.payments} reload={reload} canEdit={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
-            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} reload={reload} canEdit={isDirector} />}
+            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} payments={data.payments} reload={reload} canEdit={isDirector} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
             {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} reload={reload} canEdit={isDirector} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} reload={reload} canEdit={isDirector} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} />}
           </>
         )}
