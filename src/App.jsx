@@ -3271,24 +3271,51 @@ function LoginScreen({ onLogin }) {
 function CashboxTab({ cashbox = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [dir, setDir] = useState("out"); // in — приход (дали), out — трата
+  const [editItem, setEditItem] = useState(null); // редактируемая запись (null = новая)
   const [form, setForm] = useState({ date: TODAY(), amount: "", note: "" });
-  const openNew = d => { setDir(d); setForm({ date: TODAY(), amount: "", note: "" }); setShowAdd(true); };
+  const [saving, setSaving] = useState(false);
+  const [period, setPeriod] = useState("month");
+  const [from, setFrom] = useState(TODAY());
+  const [to, setTo] = useState(TODAY());
+
+  const openNew = d => { setEditItem(null); setDir(d); setForm({ date: TODAY(), amount: "", note: "" }); setShowAdd(true); };
+  const openEdit = x => { setEditItem(x); setDir(x.dir === "in" ? "in" : "out"); setForm({ date: x.date || TODAY(), amount: String(x.amount ?? ""), note: x.note || "" }); setShowAdd(true); };
   const save = async () => {
     if (!form.amount || Number(form.amount) <= 0) return;
+    setSaving(true);
     try {
-      await dbUpsert("cashbox", { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim() });
-      setShowAdd(false); await reload("cashbox");
+      const rec = editItem
+        ? { ...editItem, dir, date: form.date, amount: Number(form.amount), note: form.note.trim() }
+        : { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim() };
+      await dbUpsert("cashbox", rec);
+      setShowAdd(false); setEditItem(null); await reload("cashbox");
     } catch (e) {
       const m = String((e && e.message) || e);
       alert(/cashbox|PGRST205/i.test(m) ? "Нужно один раз создать таблицу «cashbox» в Supabase — попроси инструкцию." : "⚠️ Не сохранилось: " + m);
-    }
+    } finally { setSaving(false); }
   };
-  const del = async id => { if (!confirm("Удалить эту запись из кассы?")) return; try { await dbDelete("cashbox", id); await reload("cashbox"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
+  const del = async id => { if (!confirm("Удалить эту запись из кассы?")) return; try { await dbDelete("cashbox", id); setShowAdd(false); await reload("cashbox"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
 
+  // Остаток — всегда по всей истории (это накопительный баланс кассы)
   const totalIn = cashbox.filter(x => x.dir === "in").reduce((s, x) => s + (x.amount || 0), 0);
   const totalOut = cashbox.filter(x => x.dir !== "in").reduce((s, x) => s + (x.amount || 0), 0);
   const balance = totalIn - totalOut;
-  const list = [...cashbox].sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.id).localeCompare(String(a.id)));
+
+  // Фильтр по датам — влияет на список и на суммы «за период»
+  const now = new Date();
+  const inPeriod = x => {
+    if (period === "all") return true;
+    const d = new Date(x.date);
+    if (period === "week") { const w = new Date(now); w.setDate(w.getDate() - 7); return d >= w; }
+    if (period === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    if (period === "3month") { const m = new Date(now); m.setMonth(m.getMonth() - 3); return d >= m; }
+    if (period === "custom") return (x.date || "") >= from && (x.date || "") <= to;
+    return true;
+  };
+  const list = cashbox.filter(inPeriod).sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.id).localeCompare(String(a.id)));
+  const perIn = list.filter(x => x.dir === "in").reduce((s, x) => s + (x.amount || 0), 0);
+  const perOut = list.filter(x => x.dir !== "in").reduce((s, x) => s + (x.amount || 0), 0);
+  const periods = [["week", "Неделя"], ["month", "Месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
 
   return (
     <div className="space-y-4">
@@ -3296,7 +3323,7 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
       <div className={`rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br ${balance < 0 ? "from-red-500 to-red-600" : "from-emerald-500 to-emerald-600"}`}>
         <div className="text-sm font-medium opacity-90">Остаток в кассе</div>
         <div className="text-4xl font-black mt-1">{fmt(balance)} тг</div>
-        <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Получено: <b>{fmt(totalIn)}</b> · Потрачено: <b>{fmt(totalOut)}</b></div>
+        <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Всего получено: <b>{fmt(totalIn)}</b> · потрачено: <b>{fmt(totalOut)}</b></div>
       </div>
       {canEdit && (
         <div className="flex gap-2">
@@ -3304,34 +3331,54 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
           <button onClick={() => openNew("out")} className="flex-1 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium px-6 py-3 text-base active:scale-95 transition-all">− Трата</button>
         </div>
       )}
+
+      {/* Фильтр по датам */}
+      <div className="flex flex-wrap gap-2">
+        {periods.map(([v, l]) => <button key={v} onClick={() => setPeriod(v)} className={`px-3.5 py-1.5 rounded-xl text-sm font-medium transition-all ${period === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>)}
+      </div>
+      {period === "custom" && (
+        <div className="flex items-center gap-2 text-sm">
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 flex-1" />
+          <span className="text-gray-400">—</span>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 flex-1" />
+        </div>
+      )}
+      <div className="flex gap-2 text-sm">
+        <div className="flex-1 bg-emerald-50 text-emerald-700 rounded-xl px-3 py-2"><div className="text-xs opacity-70">Получено за период</div><div className="font-bold">+{fmt(perIn)} тг</div></div>
+        <div className="flex-1 bg-red-50 text-red-600 rounded-xl px-3 py-2"><div className="text-xs opacity-70">Потрачено за период</div><div className="font-bold">−{fmt(perOut)} тг</div></div>
+      </div>
+
       {showAdd && (
-        <Modal title={dir === "in" ? "💵 Приход — дали денег" : "− Трата"} onClose={() => setShowAdd(false)}>
+        <Modal title={editItem ? (dir === "in" ? "✏️ Приход" : "✏️ Трата") : (dir === "in" ? "💵 Приход — дали денег" : "− Трата")} onClose={() => { setShowAdd(false); setEditItem(null); }}>
           <div className="space-y-3">
+            {/* переключатель Приход/Трата — чтобы можно было и тип поправить */}
+            <div className="flex gap-2">
+              <button onClick={() => setDir("in")} className={`flex-1 py-2 rounded-lg text-sm font-medium ${dir === "in" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>▲ Приход</button>
+              <button onClick={() => setDir("out")} className={`flex-1 py-2 rounded-lg text-sm font-medium ${dir === "out" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-600"}`}>▼ Трата</button>
+            </div>
             <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             <Inp label="Сумма, тг" type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
             <Inp label={dir === "in" ? "От кого / за что (по желанию)" : "На что потратил"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={dir === "in" ? "напр. от Эрика на закуп" : "напр. роутер, камеры"} />
           </div>
           <div className="flex gap-2 mt-4">
-            <Btn onClick={save} disabled={!form.amount}>Сохранить</Btn>
-            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+            <Btn onClick={save} disabled={!form.amount || saving}>{saving ? "Сохраняю…" : "Сохранить"}</Btn>
+            {editItem && <Btn variant="danger" onClick={() => del(editItem.id)}>Удалить</Btn>}
+            <Btn variant="secondary" onClick={() => { setShowAdd(false); setEditItem(null); }}>Отмена</Btn>
           </div>
         </Modal>
       )}
       <div className="space-y-2">
-        {list.length === 0 && <div className="text-center py-12 text-gray-400">Пока пусто. Нажми «+ Приход», когда дадут денег.</div>}
+        {list.length === 0 && <div className="text-center py-12 text-gray-400">{cashbox.length ? "За этот период записей нет." : "Пока пусто. Нажми «+ Приход», когда дадут денег."}</div>}
         {list.map(x => {
           const isIn = x.dir === "in";
           return (
-            <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
+            <button key={x.id} onClick={() => canEdit && openEdit(x)} disabled={!canEdit} className="w-full text-left bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm active:scale-[0.99] transition-transform">
               <div className="min-w-0">
                 <div className="font-medium text-gray-900">{isIn ? "▲ Приход" : "▼ Трата"}{x.note ? ` — ${x.note}` : ""}</div>
-                <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}</div>
+                <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}{canEdit ? " · нажми чтобы изменить" : ""}</div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`font-bold ${isIn ? "text-emerald-600" : "text-red-500"}`}>{isIn ? "+" : "−"}{fmt(x.amount)} тг</span>
-                {canEdit && <button onClick={() => del(x.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}
-              </div>
-            </div>
+              <span className={`font-bold flex-shrink-0 ${isIn ? "text-emerald-600" : "text-red-500"}`}>{isIn ? "+" : "−"}{fmt(x.amount)} тг</span>
+            </button>
           );
         })}
       </div>
