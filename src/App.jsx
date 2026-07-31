@@ -883,7 +883,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                         <input type="file" accept="image/*" capture="environment" hidden disabled={uploadingId === firstId} onChange={e => { addPhoto(g.orders[0], e.target.files[0]); e.target.value = ""; }} />
                       </label>
                     </div>
-                  ) : canEdit ? (
+                  ) : (canEdit && !g.orders.some(o => o.foreign)) ? (
                     (isPickup || isOneOff) ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       {isPickup && (
