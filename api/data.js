@@ -165,6 +165,23 @@ async function listFor(u, table) {
     }
     return [];
   }
+  if (u.role === "brigadir") {
+    // Бригадир: заявки всей бригады (он + младшие водители с foremanId === его driverId)
+    if (!["orders", "drivers", "clients", "notes"].includes(table)) return [];
+    const allDrivers = await dbList("drivers");
+    const brigade = new Set([u.driverId, ...allDrivers.filter(d => d.foremanId === u.driverId).map(d => d.id)]);
+    if (table === "drivers") return allDrivers.filter(d => brigade.has(d.id)).map(({ rate_per_kg, load_rate_per_kg, base_salary, base_included_kg, tier1_to_kg, tier1_rate, tier2_rate, ...d }) => d); // без ставок/оклада
+    if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse");
+    const myOrders = (await dbList("orders")).filter(o => brigade.has(o.driverId));
+    if (table === "orders") return myOrders;
+    if (table === "clients") {
+      const ids = new Set(myOrders.map(o => o.clientId).filter(Boolean));
+      if (!ids.size) return [];
+      const list = await Promise.all([...ids].map(cid => dbGet("clients", cid).catch(() => null)));
+      return list.filter(Boolean);
+    }
+    return [];
+  }
   if (u.role === "rep") {
     // Торговый представитель: СВОИ клиенты (по ownerId), свои оплаты, общий склад (без цен закупа),
     // водители (без ставок) и ВСЕ заявки как расписание — но чужие обезличены и без цен.
@@ -242,6 +259,26 @@ async function upsertFor(u, table, item) {
       photo_at: (item.photo_at && typeof item.photo_at === "object") ? { ...(existing.photo_at || {}), ...item.photo_at } : existing.photo_at, // время загрузки документов
     };
     return dbUpsert("orders", merged);
+  }
+  if (u.role === "brigadir") {
+    // Бригадир меняет только заявки своей бригады: переназначить водителя ВНУТРИ бригады + отметки доставки/загрузки/фото
+    if (table !== "orders") throw new Error("Нет прав на изменение");
+    const existing = await dbGet("orders", item.id);
+    if (!existing) throw new Error("Заявка не найдена");
+    const allDrivers = await dbList("drivers");
+    const brigade = new Set([u.driverId, ...allDrivers.filter(d => d.foremanId === u.driverId).map(d => d.id)]);
+    if (!brigade.has(existing.driverId)) throw new Error("Эта заявка не в вашей бригаде");
+    const newDriver = typeof item.driverId === "string" ? item.driverId : existing.driverId;
+    if (newDriver && !brigade.has(newDriver)) throw new Error("Передать можно только своему водителю");
+    return dbUpsert("orders", {
+      ...existing,
+      driverId: newDriver,
+      delivered_by_driver: typeof item.delivered_by_driver === "boolean" ? item.delivered_by_driver : existing.delivered_by_driver,
+      delivered_at: item.delivered_at ?? existing.delivered_at,
+      loaded: typeof item.loaded === "boolean" ? item.loaded : existing.loaded,
+      photos: Array.isArray(item.photos) ? item.photos : existing.photos,
+      photo_at: (item.photo_at && typeof item.photo_at === "object") ? { ...(existing.photo_at || {}), ...item.photo_at } : existing.photo_at,
+    });
   }
   if (u.role === "rep") {
     // Торгпред меняет ТОЛЬКО своё: клиентов своей группы, заявки и оплаты своих клиентов.

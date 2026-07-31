@@ -178,12 +178,13 @@ async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
+const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", brigadir: "Бригадир", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
   director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
   viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
+  brigadir: ["calendar"], // бригадир: видит все заявки бригады, может переназначить младшим
   driver: ["calendar"],
   rep: ["today", "calendar", "clients", "debts", "stock"], // торгпред: свои клиенты/заявки/долги + расписание и остатки
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
@@ -194,13 +195,14 @@ const PRIMARY_NAV = {
   director: ["today", "calendar", "stock", "clients", "reports"],
   viewer: ["today", "calendar", "stock", "clients", "reports"],
   accountant: ["today", "calendar", "reports"],
+  brigadir: ["calendar"],
   driver: ["calendar"],
   rep: ["today", "calendar", "clients", "debts", "stock"],
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
 const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", cashbox: "💵", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Рабочие", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -454,7 +456,7 @@ function PhotoViewer({ url, onClose }) {
   );
 }
 
-function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false }) {
+function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
@@ -868,8 +870,14 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   {anyClaim && !allConfirmed && <div className="text-xs text-amber-600 mt-1">🚚 Водитель отметил «доставил» — ждёт подтверждения</div>}
                   {allConfirmed && <div className="text-xs text-emerald-600 mt-1">✓ Подтверждено</div>}
 
-                  {driverMode ? (
+                  {(driverMode || foremanMode) ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
+                      {foremanMode && !isPickup && !isOneOff && (
+                        <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}>
+                          <option value="">🚛 Передать водителю</option>
+                          {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                      )}
                       {!allShipped && (allLoaded
                         ? <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, false)}>↩ Не загружен</Btn>
                         : <Btn size="sm" onClick={() => loadGroup(g, true)}>📦 Загрузил</Btn>)}
@@ -2106,19 +2114,37 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: "", rate_per_kg: "", load_rate_per_kg: "" });
+  const blankDriver = { name: "", salary_type: "kg", rate_per_kg: "", load_rate_per_kg: "", foremanId: "", base_salary: "650000", base_included_t: "60", tier1_to_t: "190", tier1_rate: "6", tier2_rate: "8" };
+  const [form, setForm] = useState(blankDriver);
   const [payDriver, setPayDriver] = useState(null);
   const [payAmount, setPayAmount] = useState("");
   const [payDate, setPayDate] = useState(TODAY());
   const [payExtra, setPayExtra] = useState(false);
   const [detailDriver, setDetailDriver] = useState(null);
+  const [salMonth, setSalMonth] = useState(TODAY().slice(0, 7)); // YYYY-MM — месяц для зарплаты бригадира
 
-  const openNew = () => { setEditId(null); setForm({ name: "", rate_per_kg: "", load_rate_per_kg: "" }); setShowAdd(true); };
-  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.load_rate_per_kg ?? "" }); setShowAdd(true); };
+  const brigadirs = drivers.filter(d => d.salary_type === "brigadir"); // для выбора старшего у младшего
+  const openNew = () => { setEditId(null); setForm(blankDriver); setShowAdd(true); };
+  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, salary_type: d.salary_type || "kg", rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.load_rate_per_kg ?? "", foremanId: d.foremanId || "", base_salary: d.base_salary ?? "650000", base_included_t: d.base_included_t ?? "60", tier1_to_t: d.tier1_to_t ?? "190", tier1_rate: d.tier1_rate ?? "6", tier2_rate: d.tier2_rate ?? "8" }); setShowAdd(true); };
   const saveDriver = async () => {
     setSaving(true);
-    try { await dbUpsert("drivers", { id: editId || uid(), name: form.name, rate_per_kg: Number(form.rate_per_kg) || 0, load_rate_per_kg: Number(form.load_rate_per_kg) || 0 }); setShowAdd(false); setEditId(null); setForm({ name: "", rate_per_kg: "", load_rate_per_kg: "" }); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    const t = form.salary_type;
+    const rec = { id: editId || uid(), name: form.name, salary_type: t };
+    if (t === "brigadir") Object.assign(rec, { base_salary: Number(form.base_salary) || 0, base_included_t: Number(form.base_included_t) || 0, tier1_to_t: Number(form.tier1_to_t) || 0, tier1_rate: Number(form.tier1_rate) || 0, tier2_rate: Number(form.tier2_rate) || 0, rate_per_kg: 0, load_rate_per_kg: 0, foremanId: "" });
+    else if (t === "junior") Object.assign(rec, { foremanId: form.foremanId || "", rate_per_kg: 0, load_rate_per_kg: 0 });
+    else Object.assign(rec, { rate_per_kg: Number(form.rate_per_kg) || 0, load_rate_per_kg: Number(form.load_rate_per_kg) || 0, foremanId: "" });
+    try { await dbUpsert("drivers", rec); setShowAdd(false); setEditId(null); setForm(blankDriver); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
+  };
+  // Зарплата бригадира: оклад (вкл. N тонн) + тариф1 до M тонн + тариф2 выше. Объём — вся бригада за месяц.
+  const brigadeKgMonth = (d, ym) => {
+    const brigade = new Set([d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)]);
+    return orders.filter(o => o.status === "отгружена" && brigade.has(o.driverId) && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  };
+  const brigadirPay = (d, kg) => {
+    const base = Number(d.base_salary) || 0, incl = (Number(d.base_included_t) || 0) * 1000, t1 = (Number(d.tier1_to_t) || 0) * 1000;
+    const r1 = Number(d.tier1_rate) || 0, r2 = Number(d.tier2_rate) || 0;
+    return Math.round(base + Math.max(0, Math.min(kg, t1) - incl) * r1 + Math.max(0, kg - t1) * r2);
   };
   const deleteDriver = async id => {
     const linked = (users || []).filter(u => u.driverId === id);
@@ -2130,48 +2156,73 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
     } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
   };
 
-  // Заработок: развоз (доставка × ставка водителя) и отгрузка (самовывоз × ставка грузчика)
+  // Заработок обычного водителя/грузчика по ставке (всё время). Бригадир и младшие считаются иначе.
   const earnings = {}, loadEarn = {};
   orders.filter(o => o.status === "отгружена").forEach(o => {
-    if (o.driverId && !o.pickup) { const d = drivers.find(x => x.id === o.driverId); if (d) earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * (d.rate_per_kg || 0); }
-    if (o.pickup && o.loaderId) { const d = drivers.find(x => x.id === o.loaderId); if (d) loadEarn[o.loaderId] = (loadEarn[o.loaderId] || 0) + o.bags * o.bag_kg * (d.load_rate_per_kg || 0); }
+    if (o.driverId && !o.pickup) { const d = drivers.find(x => x.id === o.driverId); if (d && d.salary_type !== "brigadir" && d.salary_type !== "junior") earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * (d.rate_per_kg || 0); }
+    if (o.pickup && o.loaderId) { const d = drivers.find(x => x.id === o.loaderId); if (d && d.salary_type !== "brigadir" && d.salary_type !== "junior") loadEarn[o.loaderId] = (loadEarn[o.loaderId] || 0) + o.bags * o.bag_kg * (d.load_rate_per_kg || 0); }
   });
-  const totalEarned = id => (earnings[id] || 0) + (loadEarn[id] || 0);
   // Выплаты: зарплата (уменьшает долг) и доплаты за доп. работу (НЕ уменьшают долг)
   const wagePaid = {}, extraPaid = {};
   expenses.filter(x => x.driverId).forEach(x => { const m = x.extra ? extraPaid : wagePaid; m[x.driverId] = (m[x.driverId] || 0) + (x.amount || 0); });
-  const remainingOf = id => Math.max(0, Math.round(totalEarned(id) - (wagePaid[id] || 0)));
+  const wagePaidMonth = id => expenses.filter(x => x.driverId === id && !x.extra && (x.date || "").startsWith(salMonth)).reduce((s, x) => s + (x.amount || 0), 0);
+  // Заработано: бригадир — оклад+тарифы за выбранный месяц (по объёму всей бригады); младший — платит бригадир (0); обычный — по ставке (всё время)
+  const earnedOf = d => d.salary_type === "brigadir" ? brigadirPay(d, brigadeKgMonth(d, salMonth)) : d.salary_type === "junior" ? 0 : ((earnings[d.id] || 0) + (loadEarn[d.id] || 0));
+  const paidOf = d => d.salary_type === "brigadir" ? wagePaidMonth(d.id) : (wagePaid[d.id] || 0);
+  const remainingOf = d => Math.max(0, Math.round(earnedOf(d) - paidOf(d)));
 
-  const openPay = (d, extra = false) => { setPayDriver(d); setPayExtra(extra); setPayAmount(extra ? "" : String(remainingOf(d.id))); setPayDate(TODAY()); };
+  const openPay = (d, extra = false) => { setPayDriver(d); setPayExtra(extra); setPayAmount(extra ? "" : String(remainingOf(d))); setPayDate(TODAY()); };
   const doPay = async () => {
     if (!payAmount) return;
     setSaving(true);
-    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note: `${payExtra ? "Доплата (доп. работа)" : "Зарплата (развоз+отгрузка)"} — ${payDriver.name}` }); setPayDriver(null); await reload("expenses"); }
+    const isBrig = payDriver.salary_type === "brigadir";
+    const note = payExtra ? `Доплата (доп. работа) — ${payDriver.name}` : (isBrig ? `Зарплата бригадира за ${salMonth} — ${payDriver.name}` : `Зарплата (развоз+отгрузка) — ${payDriver.name}`);
+    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note }); setPayDriver(null); await reload("expenses"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Рабочие</h3>{canEdit && <Btn onClick={openNew}>+ Рабочий</Btn>}</div>
-      <p className="text-sm text-gray-500">Один рабочий может и возить, и грузить. Ставка за развоз — за доставку клиенту (водитель). Ставка за отгрузку — за погрузку в машину клиента при самовывозе (грузчик).</p>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Зарплата</h3>{canEdit && <Btn onClick={openNew}>+ Рабочий</Btn>}</div>
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-gray-500">Месяц зарплаты бригадира:</span>
+        <input type="month" value={salMonth} onChange={e => setSalMonth(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" />
+      </div>
       {showAdd && (<Modal title={editId ? "Изменить рабочего" : "Новый рабочий"} onClose={() => setShowAdd(false)}>
         <div className="space-y-3">
           <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-          <Inp label="🚚 Ставка за развоз (водитель), тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} placeholder="напр. 3" />
-          <Inp label="📦 Ставка за отгрузку (грузчик), тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2" />
+          <Sel label="Тип оплаты" value={form.salary_type} onChange={e => setForm({ ...form, salary_type: e.target.value })} options={[{ value: "kg", label: "Обычный — ставка за кг" }, { value: "brigadir", label: "Бригадир — оклад + тарифы" }, { value: "junior", label: "Младший водитель (платит бригадир)" }]} />
+          {form.salary_type === "kg" && (<>
+            <Inp label="🚚 Ставка за развоз (водитель), тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} placeholder="напр. 3" />
+            <Inp label="📦 Ставка за отгрузку (грузчик), тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2" />
+          </>)}
+          {form.salary_type === "junior" && (
+            brigadirs.length === 0
+              ? <p className="text-xs text-amber-600">Сначала создай бригадира (тип оплаты «Бригадир»), потом привяжешь к нему младших.</p>
+              : <Sel label="Бригадир (старший)" value={form.foremanId} onChange={e => setForm({ ...form, foremanId: e.target.value })} options={[{ value: "", label: "— выбери бригадира —" }, ...brigadirs.map(b => ({ value: b.id, label: b.name }))]} />
+          )}
+          {form.salary_type === "junior" && <p className="text-xs text-gray-500">Зарплату младшему платит бригадир из своих. В приложении его зарплату не считаем — только показываем, сколько он развёз.</p>}
+          {form.salary_type === "brigadir" && (<>
+            <Inp label="Оклад, тг/мес" type="number" value={form.base_salary} onChange={e => setForm({ ...form, base_salary: e.target.value })} />
+            <Inp label="В оклад включено, тонн/мес" type="number" value={form.base_included_t} onChange={e => setForm({ ...form, base_included_t: e.target.value })} />
+            <Inp label="Тариф до порога, тг/кг" type="number" value={form.tier1_rate} onChange={e => setForm({ ...form, tier1_rate: e.target.value })} />
+            <Inp label="Порог второго тарифа, тонн/мес" type="number" value={form.tier1_to_t} onChange={e => setForm({ ...form, tier1_to_t: e.target.value })} />
+            <Inp label="Тариф выше порога, тг/кг" type="number" value={form.tier2_rate} onChange={e => setForm({ ...form, tier2_rate: e.target.value })} />
+            <p className="text-xs text-gray-500">Пример: оклад 650000 (вкл. 60 т), 60–190 т по 6 тг/кг, свыше 190 т по 8 тг/кг. Считается по объёму всей бригады за месяц.</p>
+          </>)}
         </div>
-        <div className="flex gap-2 mt-4"><Btn onClick={saveDriver} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
+        <div className="flex gap-2 mt-4"><Btn onClick={saveDriver} disabled={saving || (form.salary_type === "junior" && !form.foremanId)}>{saving ? "Сохраняю..." : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
       </Modal>)}
       {payDriver && (<Modal title={`Выплата: ${payDriver.name}`} onClose={() => setPayDriver(null)}>
         <div className="space-y-3">
           <div className="flex gap-2">
-            <button onClick={() => { setPayExtra(false); setPayAmount(String(remainingOf(payDriver.id))); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${!payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Зарплата</button>
+            <button onClick={() => { setPayExtra(false); setPayAmount(String(remainingOf(payDriver))); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${!payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Зарплата</button>
             <button onClick={() => { setPayExtra(true); setPayAmount(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${payExtra ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Доплата (доп. работа)</button>
           </div>
           {payExtra
             ? <div className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">Доплата НЕ уменьшает остаток по зарплате — это оплата за дополнительную работу.</div>
-            : <div className="text-sm bg-gray-50 rounded-xl p-3">Заработал (развоз {fmt(earnings[payDriver.id] || 0)} + отгрузка {fmt(loadEarn[payDriver.id] || 0)}): <b>{fmt(totalEarned(payDriver.id))} тг</b> · выплачено: {fmt(wagePaid[payDriver.id] || 0)} тг · осталось: <b className="text-red-600">{fmt(remainingOf(payDriver.id))} тг</b></div>}
+            : <div className="text-sm bg-gray-50 rounded-xl p-3">{payDriver.salary_type === "brigadir" ? <>Зарплата за {salMonth} (бригада {fmt(brigadeKgMonth(payDriver, salMonth))} кг): <b>{fmt(earnedOf(payDriver))} тг</b> · выплачено в этом месяце: {fmt(paidOf(payDriver))} тг · осталось: <b className="text-red-600">{fmt(remainingOf(payDriver))} тг</b></> : <>Заработал (развоз {fmt(earnings[payDriver.id] || 0)} + отгрузка {fmt(loadEarn[payDriver.id] || 0)}): <b>{fmt(earnedOf(payDriver))} тг</b> · выплачено: {fmt(wagePaid[payDriver.id] || 0)} тг · осталось: <b className="text-red-600">{fmt(remainingOf(payDriver))} тг</b></>}</div>}
           <Inp label="Дата" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
           <Inp label="Сумма выплаты, тг" type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} />
         </div>
@@ -2209,28 +2260,43 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
       })()}
       <div className="space-y-3">
         {drivers.length === 0 && <div className="text-center py-12 text-gray-400">Рабочих нет.</div>}
-        {drivers.map(d => {
-          const delivKg = orders.filter(o => o.driverId === d.id && !o.pickup && o.status === "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
-          const loadKg = orders.filter(o => o.pickup && o.loaderId === d.id && o.status === "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
+        {[...drivers].sort((a, b) => (a.salary_type === "brigadir" ? 0 : a.salary_type === "junior" ? 1 : 2) - (b.salary_type === "brigadir" ? 0 : b.salary_type === "junior" ? 1 : 2)).map(d => {
+          const isBrig = d.salary_type === "brigadir";
+          const isJunior = d.salary_type === "junior";
+          const foreman = isJunior ? drivers.find(x => x.id === d.foremanId) : null;
+          const juniors = isBrig ? drivers.filter(x => x.foremanId === d.id) : [];
+          const monthKg = isBrig ? brigadeKgMonth(d, salMonth) : orders.filter(o => o.status === "отгружена" && ((o.driverId === d.id && !o.pickup) || (o.pickup && o.loaderId === d.id)) && (o.date || "").startsWith(salMonth)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
           const eDeliv = earnings[d.id] || 0, eLoad = loadEarn[d.id] || 0;
           const wage = wagePaid[d.id] || 0;
           const extra = extraPaid[d.id] || 0;
-          const left = remainingOf(d.id);
+          const earned = earnedOf(d), paidM = paidOf(d), left = remainingOf(d);
           return (
             <div key={d.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="font-bold text-gray-900">🚛 {d.name}</div>
-                  <div className="text-sm text-gray-500">🚚 развоз {fmt(d.rate_per_kg)} тг/кг · 📦 отгрузка {fmt(d.load_rate_per_kg || 0)} тг/кг</div>
-                  <div className="text-sm mt-1">Развоз: <b>{fmt(eDeliv)} тг</b> <span className="text-gray-400">({fmt(delivKg)} кг)</span> · Отгрузка: <b>{fmt(eLoad)} тг</b> <span className="text-gray-400">({fmt(loadKg)} кг)</span></div>
-                  <div className="text-sm">Всего заработал: <b>{fmt(eDeliv + eLoad)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(wage)} тг</span></div>
-                  <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось выплатить: {fmt(left)} тг</div>
+                  <div className="font-bold text-gray-900 flex items-center gap-2">🚛 {d.name}
+                    {isBrig && <span className="text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">👷 Бригадир</span>}
+                    {isJunior && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚙 младший{foreman ? ` · ${foreman.name}` : ""}</span>}
+                  </div>
+                  {isBrig ? (<>
+                    <div className="text-xs text-gray-500 mt-0.5">Оклад {fmt(d.base_salary)} тг (вкл. {fmt(d.base_included_t)} т) · {fmt(d.base_included_t)}–{fmt(d.tier1_to_t)} т по {fmt(d.tier1_rate)} тг/кг · свыше {fmt(d.tier1_to_t)} т по {fmt(d.tier2_rate)} тг/кг</div>
+                    <div className="text-sm mt-1">Бригада за {salMonth}: <b>{fmt(monthKg)} кг</b> <span className="text-gray-400">({fmt(monthKg / 1000)} т{juniors.length ? `, ${juniors.length} мл.` : ""})</span></div>
+                    <div className="text-sm">Зарплата за месяц: <b>{fmt(earned)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(paidM)} тг</span></div>
+                    <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось за месяц: {fmt(left)} тг</div>
+                  </>) : isJunior ? (
+                    <div className="text-sm text-gray-500 mt-1">Развёз за {salMonth}: <b className="text-gray-700">{fmt(monthKg)} кг</b>. Зарплату платит бригадир{foreman ? ` ${foreman.name}` : ""} — в приложении не считаем.</div>
+                  ) : (<>
+                    <div className="text-sm text-gray-500">🚚 развоз {fmt(d.rate_per_kg)} тг/кг · 📦 отгрузка {fmt(d.load_rate_per_kg || 0)} тг/кг</div>
+                    <div className="text-sm mt-1">Развоз: <b>{fmt(eDeliv)} тг</b> · Отгрузка: <b>{fmt(eLoad)} тг</b></div>
+                    <div className="text-sm">Всего заработал: <b>{fmt(eDeliv + eLoad)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(wage)} тг</span></div>
+                    <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось выплатить: {fmt(left)} тг</div>
+                  </>)}
                   {extra > 0 && <div className="text-xs text-amber-700 mt-0.5">Доплаты (доп. работа): {fmt(extra)} тг</div>}
                 </div>
                 {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(d)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn></div>}
               </div>
               <div className="flex gap-2 mt-3 flex-wrap">
-                {canEdit && <Btn size="sm" onClick={() => openPay(d, false)}>💵 Выплатить зарплату</Btn>}
+                {canEdit && !isJunior && <Btn size="sm" onClick={() => openPay(d, false)}>💵 Выплатить{isBrig ? " за месяц" : " зарплату"}</Btn>}
                 {canEdit && <Btn size="sm" variant="secondary" onClick={() => openPay(d, true)}>+ Доплата</Btn>}
                 <Btn size="sm" variant="secondary" onClick={() => setDetailDriver(d)}>📋 Детали</Btn>
               </div>
@@ -3044,7 +3110,7 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
         username: form.username.trim(),
         passhash,
         role: form.role,
-        driverId: form.role === "driver" ? form.driverId : "",
+        driverId: (form.role === "driver" || form.role === "brigadir") ? form.driverId : "",
         group_name: form.role === "rep" ? form.group_name.trim() : "",
       });
       setShowAdd(false); await reload("users");
@@ -3069,10 +3135,11 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
             <Inp label="Логин" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="ashat" />
             <Inp label={editId ? "Новый пароль (пусто = не менять)" : "Пароль"} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder={editId ? "оставь пустым чтобы не менять" : ""} />
             <Sel label="Роль" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} options={Object.entries(ROLES).map(([v, l]) => ({ value: v, label: l }))} />
-            {form.role === "driver" && (
-              <Sel label="Привязать к водителю" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— выбери водителя —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+            {(form.role === "driver" || form.role === "brigadir") && (
+              <Sel label={form.role === "brigadir" ? "Привязать к бригадиру (его карточка водителя)" : "Привязать к водителю"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— выбери водителя —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
             )}
-            {form.role === "driver" && drivers.length === 0 && <p className="text-xs text-amber-600">Сначала добавь водителя во вкладке «Водители».</p>}
+            {(form.role === "driver" || form.role === "brigadir") && drivers.length === 0 && <p className="text-xs text-amber-600">Сначала добавь водителя во вкладке «Зарплата».</p>}
+            {form.role === "brigadir" && <p className="text-xs text-gray-500">Бригадир видит все заявки своей бригады и может переназначить водителя с себя на младшего. Младшие водители привязываются к нему во вкладке «Зарплата».</p>}
             {form.role === "rep" && <Inp label="Название группы клиентов" value={form.group_name} onChange={e => setForm({ ...form, group_name: e.target.value })} placeholder={`напр. Клиенты ${form.name || "торгпреда"}`} />}
             {form.role === "rep" && <p className="text-xs text-gray-500">Торгпред заводит СВОИХ клиентов (наших не видит), создаёт им заявки для нашего водителя и ведёт их долги. Склад общий.</p>}
             {err && <p className="text-red-500 text-sm">{err}</p>}
@@ -5510,7 +5577,7 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
