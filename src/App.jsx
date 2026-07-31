@@ -5207,7 +5207,22 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-bold text-amber-900 bg-amber-100 border-2 border-amber-400 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-base leading-none">📝</span><span className="break-words">{n}</span></div>)}
                   {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
-                  {canEdit && (
+                  {(() => {
+                    // Куда и маршрут — чтобы понимать направление движения водителя
+                    const client = clients.find(c => c.id === g.clientId);
+                    const addr = client?.address || g.orders[0].address || g.orders[0].oneOffAddress || "";
+                    const gis = client?.gis_link || g.orders[0].gis_link || "";
+                    const co = (client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords) || null;
+                    if (!addr && !gis && !co) return null;
+                    return (
+                      <div className="flex items-center gap-2 flex-wrap mt-1 text-xs">
+                        {addr && !isOneOff && <span className="text-gray-500">📍 {addr}</span>}
+                        {gis && <a href={gis} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
+                        {co && <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a>}
+                      </div>
+                    );
+                  })()}
+                  {canEdit && !g.orders.some(o => o.foreign) && (
                     <div className="mt-3 space-y-2">
                       <div className="flex gap-2 flex-wrap items-center">
                         {allNew && !isPickup && !isOneOff && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}

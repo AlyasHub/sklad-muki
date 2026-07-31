@@ -177,12 +177,24 @@ async function listFor(u, table) {
     if (table === "clients") return myClients;
     if (table === "orders") {
       const all = await dbList("orders");
-      return all.map(o => myIds.has(o.clientId) ? o : ({
-        id: o.id, date: o.date, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags,
-        status: o.status, driverId: o.driverId, loaded: o.loaded, trial: o.trial, isSample: o.isSample,
-        fromKaraganda: o.fromKaraganda, pickup: o.pickup,
-        clientName: "Клиент компании", clientId: "", price_per_kg: 0, foreign: true, // чужая — только расписание
-      }));
+      const cmap = new Map((await dbList("clients")).map(c => [c.id, c]));
+      // Чужая заявка = расписание для координации с водителем: КТО (имя), КУДА (адрес/маршрут), ЧТО, кто везёт.
+      // БЕЗ наших цен, БЕЗ ИП/ТОО и реквизитов, БЕЗ возможности менять (foreign:true).
+      return all.map(o => {
+        if (myIds.has(o.clientId)) return o;
+        const c = cmap.get(o.clientId) || {};
+        return {
+          id: o.id, date: o.date, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags,
+          status: o.status, driverId: o.driverId, loaderId: o.loaderId, loaded: o.loaded,
+          trial: o.trial, isSample: o.isSample, fromKaraganda: o.fromKaraganda, pickup: o.pickup, oneOff: o.oneOff,
+          clientName: o.clientName || c.name || "Клиент", clientId: o.clientId, // кому — настоящее имя (без ИП/ТОО)
+          price_per_kg: 0, // без наших цен
+          gis_link: c.gis_link || o.gis_link || "", coords: c.coords || o.coords || null, // для маршрута
+          address: c.address || o.oneOffAddress || "", oneOffAddress: o.oneOffAddress || "",
+          delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "",
+          foreign: true,
+        };
+      });
     }
     if (table === "payments") return (await dbList("payments")).filter(p => myIds.has(p.clientId));
     return [];
