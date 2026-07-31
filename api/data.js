@@ -143,8 +143,9 @@ async function listFor(u, table) {
     return [];
   }
   if (u.role === "viewer") {
-    // Директор-просмотрщик: видит все данные, но НЕ логины/пароли и НЕ журнал входов
-    if (table === "users" || table === "logins") return [];
+    // Директор-просмотрщик: видит все данные, но НЕ пароли и НЕ журнал входов
+    if (table === "logins") return [];
+    if (table === "users") return (await dbList("users")).map(({ passhash, ...rest }) => rest); // без хэшей — нужно для названий групп клиентов
     return await dbList(table);
   }
   if (u.role === "accountant") {
@@ -162,6 +163,28 @@ async function listFor(u, table) {
       const list = await Promise.all([...ids].map(cid => dbGet("clients", cid).catch(() => null)));
       return list.filter(Boolean);
     }
+    return [];
+  }
+  if (u.role === "rep") {
+    // Торговый представитель: СВОИ клиенты (по ownerId), свои оплаты, общий склад (без цен закупа),
+    // водители (без ставок) и ВСЕ заявки как расписание — но чужие обезличены и без цен.
+    if (!["clients", "orders", "stock", "drivers", "payments", "notes"].includes(table)) return [];
+    if (table === "stock") return (await dbList("stock")).map(({ price_per_kg, ...s }) => s); // без закупочных цен
+    if (table === "drivers") return (await dbList("drivers")).map(({ rate_per_kg, load_rate_per_kg, ...d }) => d); // без ставок
+    if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse"); // адрес склада для маршрута
+    const myClients = await dbFindBy("clients", "ownerId", u.uid);
+    const myIds = new Set(myClients.map(c => c.id));
+    if (table === "clients") return myClients;
+    if (table === "orders") {
+      const all = await dbList("orders");
+      return all.map(o => myIds.has(o.clientId) ? o : ({
+        id: o.id, date: o.date, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags,
+        status: o.status, driverId: o.driverId, loaded: o.loaded, trial: o.trial, isSample: o.isSample,
+        fromKaraganda: o.fromKaraganda, pickup: o.pickup,
+        clientName: "Клиент компании", clientId: "", price_per_kg: 0, foreign: true, // чужая — только расписание
+      }));
+    }
+    if (table === "payments") return (await dbList("payments")).filter(p => myIds.has(p.clientId));
     return [];
   }
   return [];
@@ -208,6 +231,27 @@ async function upsertFor(u, table, item) {
     };
     return dbUpsert("orders", merged);
   }
+  if (u.role === "rep") {
+    // Торгпред меняет ТОЛЬКО своё: клиентов своей группы, заявки и оплаты своих клиентов.
+    if (table === "clients") {
+      const existing = await dbGet("clients", item.id);
+      if (existing && existing.ownerId !== u.uid) throw new Error("Это не ваш клиент");
+      return dbUpsert("clients", { ...item, ownerId: u.uid }); // всегда в его группу — чужую нельзя
+    }
+    if (table === "orders") {
+      const cli = await dbGet("clients", item.clientId);
+      if (!cli || cli.ownerId !== u.uid) throw new Error("Заявку можно создавать только для своих клиентов");
+      const existing = await dbGet("orders", item.id);
+      if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); }
+      return dbUpsert("orders", item);
+    }
+    if (table === "payments") {
+      const cli = await dbGet("clients", item.clientId);
+      if (!cli || cli.ownerId !== u.uid) throw new Error("Оплату можно вносить только своим клиентам");
+      return dbUpsert("payments", item);
+    }
+    throw new Error("Нет прав на изменение");
+  }
   throw new Error("Нет прав на изменение");
 }
 
@@ -221,6 +265,13 @@ async function deleteFor(u, table, id) {
     const ex = await dbGet("kgd_docs", id);
     if (ex) await logChange(u, "delete", "kgd_docs", ex);
     return dbDelete("kgd_docs", id);
+  }
+  if (u.role === "rep") {
+    // Торгпред удаляет только своё
+    if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); return dbDelete("clients", id); }
+    if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const cli = await dbGet("clients", ex.clientId); if (!cli || cli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || cli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); return dbDelete("payments", id); }
+    throw new Error("Нет прав на удаление");
   }
   if (u.role !== "director") throw new Error("Нет прав на удаление");
   // Сохраняем удаляемую запись целиком — чтобы удаление можно было откатить одной кнопкой

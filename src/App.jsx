@@ -178,13 +178,14 @@ async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
+const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
   director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
   viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
+  rep: ["today", "calendar", "clients", "debts", "stock"], // торгпред: свои клиенты/заявки/долги + расписание и остатки
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
   kgdsenior: ["kgdm"], // старший менеджер Караганды: тот же раздел + история всех
 };
@@ -194,6 +195,7 @@ const PRIMARY_NAV = {
   viewer: ["today", "calendar", "stock", "clients", "reports"],
   accountant: ["today", "calendar", "reports"],
   driver: ["calendar"],
+  rep: ["today", "calendar", "clients", "debts", "stock"],
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
@@ -844,9 +846,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
                     {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                     {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
-                    {!driverMode && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
-                    {!driverMode && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">🧾 Накладная PDF</button>}
-                    {!driverMode && canEdit && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
+                    {!driverMode && !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                    {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">🧾 Накладная PDF</button>}
+                    {!driverMode && canEdit && !g.orders.some(o => o.foreign) && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
                     {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
                   </div>
                   {gPhotos.length > 0 && (() => {
@@ -1664,7 +1666,8 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
   );
 }
 
-function ClientsTab({ clients, orders = [], payments = [], reload, canEdit = true }) {
+function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [], role = "director", myUid = "", reload, canEdit = true }) {
+  const isRep = role === "rep"; // торгпред видит только своих клиентов (сервер уже отфильтровал)
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1779,8 +1782,8 @@ function ClientsTab({ clients, orders = [], payments = [], reload, canEdit = tru
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [], ownerId: c.ownerId || "" }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [], ownerId: isRep ? myUid : "" }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -1799,8 +1802,22 @@ function ClientsTab({ clients, orders = [], payments = [], reload, canEdit = tru
   };
   const saveClient = async () => {
     setSaving(true);
-    try { await dbUpsert("clients", { id: editId || uid(), ...form }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    // ownerId: торгпреду сервер всё равно проставит своего; админ выбирает группу (пусто = наши)
+    const ownerId = isRep ? myUid : (form.ownerId || "");
+    try { await dbUpsert("clients", { id: editId || uid(), ...form, ownerId }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
+  };
+  // Группы клиентов: «Наши» (ownerId пусто) + группа каждого торгпреда. Названия можно переименовать.
+  const repUsers = (users || []).filter(u => u.role === "rep");
+  const houseName = ((notes || []).find(n => n.id === "clientgroups") || {}).houseName || "Наши клиенты";
+  const renameGroup = async g => {
+    const cur = g.key === "" ? houseName : ((repUsers.find(u => u.id === g.key) || {}).group_name || (repUsers.find(u => u.id === g.key) || {}).name || "");
+    const name = prompt("Название группы:", cur);
+    if (name == null || !name.trim()) return;
+    try {
+      if (g.key === "") { const ex = (notes || []).find(n => n.id === "clientgroups") || { id: "clientgroups" }; await dbUpsert("notes", { ...ex, id: "clientgroups", houseName: name.trim() }); await reload("notes"); }
+      else { const u = repUsers.find(x => x.id === g.key); if (u) { await dbUpsert("users", { ...u, group_name: name.trim() }); await reload("users"); } }
+    } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
   };
   const deleteClient = async id => {
     const c = clients.find(x => x.id === id);
@@ -1899,6 +1916,7 @@ function ClientsTab({ clients, orders = [], payments = [], reload, canEdit = tru
               <button onClick={handleParseClient} disabled={parsingClient || !clientText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2 text-sm">{parsingClient ? "Разбираю..." : "✨ Разобрать и заполнить"}</button>
             </div>
             <Inp label="Название заведения" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Мамыр" />
+            {!isRep && repUsers.length > 0 && <Sel label="Группа клиента" value={form.ownerId || ""} onChange={e => setForm({ ...form, ownerId: e.target.value })} options={[{ value: "", label: houseName }, ...repUsers.map(u => ({ value: u.id, label: u.group_name || u.name }))]} />}
             <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
             <Inp label="Адрес доставки" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
@@ -1964,33 +1982,49 @@ function ClientsTab({ clients, orders = [], payments = [], reload, canEdit = tru
       <div className="space-y-3">
         {clients.length === 0 && <div className="text-center py-12 text-gray-400">Клиентов нет.</div>}
         {clients.length > 0 && shown.length === 0 && <div className="text-center py-12 text-gray-400">Ничего не найдено.</div>}
-        {shown.map(c => {
-          const debt = clientDebt(c);
-          const last = lastByClient[c.id];
-          const days = daysSince(last);
-          const stale = days !== null && days >= STALE_DAYS;
-          return (
-          <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
-                {c.org_name && <div className="text-sm text-gray-500">🏢 {c.org_name}</div>}
-                {c.contact_name && <div className="text-sm text-gray-500">👤 {c.contact_name}</div>}
-                {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
-                {c.contact && <div className="text-sm text-gray-500">📱 {c.contact}</div>}
-                <div className="text-xs text-gray-500 mt-1">🕒 {last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
-                {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">📦 {c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
-                {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
+        {(() => {
+          const card = c => {
+            const debt = clientDebt(c);
+            const last = lastByClient[c.id];
+            const days = daysSince(last);
+            const stale = days !== null && days >= STALE_DAYS;
+            return (
+            <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
+                  {c.org_name && <div className="text-sm text-gray-500">🏢 {c.org_name}</div>}
+                  {c.contact_name && <div className="text-sm text-gray-500">👤 {c.contact_name}</div>}
+                  {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
+                  {c.contact && <div className="text-sm text-gray-500">📱 {c.contact}</div>}
+                  <div className="text-xs text-gray-500 mt-1">🕒 {last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
+                  {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">📦 {c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
+                  {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
+                </div>
+                {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}>✕</Btn></div>}
               </div>
-              {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}>✕</Btn></div>}
+              <div className="flex gap-2 flex-wrap">
+                <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
+                {canEdit && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}>🔗 Заказ-ссылка</Btn>}
+              </div>
             </div>
-            <div className="flex gap-2 flex-wrap">
-              <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
-              {canEdit && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}>🔗 Заказ-ссылка</Btn>}
+            );
+          };
+          if (isRep) return shown.map(card); // торгпред: только свои, плоским списком
+          // Админ/директор: разделы по группам с переименованием
+          const groups = [{ key: "", label: houseName, items: shown.filter(c => !c.ownerId) }, ...repUsers.map(u => ({ key: u.id, label: u.group_name || u.name, items: shown.filter(c => c.ownerId === u.id) }))];
+          const orphan = shown.filter(c => c.ownerId && !repUsers.some(u => u.id === c.ownerId));
+          if (orphan.length) groups.push({ key: "orphan", label: "Без группы", items: orphan });
+          return groups.filter(g => g.items.length).map(g => (
+            <div key={g.key} className="space-y-3">
+              <div className="flex items-center justify-between pt-1 border-b border-gray-100 pb-1">
+                <h4 className="font-bold text-gray-700">{g.key === "" ? "🏠 " : "🧑‍💼 "}{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
+                {canEdit && g.key !== "orphan" && <button onClick={() => renameGroup(g)} className="text-xs text-amber-600 hover:text-amber-700">✏️ переименовать</button>}
+              </div>
+              {g.items.map(card)}
             </div>
-          </div>
-          );
-        })}
+          ));
+        })()}
       </div>
 
       {historyClient && (() => {
@@ -2988,10 +3022,10 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
-  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "" });
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "" });
 
-  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: "accountant", driverId: "" }); setErr(""); setShowAdd(true); };
-  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "" }); setErr(""); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "" }); setErr(""); setShowAdd(true); };
+  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "", group_name: u.group_name || "" }); setErr(""); setShowAdd(true); };
 
   const saveUser = async () => {
     setErr("");
@@ -3011,6 +3045,7 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
         passhash,
         role: form.role,
         driverId: form.role === "driver" ? form.driverId : "",
+        group_name: form.role === "rep" ? form.group_name.trim() : "",
       });
       setShowAdd(false); await reload("users");
     } catch (e) { setErr("Ошибка: " + e.message); }
@@ -3038,6 +3073,8 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
               <Sel label="Привязать к водителю" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— выбери водителя —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
             )}
             {form.role === "driver" && drivers.length === 0 && <p className="text-xs text-amber-600">Сначала добавь водителя во вкладке «Водители».</p>}
+            {form.role === "rep" && <Inp label="Название группы клиентов" value={form.group_name} onChange={e => setForm({ ...form, group_name: e.target.value })} placeholder={`напр. Клиенты ${form.name || "торгпреда"}`} />}
+            {form.role === "rep" && <p className="text-xs text-gray-500">Торгпред заводит СВОИХ клиентов (наших не видит), создаёт им заявки для нашего водителя и ведёт их долги. Склад общий.</p>}
             {err && <p className="text-red-500 text-sm">{err}</p>}
           </div>
           <div className="flex gap-2 mt-4">
@@ -5414,6 +5451,7 @@ export default function App() {
   if (!user) return <LoginScreen onLogin={setUser} />;
 
   const isDirector = user.role === "director";
+  const isRep = user.role === "rep"; // торговый представитель: правит только своих клиентов/заявки/оплаты
   const allowedTabs = TABS_BY_ROLE[user.role] || [];
   // Нижняя панель: основные разделы для роли (что есть в доступе), остальное — под «Ещё»
   const primaryNav = (PRIMARY_NAV[user.role] || []).filter(id => allowedTabs.includes(id));
@@ -5456,17 +5494,17 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector} openSignal={openOrderSignal} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
-            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} payments={data.payments} reload={reload} canEdit={isDirector} />}
+            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} payments={data.payments} reload={reload} canEdit={isDirector || isRep} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
-            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} payments={data.payments} reload={reload} canEdit={isDirector} />}
+            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} payments={data.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
             {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} reload={reload} canEdit={isDirector} />}
@@ -5476,22 +5514,22 @@ export default function App() {
         )}
       </div>
 
-      {isDirector && (
+      {(isDirector || isRep) && (
         <>
           {fabOpen && (
             <div className="fixed inset-0 z-40" onClick={() => setFabOpen(false)} style={{ background: "rgba(0,0,0,0.35)" }}>
               <div className="max-w-2xl mx-auto px-4 relative h-full">
                 <div className="absolute right-4 bottom-40 flex flex-col items-end gap-3" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => { setFabOpen(false); setAssistantOpen(true); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-bold text-amber-700">🤖 ИИ-помощник</span><span className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center text-xl shadow-lg ring-2 ring-amber-200">🤖</span></button>
+                  {isDirector && <button onClick={() => { setFabOpen(false); setAssistantOpen(true); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-bold text-amber-700">🤖 ИИ-помощник</span><span className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center text-xl shadow-lg ring-2 ring-amber-200">🤖</span></button>}
                   <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">📲</span></button>
                   <button onClick={() => { goTab("today"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">✍️</span></button>
-                  <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">💸</span></button>
+                  {isDirector && <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">💸</span></button>}
                 </div>
               </div>
             </div>
           )}
           <button onClick={() => setFabOpen(v => !v)} className="fixed z-40 right-4 bottom-24 w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-3xl leading-none flex items-center justify-center shadow-xl transition-transform" style={{ transform: fabOpen ? "rotate(45deg)" : "none" }} aria-label="Добавить">+</button>
-          {assistantOpen && <AssistantModal onClose={() => setAssistantOpen(false)} orders={data.orders} reload={reload} />}
+          {isDirector && assistantOpen && <AssistantModal onClose={() => setAssistantOpen(false)} orders={data.orders} reload={reload} />}
         </>
       )}
 
