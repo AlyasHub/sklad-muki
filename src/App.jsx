@@ -4974,7 +4974,12 @@ function NotesBlock({ notes = [], me = "", canEdit = true, reload = () => {} }) 
   );
 }
 
-function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = "", reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0 }) {
+function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = "", reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0, role = "director" }) {
+  const isRep = role === "rep";
+  const brigadirs = drivers.filter(d => d.salary_type === "brigadir"); // торгпред кидает заявки на бригадира
+  const soleBrigadir = brigadirs.length === 1 ? brigadirs[0].id : ""; // если бригадир один — ставим по умолчанию
+  // Торгпред назначает только бригадиру (он дальше распределяет младшим); остальные — любого водителя
+  const driverPickOptions = (isRep ? brigadirs : drivers).map(d => ({ value: d.id, label: d.name + (d.salary_type === "brigadir" ? " (бригадир)" : "") }));
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -5002,7 +5007,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     setOoResolving(false);
   };
   // Открыть форму заявки по сигналу с кнопки «+»
-  useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
+  useEffect(() => { if (openSignal) { setShowManual(true); if (isRep && soleBrigadir) { setForm(f => ({ ...f, driverId: f.driverId || soleBrigadir })); setAiDriver(a => a || soleBrigadir); } } }, [openSignal]);
 
   const local = orders.filter(o => !o.fromKaraganda); // карагандинские отгрузки тут не показываем
   const vis = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
@@ -5222,10 +5227,10 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             </label>
             {(() => { const ok = aiPickup || aiDriver; return (
             <div className={`rounded-xl p-3 border ${ok ? "bg-gray-50 border-gray-100" : "bg-orange-50 border-orange-200"}`}>
-              <div className={`text-sm font-medium mb-1 ${ok ? "text-gray-700" : "text-orange-700"}`}>{aiPickup ? "📦 Кто отгрузит (грузчик)?" : "🚛 Кто повезёт?"} {!ok && "— выбери перед подтверждением"}</div>
+              <div className={`text-sm font-medium mb-1 ${ok ? "text-gray-700" : "text-orange-700"}`}>{aiPickup ? "📦 Кто отгрузит (грузчик)?" : (isRep ? "🚛 Кому передать (бригадир)?" : "🚛 Кто повезёт?")} {!ok && "— выбери перед подтверждением"}</div>
               <select value={aiDriver} onChange={e => setAiDriver(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300">
-                <option value="">{aiPickup ? "— определить позже —" : "— выбери водителя —"}</option>
-                {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="">{aiPickup ? "— определить позже —" : (isRep ? "— выбери бригадира —" : "— выбери водителя —")}</option>
+                {(isRep && !aiPickup ? brigadirs : drivers).map(d => <option key={d.id} value={d.id}>{d.name}{d.salary_type === "brigadir" ? " (бригадир)" : ""}</option>)}
               </select>
             </div>
             ); })()}
@@ -5375,7 +5380,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-                <Sel label="🚚 Кто повезёт" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— забрал сам —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+                <Sel label="🚚 Кто повезёт" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— забрал сам —" }, ...driverPickOptions]} />
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Оплата</label>
@@ -5399,7 +5404,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             {form.pickup
               ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
-              : <div className="col-span-2"><Sel label="🚚 Водитель" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— назначить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>}
+              : <div className="col-span-2"><Sel label={isRep ? "🚚 Бригадир (он распределит)" : "🚚 Водитель"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— назначить позже —" }, ...driverPickOptions]} /></div>}
             <div className="col-span-2"><Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
           )}
@@ -5576,7 +5581,7 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
+            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
