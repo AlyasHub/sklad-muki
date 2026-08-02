@@ -292,7 +292,11 @@ async function upsertFor(u, table, item) {
       if (!cli || cli.ownerId !== u.uid) throw new Error("Заявку можно создавать только для своих клиентов");
       const existing = await dbGet("orders", item.id);
       if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); }
-      return dbUpsert("orders", item);
+      // Подписываем автора: кто (торгпред) добавил заявку — чтобы админ видел. На новой ставим, у существующей сохраняем.
+      const author = existing?.created_by_name
+        ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }
+        : { created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString(), created_by_role: "rep" };
+      return dbUpsert("orders", { ...item, ...author });
     }
     if (table === "payments") {
       const cli = await dbGet("clients", item.clientId);
