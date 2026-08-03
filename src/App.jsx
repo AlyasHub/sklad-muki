@@ -181,12 +181,12 @@ async function sha256(str) {
 const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", brigadir: "Бригадир", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
+  director: ["today", "calendar", "stock", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
   viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar"], // бригадир: видит все заявки бригады, может переназначить младшим
   driver: ["calendar"],
-  rep: ["today", "calendar", "clients", "debts", "stock"], // торгпред: свои клиенты/заявки/долги + расписание и остатки
+  rep: ["today", "calendar", "clients", "debts", "invoice", "stock"], // торгпред: свои клиенты/заявки/долги + накладная + расписание и остатки
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
   kgdsenior: ["kgdm"], // старший менеджер Караганды: тот же раздел + история всех
 };
@@ -201,8 +201,8 @@ const PRIMARY_NAV = {
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", cashbox: "💵", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", cashbox: "💵", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -211,6 +211,17 @@ const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "�
 const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
 // Способы оплаты клиента (для отметки «оплачено»)
 const PAY_METHODS = [["Kaspi перевод", "🔴"], ["Kaspi QR", "📲"], ["Наличные", "💵"], ["Безнал", "🏦"]];
+// Статусы потенциального клиента в личной CRM (значение → подпись + стиль карточки)
+const CRM_STATUSES = [
+  { v: "new", label: "🆕 Новый", cls: "bg-gray-100 text-gray-700" },
+  { v: "work", label: "🔄 В работе", cls: "bg-blue-100 text-blue-700" },
+  { v: "call", label: "📞 Позвонить", cls: "bg-amber-100 text-amber-800" },
+  { v: "meet", label: "🤝 Встреча", cls: "bg-indigo-100 text-indigo-700" },
+  { v: "think", label: "🤔 Думает", cls: "bg-violet-100 text-violet-700" },
+  { v: "deal", label: "✅ Договорились", cls: "bg-emerald-100 text-emerald-700" },
+  { v: "reject", label: "❌ Отказ", cls: "bg-red-100 text-red-600" },
+];
+const crmStatus = v => CRM_STATUSES.find(s => s.v === v) || CRM_STATUSES[0];
 // Старые записи сохранены как «Поддоны/Склад» — показываем и считаем их как «Склад»
 const catName = c => (c === "Поддоны/Склад" ? "Склад" : c);
 
@@ -1682,6 +1693,9 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState("");
   const [historyClient, setHistoryClient] = useState(null);
+  const [showPayForm, setShowPayForm] = useState(false); // «клиент закинул сумму» — ручная оплата в счёт долга
+  const [payForm, setPayForm] = useState({ amount: "", method: "Наличные", date: TODAY(), note: "" });
+  const [savingPay, setSavingPay] = useState(false);
   const [histPeriod, setHistPeriod] = useState("all");
   const [histFrom, setHistFrom] = useState(TODAY());
   const [histTo, setHistTo] = useState(TODAY());
@@ -1782,6 +1796,17 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   // Ручные оплаты клиента «в счёт долга» — уменьшают его долг
   const paidManual = cid => (payments || []).filter(p => p.clientId === cid).reduce((s, p) => s + (p.amount || 0), 0);
   const clientDebt = c => orders.filter(o => o.clientId === c.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0) - paidManual(c.id);
+  // Клиент закинул произвольную сумму в счёт общего долга — записываем в payments
+  const savePayment = async () => {
+    if (!historyClient || !payForm.amount || Number(payForm.amount) <= 0) return;
+    setSavingPay(true);
+    try {
+      await dbUpsert("payments", { id: uid(), clientId: historyClient.id, clientName: historyClient.name, date: payForm.date, amount: Number(payForm.amount), method: payForm.method, note: payForm.note.trim() });
+      setShowPayForm(false); setPayForm({ amount: "", method: "Наличные", date: TODAY(), note: "" }); await reload("payments");
+    } catch (e) { const m = String((e && e.message) || e); alert(/payments|PGRST205/i.test(m) ? "Нужно один раз создать таблицу «payments» в Supabase." : "⚠️ Не сохранилось: " + m); }
+    finally { setSavingPay(false); }
+  };
+  const delPayment = async id => { if (!confirm("Удалить эту оплату? Долг клиента вырастет обратно.")) return; try { await dbDelete("payments", id); await reload("payments"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
   // Отметить поставку (все позиции за дату) оплаченной — с указанием способа (нал/безнал)
   const markPaid = async (clientId, date, paid, method = "") => {
     try {
@@ -2075,6 +2100,34 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               {manualPaid > 0 && <div className="text-emerald-600">Внесено в счёт долга (всего): {fmt(manualPaid)} тг</div>}
               <div className={debtAll > 0 ? "text-red-600 font-bold" : "text-gray-500"}>{debtAll < 0 ? `Переплата (всего): ${fmt(-debtAll)} тг` : `Текущий долг (всего): ${fmt(debtAll)} тг`}</div>
             </div>
+            {canEdit && (
+              <div className="mb-3">
+                {!showPayForm ? (
+                  <Btn size="sm" onClick={() => { setShowPayForm(true); setPayForm({ amount: "", method: "Наличные", date: TODAY(), note: "" }); }}>💰 Клиент закинул сумму</Btn>
+                ) : (
+                  <div className="border-2 border-emerald-200 bg-emerald-50 rounded-xl p-3 space-y-2">
+                    <div className="text-xs text-gray-600">Сумма, которую клиент прислал в счёт общего долга — она уменьшит долг.</div>
+                    <Inp label="Сколько прислал, тг" type="number" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} />
+                    <div className="flex gap-1.5 flex-wrap">{PAY_METHODS.map(([m, ic]) => <button key={m} onClick={() => setPayForm({ ...payForm, method: m })} className={`px-2.5 py-1 rounded-lg text-xs font-medium ${payForm.method === m ? "bg-amber-500 text-white" : "bg-white text-gray-600 border border-gray-200"}`}>{ic} {m}</button>)}</div>
+                    <div className="flex items-center gap-2">
+                      <input type="date" value={payForm.date} onChange={e => setPayForm({ ...payForm, date: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                      <input value={payForm.note} onChange={e => setPayForm({ ...payForm, note: e.target.value })} placeholder="заметка (по желанию)" className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                    </div>
+                    <div className="flex gap-2"><Btn size="sm" onClick={savePayment} disabled={!payForm.amount || savingPay}>{savingPay ? "Сохраняю…" : "Записать оплату"}</Btn><Btn size="sm" variant="secondary" onClick={() => setShowPayForm(false)}>Отмена</Btn></div>
+                  </div>
+                )}
+                {(payments || []).filter(p => p.clientId === historyClient.id).length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {(payments || []).filter(p => p.clientId === historyClient.id).sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(p => (
+                      <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
+                        <span className="text-gray-600">💰 {(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
+                        <span className="flex items-center gap-2"><b className="text-emerald-600">{fmt(p.amount)} тг</b><button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button></span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {Object.entries(byDate).map(([date, list]) => {
                 const sum = list.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
@@ -2406,6 +2459,8 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
   if (trialCost > 0) expByCat["🎁 На пробу"] = (expByCat["🎁 На пробу"] || 0) + trialCost;
   // Общие расходы = ручные расходы + оценка стоимости проб
   const expTotal = expInPeriod.reduce((s, x) => s + (x.amount || 0), 0) + trialCost;
+  // Зарплаты за период — реально выплаченные людям (водители/бригадир/грузчики/зарплата), а не расчётная ставка
+  const salaryPaid = expInPeriod.filter(x => ["Водители", "Грузчики", "Зарплата"].includes(x.category)).reduce((s, x) => s + (x.amount || 0), 0);
 
   // 🔮 Прогноз: спрос по дням недели за последние 8 недель → ожидание на неделю vs остатки
   const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
@@ -2525,7 +2580,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
         <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Отгружено</div><div className="text-2xl font-bold text-emerald-800">{fmt(totalKg)} кг</div></div>
         <div className="bg-gradient-to-br from-amber-50 to-orange-100 rounded-2xl p-4"><div className="text-xs text-amber-700 font-medium">Сумма отгрузок</div><div className="text-2xl font-bold text-amber-800">{fmt(totalRev)} тг</div></div>
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-2xl p-4"><div className="text-xs text-blue-700 font-medium">Заявок</div><div className="text-2xl font-bold text-blue-800">{ordersCount}</div></div>
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl p-4"><div className="text-xs text-purple-700 font-medium">Водителям</div><div className="text-2xl font-bold text-purple-800">{fmt(totalPay)} тг</div></div>
+        <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl p-4"><div className="text-xs text-purple-700 font-medium">Зарплаты (выплачено)</div><div className="text-2xl font-bold text-purple-800">{fmt(salaryPaid)} тг</div></div>
       </div>
 
       {pl.length > 0 && totalKg > 0 && (
@@ -3618,6 +3673,102 @@ function AssistantModal({ onClose, orders = [], reload }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+// 🎯 Личная CRM: потенциальные клиенты + личные записи и статус. Только для админа.
+// Договорился — «→ В клиенты» переносит карточку в обычную вкладку «Клиенты».
+function CrmTab({ crm = [], clients = [], reload }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState("all");
+  const blank = { name: "", contact: "", address: "", status: "new", note: "", next_date: "" };
+  const [form, setForm] = useState(blank);
+
+  const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setForm({ name: c.name || "", contact: c.contact || "", address: c.address || "", status: c.status || "new", note: c.note || "", next_date: c.next_date || "" }); setShowAdd(true); };
+  const save = async () => {
+    if (!form.name.trim()) { alert("Впиши название/имя."); return; }
+    setSaving(true);
+    try {
+      await dbUpsert("crm", { id: editId || uid(), name: form.name.trim(), contact: form.contact.trim(), address: form.address.trim(), status: form.status, note: form.note.trim(), next_date: form.next_date });
+      setShowAdd(false); setEditId(null); setForm(blank); await reload("crm");
+    } catch (e) { const m = String((e && e.message) || e); alert(/crm|PGRST205/i.test(m) ? "Нужно один раз создать таблицу «crm» в Supabase — попроси инструкцию." : "⚠️ Не сохранилось: " + m); }
+    finally { setSaving(false); }
+  };
+  const setStatus = async (c, status) => { try { await dbUpsert("crm", { ...c, status }); await reload("crm"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
+  const del = async id => { if (!confirm("Удалить эту запись из CRM?")) return; try { await dbDelete("crm", id); await reload("crm"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
+  const toClient = async c => {
+    if (!confirm(`Перенести «${c.name}» в обычную вкладку «Клиенты»? Карточку CRM после этого удалим.`)) return;
+    try {
+      await dbUpsert("clients", { id: uid(), name: c.name, address: c.address || "", contact: c.contact || "", ownerId: "", prices: [] });
+      await dbDelete("crm", c.id);
+      await reload("clients"); await reload("crm");
+      alert(`✓ «${c.name}» теперь в «Клиентах». Допиши цены и реквизиты там.`);
+    } catch (e) { alert("⚠️ Не перенеслось: " + ((e && e.message) || e)); }
+  };
+
+  const list = [...crm].filter(c => filter === "all" || c.status === filter);
+  // сортировка: сначала «позвонить»/«в работе», потом по дате следующего контакта
+  const order = { call: 0, work: 1, meet: 2, new: 3, think: 4, deal: 5, reject: 6 };
+  list.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || (a.next_date || "9999").localeCompare(b.next_date || "9999"));
+  const counts = {}; crm.forEach(c => { counts[c.status] = (counts[c.status] || 0) + 1; });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between"><div><h3 className="font-bold text-gray-800">🎯 Мои потенциальные клиенты</h3><p className="text-xs text-gray-400">Личная база — заношу, кому продать, и веду записи по ним.</p></div><Btn onClick={openNew}>+ Добавить</Btn></div>
+
+      <div className="flex flex-wrap gap-1.5">
+        <button onClick={() => setFilter("all")} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === "all" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Все · {crm.length}</button>
+        {CRM_STATUSES.map(s => counts[s.v] ? <button key={s.v} onClick={() => setFilter(s.v)} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === s.v ? "bg-amber-500 text-white" : s.cls}`}>{s.label} · {counts[s.v]}</button> : null)}
+      </div>
+
+      {showAdd && (
+        <Modal title={editId ? "Изменить запись" : "Новый потенциальный клиент"} onClose={() => setShowAdd(false)}>
+          <div className="space-y-3">
+            <Inp label="Название / имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="напр. Кафе на Абая" />
+            <Sel label="Статус" value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} options={CRM_STATUSES.map(s => ({ value: s.v, label: s.label }))} />
+            <Inp label="Телефон / WhatsApp" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
+            <Inp label="Адрес" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
+            <Inp label="Когда связаться (по желанию)" type="date" value={form.next_date} onChange={e => setForm({ ...form, next_date: e.target.value })} />
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-1">Личные записи</div>
+              <textarea rows={3} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. просил цену на высший, перезвонить после 15:00, берёт у конкурента по 250" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4"><Btn onClick={save} disabled={saving || !form.name.trim()}>{saving ? "Сохраняю…" : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
+        </Modal>
+      )}
+
+      <div className="space-y-2">
+        {crm.length === 0 && <div className="text-center py-12 text-gray-400">Пока пусто. Нажми «+ Добавить», чтобы занести первого.</div>}
+        {crm.length > 0 && list.length === 0 && <div className="text-center py-8 text-gray-400">В этом статусе никого нет.</div>}
+        {list.map(c => {
+          const st = crmStatus(c.status);
+          return (
+            <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{c.name}</span><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${st.cls}`}>{st.label}</span></div>
+                  {c.contact && <div className="text-sm text-gray-500 mt-0.5">📱 {c.contact}</div>}
+                  {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
+                  {c.next_date && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">🔔 связаться {(c.next_date || "").split("-").reverse().join(".")}</div>}
+                  {c.note && <div className="text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-2 mt-1.5 whitespace-pre-wrap">{c.note}</div>}
+                </div>
+                <div className="flex gap-1 flex-shrink-0"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => del(c.id)}>✕</Btn></div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap mt-3">
+                <select value={c.status} onChange={e => setStatus(c, e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-xs">
+                  {CRM_STATUSES.map(s => <option key={s.v} value={s.v}>{s.label}</option>)}
+                </select>
+                <Btn size="sm" onClick={() => toClient(c)}>✅ В клиенты</Btn>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -5422,7 +5573,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [], crm: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -5453,7 +5604,7 @@ export default function App() {
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [], payments: d.payments || [] };
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [], payments: d.payments || [], crm: d.crm || [] };
         applyWarehouse(next.notes); // подхватываем сохранённый адрес склада
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
@@ -5532,7 +5683,7 @@ export default function App() {
     setTimeout(() => setSyncDone(false), 2000);
   };
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [], crm: [] }); setUser(null); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -5592,6 +5743,7 @@ export default function App() {
             {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
             {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} payments={data.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep} />}
+            {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
             {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} reload={reload} canEdit={isDirector} />}

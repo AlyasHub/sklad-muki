@@ -65,7 +65,7 @@ export default async function handler(req, res) {
     }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
-      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients", "kgd_docs", "cashbox", "payments"];
+      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients", "kgd_docs", "cashbox", "payments", "crm"];
       const out = {};
       await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
       // Автопродление входа: токену осталось меньше 7 дней — выдаём свежий, клиент тихо подхватит.
@@ -143,8 +143,8 @@ async function listFor(u, table) {
     return [];
   }
   if (u.role === "viewer") {
-    // Директор-просмотрщик: видит все данные, но НЕ пароли и НЕ журнал входов
-    if (table === "logins") return [];
+    // Директор-просмотрщик: видит все данные, но НЕ пароли, НЕ журнал входов и НЕ личную CRM админа
+    if (table === "logins" || table === "crm") return [];
     if (table === "users") return (await dbList("users")).map(({ passhash, ...rest }) => rest); // без хэшей — нужно для названий групп клиентов
     return await dbList(table);
   }
