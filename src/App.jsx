@@ -184,7 +184,7 @@ const TABS_BY_ROLE = {
   director: ["today", "calendar", "stock", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
   viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
-  brigadir: ["calendar"], // бригадир: видит все заявки бригады, может переназначить младшим
+  brigadir: ["calendar", "mysalary"], // бригадир: заявки бригады + своя зарплата (объём и сумма)
   driver: ["calendar"],
   rep: ["today", "calendar", "clients", "debts", "invoice", "stock"], // торгпред: свои клиенты/заявки/долги + накладная + расписание и остатки
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
@@ -195,14 +195,14 @@ const PRIMARY_NAV = {
   director: ["today", "calendar", "stock", "clients", "reports"],
   viewer: ["today", "calendar", "stock", "clients", "reports"],
   accountant: ["today", "calendar", "reports"],
-  brigadir: ["calendar"],
+  brigadir: ["calendar", "mysalary"],
   driver: ["calendar"],
   rep: ["today", "calendar", "clients", "debts", "stock"],
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", expenses: "💸", cashbox: "💵", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", mysalary: "💰", expenses: "💸", cashbox: "💵", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -855,6 +855,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-bold text-amber-900 bg-amber-100 border-2 border-amber-400 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-base leading-none">📝</span><span className="break-words">{n}</span></div>)}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
+                  {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5">📍 {client?.address || g.orders[0].address}</div>}
+                  {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span>🚪</span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
                     {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
@@ -1815,8 +1817,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", prices: c.prices || [], ownerId: c.ownerId || "" }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", prices: [], ownerId: isRep ? myUid : "" }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", prices: c.prices || [], ownerId: c.ownerId || "" }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", prices: [], ownerId: isRep ? myUid : "" }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -1953,6 +1955,11 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
             <Inp label="Адрес доставки" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-1">🚪 Как пройти / ориентиры</div>
+              <textarea rows={2} value={form.access_note || ""} onChange={e => setForm({ ...form, access_note: e.target.value })} placeholder="напр. от шлагбаума направо, вход в здание, 2 этаж, дверь справа" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
+              <div className="text-xs text-gray-400 mt-0.5">Покажется водителю в каждой заявке этого клиента — писать каждый раз не нужно.</div>
+            </div>
             <Inp label="WhatsApp / телефон" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
             <div className="border-t border-gray-100 pt-3">
               <p className="text-sm font-medium text-gray-700 mb-2">Реквизиты (для договоров)</p>
@@ -3673,6 +3680,58 @@ function AssistantModal({ onClose, orders = [], reload }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+// 💰 «Моя зарплата» для бригадира: видит свой объём (вся бригада) и посчитанную зарплату за месяц.
+function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
+  const [month, setMonth] = useState(TODAY().slice(0, 7));
+  const me = drivers.find(d => d.id === myDriverId);
+  if (!me) return <div className="text-center py-12 text-gray-400">Карточка не найдена. Обратись к администратору.</div>;
+  if (me.salary_type !== "brigadir") return <div className="text-center py-12 text-gray-400">Зарплата по окладу пока не настроена. Обратись к администратору.</div>;
+
+  const brigadeIds = [me.id, ...drivers.filter(d => d.foremanId === me.id).map(d => d.id)];
+  const kgOf = id => orders.filter(o => o.status === "отгружена" && o.driverId === id && (o.date || "").startsWith(month)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  const perDriver = brigadeIds.map(id => ({ id, name: drivers.find(d => d.id === id)?.name || "?", kg: kgOf(id), me: id === me.id })).filter(x => x.kg > 0 || x.me);
+  const kg = perDriver.reduce((s, x) => s + x.kg, 0);
+
+  const base = Number(me.base_salary) || 0, incl = (Number(me.base_included_t) || 0) * 1000, t1 = (Number(me.tier1_to_t) || 0) * 1000;
+  const r1 = Number(me.tier1_rate) || 0, r2 = Number(me.tier2_rate) || 0;
+  const tier1kg = Math.max(0, Math.min(kg, t1) - incl);
+  const tier2kg = Math.max(0, kg - t1);
+  const pay = Math.round(base + tier1kg * r1 + tier2kg * r2);
+  const toNext = kg < incl ? incl - kg : (kg < t1 ? t1 - kg : 0);
+  const nextLabel = kg < incl ? `до конца оклада (${fmt(incl / 1000)} т)` : (kg < t1 ? `до тарифа ${fmt(r2)} тг/кг (${fmt(t1 / 1000)} т)` : "");
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-gray-800">💰 Моя зарплата</h3>
+        <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" />
+      </div>
+
+      <div className="rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br from-emerald-500 to-emerald-600">
+        <div className="text-sm font-medium opacity-90">Зарплата за {month}</div>
+        <div className="text-4xl font-black mt-1">{fmt(pay)} тг</div>
+        <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Объём бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т)</div>
+      </div>
+
+      <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
+        <div className="font-semibold text-gray-700 mb-1">Из чего складывается</div>
+        <div className="flex justify-between"><span className="text-gray-600">Оклад (вкл. {fmt(incl / 1000)} т)</span><b>{fmt(base)} тг</b></div>
+        {tier1kg > 0 && <div className="flex justify-between"><span className="text-gray-600">{fmt(incl / 1000)}–{fmt(t1 / 1000)} т: {fmt(tier1kg)} кг × {fmt(r1)} тг</span><b>+{fmt(tier1kg * r1)} тг</b></div>}
+        {tier2kg > 0 && <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(t1 / 1000)} т: {fmt(tier2kg)} кг × {fmt(r2)} тг</span><b>+{fmt(tier2kg * r2)} тг</b></div>}
+        <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого</span><b className="text-emerald-600">{fmt(pay)} тг</b></div>
+        {toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё <b>{fmt(toNext)} кг</b> {nextLabel}</div>}
+      </div>
+
+      <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm">
+        <div className="font-semibold text-gray-700 mb-1">По водителям бригады за {month}</div>
+        {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}>{x.me ? "👷 " : "🚙 "}{x.name}{x.me ? " (я)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
+      </div>
+
+      <div className="text-xs text-gray-400 text-center">Оклад {fmt(base)} тг (вкл. {fmt(incl / 1000)} т) · {fmt(incl / 1000)}–{fmt(t1 / 1000)} т по {fmt(r1)} тг/кг · свыше {fmt(t1 / 1000)} т по {fmt(r2)} тг/кг. Считается по всей бригаде за месяц.</div>
+    </div>
   );
 }
 
@@ -5431,19 +5490,21 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                   {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
                   {(() => {
-                    // Куда и маршрут — чтобы понимать направление движения водителя
+                    // Куда, как пройти и маршрут — чтобы понимать направление движения водителя
                     const client = clients.find(c => c.id === g.clientId);
                     const addr = client?.address || g.orders[0].address || g.orders[0].oneOffAddress || "";
+                    const access = client?.access_note || "";
                     const gis = client?.gis_link || g.orders[0].gis_link || "";
                     const co = (client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords) || null;
-                    if (!addr && !gis && !co) return null;
-                    return (
+                    if (!addr && !access && !gis && !co) return null;
+                    return (<>
                       <div className="flex items-center gap-2 flex-wrap mt-1 text-xs">
                         {addr && !isOneOff && <span className="text-gray-500">📍 {addr}</span>}
                         {gis && <a href={gis} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
                         {co && <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a>}
                       </div>
-                    );
+                      {access && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span>🚪</span><span className="break-words">{access}</span></div>}
+                    </>);
                   })()}
                   {canEdit && !g.orders.some(o => o.foreign) && (
                     <div className="mt-3 space-y-2">
@@ -5734,6 +5795,7 @@ export default function App() {
           <>
             {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} />}
+            {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
