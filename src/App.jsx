@@ -181,8 +181,8 @@ async function sha256(str) {
 const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", brigadir: "Бригадир", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
-  viewer: ["today", "calendar", "stock", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
+  director: ["today", "calendar", "stock", "lab", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
+  viewer: ["today", "calendar", "stock", "lab", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"], // бригадир: заявки бригады + своя зарплата (объём и сумма)
   driver: ["calendar"],
@@ -201,8 +201,8 @@ const PRIMARY_NAV = {
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", mysalary: "💰", expenses: "💸", cashbox: "💵", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", lab: "🧪", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", mysalary: "💰", expenses: "💸", cashbox: "💵", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -360,6 +360,14 @@ async function parseTruckWithAI(text) {
   const res = await fetch("/api/parse-truck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, today: TODAY(), tomorrow: TOMORROW(), weekday: TODAY_WEEKDAY() }) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Не удалось разобрать поставку");
+  return JSON.parse(data.raw);
+}
+
+async function parseAnalysisWithAI(text) {
+  // Разбор лабораторного анализа муки — через серверную функцию /api/parse-analysis
+  const res = await fetch("/api/parse-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, today: TODAY() }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Не удалось разобрать анализ");
   return JSON.parse(data.raw);
 }
 
@@ -1781,6 +1789,163 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
           );
         })()}
       </div>
+    </div>
+  );
+}
+
+// 🧪 Лаборатория — журнал анализов муки. Каждая строка — партия с показателями.
+// Марка/сорт — свободные поля (анализируем и свою, и чужую муку), с подсказками.
+// «🤖 Разобрать анализ» — вставить протокол/сообщение, ИИ заполнит поля (как разбор заявки).
+function LabTab({ lab = [], reload, canEdit = true }) {
+  const blank = { prod_date: TODAY(), brand: BRANDS[0], grade: GRADES[0], moisture: "", whiteness: "", gluten: "", idk_group: "", idk: "", falling_number: "", extra: "", note: "" };
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState(blank);
+  const [saving, setSaving] = useState(false);
+  const [showAi, setShowAi] = useState(false);
+  const [aiText, setAiText] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiErr, setAiErr] = useState("");
+  const [q, setQ] = useState("");
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const openNew = () => { setEditId(null); setForm(blank); setAiErr(""); setAiText(""); setShowAi(false); setShowAdd(true); };
+  const openEdit = r => { setEditId(r.id); setForm({ ...blank, ...r }); setAiErr(""); setAiText(""); setShowAi(false); setShowAdd(true); };
+
+  const save = async () => {
+    setSaving(true);
+    try { await dbUpsert("lab", { id: editId || uid(), ...form }); setShowAdd(false); await reload("lab"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + ((e && e.message) || e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
+  const del = async id => {
+    if (!confirm("Удалить этот анализ?")) return;
+    try { await dbDelete("lab", id); await reload("lab"); } catch (e) { alert("⚠️ Не удалилось: " + ((e && e.message) || e)); }
+  };
+
+  const runAi = async () => {
+    if (!aiText.trim()) return;
+    setAiBusy(true); setAiErr("");
+    try {
+      const r = await parseAnalysisWithAI(aiText);
+      const pick = (a, b) => (a === undefined || a === null || a === "") ? b : a;
+      const brand = BRANDS.find(x => x.toLowerCase() === String(r.brand || "").toLowerCase()) || pick(r.brand, form.brand);
+      const grade = GRADES.find(x => x.toLowerCase() === String(r.grade || "").toLowerCase()) || pick(r.grade, form.grade);
+      setForm(f => ({
+        ...f, brand, grade,
+        prod_date: pick(r.prod_date, f.prod_date),
+        moisture: pick(r.moisture, f.moisture),
+        whiteness: pick(r.whiteness, f.whiteness),
+        gluten: pick(r.gluten, f.gluten),
+        idk_group: pick(r.idk_group, f.idk_group),
+        idk: pick(r.idk, f.idk),
+        falling_number: pick(r.falling_number, f.falling_number),
+        extra: pick(r.extra, f.extra),
+      }));
+      setShowAi(false); setAiText("");
+    } catch (e) { setAiErr((e && e.message) || String(e)); }
+    setAiBusy(false);
+  };
+
+  const rows = [...lab].sort((a, b) => (b.prod_date || "").localeCompare(a.prod_date || "") || String(b.id).localeCompare(String(a.id)));
+  const ql = q.trim().toLowerCase();
+  const shown = ql ? rows.filter(r => `${r.brand} ${r.grade} ${r.extra} ${r.prod_date}`.toLowerCase().includes(ql)) : rows;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-bold text-gray-800">🧪 Лаборатория — анализы муки</h3>
+        {canEdit && <Btn onClick={openNew}>+ Анализ</Btn>}
+      </div>
+      <p className="text-sm text-gray-500">Показатели каждой партии муки. «+ Анализ» — занести вручную или вставить протокол и нажать «🤖 Разобрать» — поля заполнятся сами.</p>
+      {lab.length > 3 && <Inp placeholder="🔎 Поиск: марка, сорт, дата…" value={q} onChange={e => setQ(e.target.value)} />}
+
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-x-auto">
+        {shown.length === 0 ? (
+          <div className="text-center py-12 text-gray-400 text-sm">{lab.length === 0 ? "Пока нет анализов. Нажми «+ Анализ»." : "Ничего не найдено."}</div>
+        ) : (
+          <table className="w-full text-sm" style={{ minWidth: "760px" }}>
+            <thead>
+              <tr className="text-[11px] text-gray-400 border-b border-gray-100 bg-gray-50/60">
+                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Дата произв.</th>
+                <th className="text-left font-medium px-2 py-2">Марка</th>
+                <th className="text-left font-medium px-2 py-2">Сорт</th>
+                <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Влажн. %</th>
+                <th className="text-right font-medium px-2 py-2">Белизна</th>
+                <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Клейк. %</th>
+                <th className="text-center font-medium px-2 py-2 whitespace-nowrap">Гр. ИДК</th>
+                <th className="text-right font-medium px-2 py-2">ИДК</th>
+                <th className="text-right font-medium px-2 py-2 whitespace-nowrap">ЧП, с</th>
+                <th className="text-left font-medium px-2 py-2">Доп. показатель</th>
+                {canEdit && <th className="px-2 py-2"></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(r => (
+                <tr key={r.id} className="border-b border-gray-50 last:border-0 hover:bg-amber-50/50">
+                  <td className="px-3 py-2 whitespace-nowrap text-gray-700">{r.prod_date ? r.prod_date.split("-").reverse().join(".") : "—"}</td>
+                  <td className="px-2 py-2 whitespace-nowrap font-semibold text-gray-900">{r.brand || "—"}</td>
+                  <td className="px-2 py-2 whitespace-nowrap text-gray-700">{r.grade || "—"}</td>
+                  <td className="px-2 py-2 text-right text-gray-700">{r.moisture || "—"}</td>
+                  <td className="px-2 py-2 text-right text-gray-700">{r.whiteness || "—"}</td>
+                  <td className="px-2 py-2 text-right text-gray-700">{r.gluten || "—"}</td>
+                  <td className="px-2 py-2 text-center text-gray-700">{r.idk_group || "—"}</td>
+                  <td className="px-2 py-2 text-right text-gray-700">{r.idk || "—"}</td>
+                  <td className="px-2 py-2 text-right text-gray-700">{r.falling_number || "—"}</td>
+                  <td className="px-2 py-2 text-gray-500 text-xs" style={{ maxWidth: "11rem" }}><span className="block truncate" title={r.extra}>{r.extra || "—"}</span></td>
+                  {canEdit && (
+                    <td className="px-2 py-2 whitespace-nowrap text-right">
+                      <button onClick={() => openEdit(r)} className="text-gray-400 hover:text-gray-700 mr-2" title="Изменить">✏️</button>
+                      <button onClick={() => del(r.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {shown.length > 0 && <p className="text-xs text-gray-400">Всего анализов: {rows.length}{ql ? ` · найдено: ${shown.length}` : ""}. Таблицу можно листать вбок.</p>}
+
+      {showAdd && (
+        <Modal title={editId ? "Изменить анализ" : "Новый анализ муки"} onClose={() => setShowAdd(false)}>
+          {!editId && (
+            <div className="mb-3">
+              {!showAi ? (
+                <button onClick={() => setShowAi(true)} className="w-full text-sm bg-violet-50 text-violet-700 border border-violet-200 rounded-xl py-2 font-medium hover:bg-violet-100">🤖 Разобрать анализ из текста</button>
+              ) : (
+                <div className="bg-violet-50 border border-violet-200 rounded-xl p-3">
+                  <div className="text-xs text-violet-700 font-medium mb-1">Вставь протокол или сообщение с показателями — заполню поля сам</div>
+                  <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={4} placeholder="напр.: ДАРАД в/с, произведено 12.08.2026, влажность 14,2; белизна 54; клейковина 28%; ИДК 75 (II группа); ЧП 320 с" className="w-full border border-violet-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300" />
+                  {aiErr && <div className="text-xs text-red-600 mt-1">⚠️ {aiErr}</div>}
+                  <div className="flex gap-2 mt-2">
+                    <Btn size="sm" onClick={runAi} disabled={aiBusy || !aiText.trim()}>{aiBusy ? "Разбираю…" : "🤖 Разобрать"}</Btn>
+                    <Btn size="sm" variant="secondary" onClick={() => { setShowAi(false); setAiErr(""); }}>Свернуть</Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <datalist id="lab-brands">{BRANDS.map(b => <option key={b} value={b} />)}</datalist>
+          <datalist id="lab-grades">{GRADES.map(g => <option key={g} value={g} />)}</datalist>
+          <div className="grid grid-cols-2 gap-3">
+            <Inp label="Дата производства" type="date" value={form.prod_date} onChange={e => set("prod_date", e.target.value)} />
+            <Inp label="Марка" list="lab-brands" value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="ДАРАД" />
+            <Inp label="Сорт" list="lab-grades" value={form.grade} onChange={e => set("grade", e.target.value)} placeholder="Высший сорт" />
+            <Inp label="Влажность, %" inputMode="decimal" value={form.moisture} onChange={e => set("moisture", e.target.value)} placeholder="14.2" />
+            <Inp label="Белизна" inputMode="decimal" value={form.whiteness} onChange={e => set("whiteness", e.target.value)} placeholder="54" />
+            <Inp label="Клейковина, %" inputMode="decimal" value={form.gluten} onChange={e => set("gluten", e.target.value)} placeholder="28" />
+            <Inp label="Группа ИДК" value={form.idk_group} onChange={e => set("idk_group", e.target.value)} placeholder="II" />
+            <Inp label="ИДК, ед." inputMode="decimal" value={form.idk} onChange={e => set("idk", e.target.value)} placeholder="75" />
+            <Inp label="Число падения (ЧП), с" inputMode="numeric" value={form.falling_number} onChange={e => set("falling_number", e.target.value)} placeholder="320" />
+            <div className="col-span-2"><Inp label="Доп. показатель" value={form.extra} onChange={e => set("extra", e.target.value)} placeholder="напр. зольность 0.55%" /></div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={save} disabled={saving}>{saving ? "Сохраняю…" : "Сохранить"}</Btn>
+            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -5732,7 +5897,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 export default function App() {
   const [tab, setTab] = useState("today");
   const [user, setUser] = useState(null);
-  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [], crm: [] });
+  const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [], crm: [], lab: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState(null);
@@ -5763,7 +5928,7 @@ export default function App() {
       const d = (await apiData("loadAll")).data || {};
       if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [], payments: d.payments || [], crm: d.crm || [] };
+        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [], payments: d.payments || [], crm: d.crm || [], lab: d.lab || [] };
         applyWarehouse(next.notes); // подхватываем сохранённый адрес склада
         // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
         const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
@@ -5895,6 +6060,7 @@ export default function App() {
             {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
+            {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}

@@ -6,7 +6,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // Журнал изменений. Удаления пишем ВСЕГДА и вместе с самой записью — чтобы можно было откатить.
 // Правки пишем только по важным справочникам (заявки/склад слишком «шумные», у них своя сверка).
-const LOGGED = new Set(["clients", "users", "drivers", "trucks"]);
+const LOGGED = new Set(["clients", "users", "drivers", "trucks", "lab"]);
 const NEVER_LOG = new Set(["changes", "backups", "logins"]);
 const titleOf = r => (r && (r.name || r.clientName || r.username || r.note || r.category || r.id)) || "";
 async function logChange(u, action, table, record) {
@@ -65,7 +65,7 @@ export default async function handler(req, res) {
     }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
-      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients", "kgd_docs", "cashbox", "payments", "crm"];
+      const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients", "kgd_docs", "cashbox", "payments", "crm", "lab"];
       const out = {};
       await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
       // Автопродление входа: токену осталось меньше 7 дней — выдаём свежий, клиент тихо подхватит.
