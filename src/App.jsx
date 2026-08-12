@@ -1306,6 +1306,10 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
   const [form, setForm] = useState(blank);
   const [audit, setAudit] = useState(null); // сверка по позиции: {brand, grade, bag_kg}
   const [dupCheck, setDupCheck] = useState(false); // отчёт «дубли списаний»
+  const [histType, setHistType] = useState("all"); // фильтр истории: all | in | ship | writeoff
+  const [histReason, setHistReason] = useState(null); // конкретная причина списания (Брак, Порча…)
+  const [histMonth, setHistMonth] = useState("all"); // 'all' | 'YYYY-MM'
+  const [histLimit, setHistLimit] = useState(80); // сколько строк показывать (кнопка «ещё»)
 
   // 🔎 Поиск двойных списаний: по каждой связке «клиент + позиция» сумма списаний (минус возвраты)
   // должна равняться сумме отгруженных заявок. Расхождение > 0 — лишние списания (дубли).
@@ -1398,6 +1402,15 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
   // Сводка за сегодня — быстрый контроль «что пришло / что ушло»
   const todayIn = stock.filter(s => s.date === TODAY() && s.weight_kg > 0).reduce((sum, s) => sum + s.weight_kg, 0);
   const todayOut = stock.filter(s => s.date === TODAY() && s.weight_kg < 0).reduce((sum, s) => sum + Math.abs(s.weight_kg), 0);
+
+  // Классификация движений для истории и фильтров
+  const isShipmentRow = s => s.weight_kg < 0 && (String(s.id).startsWith("mv_") || /^(Отгрузка|Реализация)/.test(s.note || ""));
+  const isReturnRow = s => s.weight_kg > 0 && /^Возврат/.test(s.note || "");
+  const isWriteoffRow = s => s.weight_kg < 0 && !isShipmentRow(s); // ручное списание: брак/порча/пересортица/прочее
+  const RU_MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
+  const mKey = s => (s.date || "").slice(0, 7);
+  const mLabel = mk => { const [y, m] = mk.split("-"); return `${RU_MONTHS[Number(m) - 1] || m} ${y}`; };
+  const monthsPresent = [...new Set(stock.map(mKey).filter(Boolean))].sort().reverse();
 
   // Сколько мешков «забронировано» заявками, которые ещё НЕ отгружены (новая + в пути).
   // При отгрузке склад списывается автоматически, поэтому здесь только будущий спрос.
@@ -1664,24 +1677,109 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
       })()}
 
       <div>
-        <h4 className="font-semibold text-gray-700 mb-3">История движений</h4>
-        <div className="space-y-2">
-          {[...stock].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").replace(/^mv_/, "").localeCompare((a.id || "").replace(/^mv_/, ""))).slice(0, 30).map(s => (
-            <div key={s.id} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm">
-              <div className="min-w-0">
-                <span className={s.weight_kg > 0 ? "text-emerald-600 font-medium" : "text-red-500 font-medium"}>{s.weight_kg > 0 ? "▲ Приход" : "▼ Расход"}</span>
-                <span className="text-gray-600 ml-2">{s.brand} {s.grade} {s.bag_kg}кг</span>
-                {s.reason && <span className="text-red-400 ml-2">· {s.reason}</span>}
-                {s.note && <span className="text-gray-400 ml-2">· {s.note}</span>}
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <div className="text-right"><div className="font-medium">{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)} кг</div><div className="text-gray-400 text-xs">{s.date}</div></div>
-                {canEdit && <button onClick={() => openEdit(s)} className="text-gray-400 hover:text-gray-700" title="Изменить">✏️</button>}
-                {canEdit && <button onClick={() => deleteMovement(s.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}
-              </div>
-            </div>
+        <div className="flex items-center justify-between mb-2 gap-2">
+          <h4 className="font-semibold text-gray-700">История движений</h4>
+          <select value={histMonth} onChange={e => { setHistMonth(e.target.value); setHistLimit(80); }} className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700">
+            <option value="all">Все месяцы</option>
+            {monthsPresent.map(mk => <option key={mk} value={mk}>{mLabel(mk)}</option>)}
+          </select>
+        </div>
+
+        {/* Фильтр по типу движения */}
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {[["all", "Все"], ["in", "▲ Приход"], ["ship", "🚚 Отгрузки"], ["writeoff", "⚠️ Брак и списания"]].map(([v, l]) => (
+            <button key={v} onClick={() => { setHistType(v); setHistReason(null); setHistLimit(80); }}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium ${histType === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>
           ))}
         </div>
+
+        {/* Брак и списания — разбивка по причинам за выбранный период */}
+        {histType === "writeoff" && (() => {
+          const wo = stock.filter(s => isWriteoffRow(s) && (histMonth === "all" || mKey(s) === histMonth));
+          const byReason = {};
+          wo.forEach(s => { const r = s.reason || "Списание"; const g = byReason[r] = byReason[r] || { kg: 0, bags: 0 }; g.kg += -s.weight_kg; g.bags += -s.bags; });
+          const totalKg = wo.reduce((a, s) => a - s.weight_kg, 0);
+          const totalBags = wo.reduce((a, s) => a - s.bags, 0);
+          const reasons = Object.entries(byReason).sort((a, b) => b[1].kg - a[1].kg);
+          return (
+            <div className="bg-red-50 border border-red-100 rounded-xl p-3 mb-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-bold text-red-700">⚠️ Списано {histMonth === "all" ? "за всё время" : "за " + mLabel(histMonth).toLowerCase()}</span>
+                <b className="text-red-700">−{fmt(totalKg)} кг · {fmt(totalBags)} меш.</b>
+              </div>
+              {totalKg === 0
+                ? <div className="text-xs text-gray-500 mt-1">За выбранный период списаний нет.</div>
+                : <div className="flex flex-wrap gap-1.5 mt-2">
+                    <button onClick={() => setHistReason(null)} className={`px-2.5 py-1 rounded-full text-xs ${histReason === null ? "bg-red-500 text-white" : "bg-white text-red-600 border border-red-200"}`}>Все причины</button>
+                    {reasons.map(([r, g]) => (
+                      <button key={r} onClick={() => setHistReason(r)} className={`px-2.5 py-1 rounded-full text-xs ${histReason === r ? "bg-red-500 text-white" : "bg-white text-red-600 border border-red-200"}`}>{r}: {fmt(g.kg)} кг ({fmt(g.bags)} меш.)</button>
+                    ))}
+                  </div>}
+            </div>
+          );
+        })()}
+
+        {/* Список движений, сгруппированный по дням */}
+        {(() => {
+          const match = s => {
+            if (histMonth !== "all" && mKey(s) !== histMonth) return false;
+            if (histType === "in") return s.weight_kg > 0;
+            if (histType === "ship") return isShipmentRow(s);
+            if (histType === "writeoff") { if (!isWriteoffRow(s)) return false; if (histReason) return (s.reason || "Списание") === histReason; return true; }
+            return true;
+          };
+          const filtered = [...stock].filter(match).sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").replace(/^mv_/, "").localeCompare((a.id || "").replace(/^mv_/, "")));
+          if (filtered.length === 0) return <div className="text-center py-8 text-gray-400 text-sm">Движений не найдено за выбранный период.</div>;
+          const filtKg = filtered.reduce((a, s) => a + (s.weight_kg || 0), 0);
+          const shown = filtered.slice(0, histLimit);
+          const days = [];
+          shown.forEach(s => { const d = s.date || "—"; let g = days[days.length - 1]; if (!g || g.date !== d) { g = { date: d, rows: [] }; days.push(g); } g.rows.push(s); });
+          return (
+            <>
+              <div className="text-xs text-gray-500 mb-2">Найдено {filtered.length} движений · итог по фильтру: <b className={filtKg < 0 ? "text-red-600" : "text-emerald-600"}>{filtKg > 0 ? "+" : ""}{fmt(filtKg)} кг</b></div>
+              <div className="space-y-3">
+                {days.map(day => {
+                  const dayKg = day.rows.reduce((a, s) => a + (s.weight_kg || 0), 0);
+                  return (
+                    <div key={day.date}>
+                      <div className="flex items-center justify-between text-xs font-semibold text-gray-500 bg-gray-50 rounded-lg px-3 py-1.5 mb-1">
+                        <span>{day.date === "—" ? "без даты" : day.date.split("-").reverse().join(".")}</span>
+                        <span className={dayKg < 0 ? "text-red-500" : "text-emerald-600"}>{dayKg > 0 ? "+" : ""}{fmt(dayKg)} кг</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {day.rows.map(s => {
+                          const ship = isShipmentRow(s);
+                          const wo = isWriteoffRow(s);
+                          const label = s.weight_kg > 0 ? (isReturnRow(s) ? "↩ Возврат" : "▲ Приход") : ship ? "🚚 Отгрузка" : "⚠️ " + (s.reason || "Списание");
+                          const color = s.weight_kg > 0 ? "text-emerald-600" : wo ? "text-red-600" : "text-red-500";
+                          return (
+                            <div key={s.id} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-3 py-2 text-sm">
+                              <div className="min-w-0">
+                                <span className={`${color} font-medium whitespace-nowrap`}>{label}</span>
+                                <span className="text-gray-600 ml-2">{s.brand} {s.grade} {s.bag_kg}кг</span>
+                                {s.note && <span className="text-gray-400 ml-2 text-xs">· {s.note}</span>}
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <div className="font-medium whitespace-nowrap">{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)} кг</div>
+                                {canEdit && <button onClick={() => openEdit(s)} className="text-gray-400 hover:text-gray-700" title="Изменить">✏️</button>}
+                                {canEdit && <button onClick={() => deleteMovement(s.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {filtered.length > shown.length && (
+                <div className="text-center mt-3">
+                  <Btn size="sm" variant="secondary" onClick={() => setHistLimit(l => l + 120)}>Показать ещё ({filtered.length - shown.length})</Btn>
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
     </div>
   );
