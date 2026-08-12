@@ -364,10 +364,9 @@ async function parseTruckWithAI(text) {
 }
 
 async function parseAnalysisWithAI(text) {
-  // Разбор лабораторного анализа муки — через серверную функцию /api/parse-analysis
-  const res = await fetch("/api/parse-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, today: TODAY() }) });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Не удалось разобрать анализ");
+  // Разбор лабораторного анализа муки — операция parseAnalysis в защищённом /api/data
+  // (отдельной функцией не делаем: на Vercel Hobby лимит 12 serverless-функций).
+  const data = await apiData("parseAnalysis", null, { text, today: TODAY() });
   return JSON.parse(data.raw);
 }
 
