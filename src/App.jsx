@@ -484,7 +484,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
   // Отгрузки из Караганды идут напрямую клиенту — в маршруты Астаны не лезут, но в календаре видны отдельным блоком
   const local = orders.filter(o => !o.fromKaraganda);
   // Водитель видит только свои отгрузки
-  const vis = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
+  const visAll = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
+  const loadRows = visAll.filter(o => o.foreignLoad); // сводная загрузка чужих заявок (у торгпреда) — только тоннаж/число
+  const vis = visAll.filter(o => !o.foreignLoad);
   const karagandaVis = driverFilter != null ? [] : orders.filter(o => o.fromKaraganda); // только директор/бухгалтер
 
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
@@ -642,6 +644,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     if (!seenByDate[o.date]) seenByDate[o.date] = new Set();
     if (!seenByDate[o.date].has(key)) { seenByDate[o.date].add(key); countByDate[o.date] = (countByDate[o.date] || 0) + 1; }
   });
+  // Сводная загрузка чужих заявок (торгпред) тоже влияет на «занятость дня» в календаре
+  loadRows.forEach(o => { kgByDate[o.date] = (kgByDate[o.date] || 0) + (o.kg || 0); countByDate[o.date] = (countByDate[o.date] || 0) + (o.count || 0); });
 
   const cells = [];
   for (let i = 0; i < startOffset; i++) cells.push(null);
@@ -816,7 +820,33 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
             <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Склад_${selected}.csv`, buildCsv(), "text/csv;charset=utf-8")}>📊 Excel</Btn>
           </div>
         )}
-        {dayOrders.length === 0 && karagandaDayGroups.length === 0 ? (
+        {(() => {
+          const dl = loadRows.filter(o => o.date === selected && (o.kg > 0 || o.count > 0));
+          if (!dl.length) return null;
+          const tKg = dl.reduce((s, o) => s + (o.kg || 0), 0);
+          const tCnt = dl.reduce((s, o) => s + (o.count || 0), 0);
+          return (
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-3">
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <span className="font-semibold text-slate-700 text-sm">🚛 Загрузка водителей</span>
+                <span className="text-xs text-slate-500">{tCnt} заявок · {fmt(tKg)} кг</span>
+              </div>
+              <div className="space-y-1">
+                {dl.sort((a, b) => (b.kg || 0) - (a.kg || 0)).map(o => {
+                  const dr = drivers.find(d => d.id === o.driverId);
+                  return (
+                    <div key={o.id} className="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5">
+                      <span className="text-slate-700">{dr ? `🚛 ${dr.name}` : "— не распределено —"}</span>
+                      <span className="text-slate-500">{o.count} заявок · <b className="text-slate-700">{fmt(o.kg)} кг</b></span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1.5">Другие заявки — только объём, чтобы видеть загрузку водителя. Кому и что везут — не показывается.</div>
+            </div>
+          );
+        })()}
+        {dayOrders.length === 0 && karagandaDayGroups.length === 0 && loadRows.filter(o => o.date === selected).length === 0 ? (
           <div className="text-center py-10 text-gray-400">На это число отгрузок нет</div>
         ) : (
           <div className="space-y-2">
@@ -3531,10 +3561,10 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
-  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "" });
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "", dev: false });
 
-  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "" }); setErr(""); setShowAdd(true); };
-  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "", group_name: u.group_name || "" }); setErr(""); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "", dev: false }); setErr(""); setShowAdd(true); };
+  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "", group_name: u.group_name || "", dev: !!u.dev }); setErr(""); setShowAdd(true); };
 
   const saveUser = async () => {
     setErr("");
@@ -3555,6 +3585,8 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
         role: form.role,
         driverId: (form.role === "driver" || form.role === "brigadir") ? form.driverId : "",
         group_name: form.role === "rep" ? form.group_name.trim() : "",
+        dev: form.role === "director" ? !!form.dev : false, // 🔧 разработчик (видит «Ревизию», метка «р»)
+        last_seen: existing?.last_seen, // не терять отметку «был в сети» при редактировании
       });
       setShowAdd(false); await reload("users");
     } catch (e) { setErr("Ошибка: " + e.message); }
@@ -3578,6 +3610,12 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
             <Inp label="Логин" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="ashat" />
             <Inp label={editId ? "Новый пароль (пусто = не менять)" : "Пароль"} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder={editId ? "оставь пустым чтобы не менять" : ""} />
             <Sel label="Роль" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} options={Object.entries(ROLES).map(([v, l]) => ({ value: v, label: l }))} />
+            {form.role === "director" && (
+              <label className="flex items-center gap-2 text-sm text-gray-700 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 cursor-pointer">
+                <input type="checkbox" checked={!!form.dev} onChange={e => setForm({ ...form, dev: e.target.checked })} className="w-4 h-4 accent-violet-500" />
+                <span>🔧 Разработчик <span className="text-gray-400">— видит раздел «Ревизия» (метка «р»)</span></span>
+              </label>
+            )}
             {(form.role === "driver" || form.role === "brigadir") && (
               <Sel label={form.role === "brigadir" ? "Привязать к бригадиру (его карточка водителя)" : "Привязать к водителю"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— выбери водителя —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
             )}
@@ -3599,7 +3637,7 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
           return (
             <div key={u.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
               <div>
-                <div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span></div>
+                <div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span>{u.dev && <span className="ml-1 align-middle text-[10px] font-bold text-white bg-violet-500 rounded px-1 py-0.5" title="Разработчик — видит «Ревизию»">р</span>}</div>
                 <div className="text-sm text-gray-500">{ROLES[u.role] || u.role}{linkedDriver ? ` · 🚛 ${linkedDriver.name}` : ""}{u.id === currentUser.id ? " · это вы" : ""}</div>
                 {(() => {
                   if (!u.last_seen) return <div className="text-xs text-gray-400 mt-0.5">⚪ ещё не заходил(а)</div>;
@@ -5601,7 +5639,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   useEffect(() => { if (openSignal) { setShowManual(true); if (isRep && soleBrigadir) { setForm(f => ({ ...f, driverId: f.driverId || soleBrigadir })); setAiDriver(a => a || soleBrigadir); } } }, [openSignal]);
 
   const local = orders.filter(o => !o.fromKaraganda); // карагандинские отгрузки тут не показываем
-  const vis = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
+  const loadRows = local.filter(o => o.foreignLoad); // сводная загрузка чужих заявок (торгпред) — только тоннаж/число
+  const vis = (driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local).filter(o => !o.foreignLoad);
   const groupCount = list => new Set(list.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
   const todayList = vis.filter(o => o.date === TODAY());
   const tomorrowList = vis.filter(o => o.date === TOMORROW());
@@ -5836,6 +5875,26 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 
       <div>
         <h4 className="font-semibold text-gray-700 mb-2">Доставки сегодня</h4>
+        {(() => {
+          const dl = loadRows.filter(o => o.date === TODAY() && (o.kg > 0 || o.count > 0));
+          if (!dl.length) return null;
+          const tKg = dl.reduce((s, o) => s + (o.kg || 0), 0), tCnt = dl.reduce((s, o) => s + (o.count || 0), 0);
+          return (
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-3">
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <span className="font-semibold text-slate-700 text-sm">🚛 Загрузка водителей</span>
+                <span className="text-xs text-slate-500">{tCnt} заявок · {fmt(tKg)} кг</span>
+              </div>
+              <div className="space-y-1">
+                {dl.sort((a, b) => (b.kg || 0) - (a.kg || 0)).map(o => {
+                  const dr = drivers.find(d => d.id === o.driverId);
+                  return <div key={o.id} className="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5"><span className="text-slate-700">{dr ? `🚛 ${dr.name}` : "— не распределено —"}</span><span className="text-slate-500">{o.count} заявок · <b className="text-slate-700">{fmt(o.kg)} кг</b></span></div>;
+                })}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1.5">Другие заявки — только объём, чтобы видеть загрузку водителя. Кому и что везут — не показывается.</div>
+            </div>
+          );
+        })()}
         {todayGroups.length === 0 ? (
           <div className="text-center py-8 text-gray-400 bg-white border border-gray-100 rounded-2xl">На сегодня доставок нет.</div>
         ) : (
@@ -6132,7 +6191,10 @@ export default function App() {
 
   const isDirector = user.role === "director";
   const isRep = user.role === "rep"; // торговый представитель: правит только своих клиентов/заявки/оплаты
-  const allowedTabs = TABS_BY_ROLE[user.role] || [];
+  // 🧮 «Ревизия» — только у разработчика (Альяса): по имени входа ИЛИ по галочке «Разработчик» (метка «р») на аккаунте.
+  const myRecord = (data.users || []).find(u => u.id === user.id) || {};
+  const isDev = isDirector && (/^\s*(альяс|alyas)/i.test(user.name || "") || myRecord.dev === true);
+  const allowedTabs = (TABS_BY_ROLE[user.role] || []).filter(id => id !== "revision" || isDev);
   // Нижняя панель: основные разделы для роли (что есть в доступе), остальное — под «Ещё»
   const primaryNav = (PRIMARY_NAV[user.role] || []).filter(id => allowedTabs.includes(id));
   const moreNav = allowedTabs.filter(id => !primaryNav.includes(id));
@@ -6179,7 +6241,7 @@ export default function App() {
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
-            {tab === "revision" && <RevisionTab stock={data.stock} notes={data.notes} reload={reload} />}
+            {tab === "revision" && isDev && <RevisionTab stock={data.stock} notes={data.notes} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}

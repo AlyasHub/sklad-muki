@@ -229,24 +229,23 @@ async function listFor(u, table) {
     if (table === "clients") return myClients;
     if (table === "orders") {
       const all = await dbList("orders");
-      const cmap = new Map((await dbList("clients")).map(c => [c.id, c]));
-      // Чужая заявка = расписание для координации с водителем: КТО (имя), КУДА (адрес/маршрут), ЧТО, кто везёт.
-      // БЕЗ наших цен, БЕЗ ИП/ТОО и реквизитов, БЕЗ возможности менять (foreign:true).
-      return all.map(o => {
-        if (myIds.has(o.clientId)) return o;
-        const c = cmap.get(o.clientId) || {};
-        return {
-          id: o.id, date: o.date, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags,
-          status: o.status, driverId: o.driverId, loaderId: o.loaderId, loaded: o.loaded,
-          trial: o.trial, isSample: o.isSample, fromKaraganda: o.fromKaraganda, pickup: o.pickup, oneOff: o.oneOff,
-          clientName: o.clientName || c.name || "Клиент", clientId: o.clientId, // кому — настоящее имя (без ИП/ТОО)
-          price_per_kg: 0, // без наших цен
-          gis_link: c.gis_link || o.gis_link || "", coords: c.coords || o.coords || null, // для маршрута
-          address: c.address || o.oneOffAddress || "", oneOffAddress: o.oneOffAddress || "",
-          delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "",
-          foreign: true,
-        };
+      const mine = all.filter(o => myIds.has(o.clientId)); // свои клиенты — заявки целиком
+      // Чужие заявки торгпред видит ТОЛЬКО как сводную загрузку водителей (тоннаж + число заявок),
+      // чтобы понимать занятость водителя. БЕЗ кого/что/сколько по конкретному клиенту — никаких
+      // имён, товара, адресов и цен наружу не уходит (агрегируем на сервере).
+      const agg = {};
+      all.filter(o => !myIds.has(o.clientId) && o.status !== "отменена").forEach(o => {
+        const drv = o.driverId || "";
+        const k = `${drv}|${o.date}`;
+        const g = agg[k] = agg[k] || { driverId: drv, date: o.date, kg: 0, clients: new Set() };
+        g.kg += (Number(o.bags) || 0) * (Number(o.bag_kg) || 0);
+        g.clients.add(o.clientId || ("nm:" + (o.clientName || ""))); // считаем заявки по клиентам, не по позициям
       });
+      const loadRows = Object.values(agg).map(g => ({
+        id: `load|${g.date}|${g.driverId}`, date: g.date, driverId: g.driverId,
+        foreign: true, foreignLoad: true, kg: g.kg, count: g.clients.size,
+      }));
+      return [...mine, ...loadRows];
     }
     if (table === "payments") return (await dbList("payments")).filter(p => myIds.has(p.clientId));
     return [];
