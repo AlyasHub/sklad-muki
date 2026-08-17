@@ -181,7 +181,7 @@ async function sha256(str) {
 const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", brigadir: "Бригадир", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "lab", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
+  director: ["today", "calendar", "stock", "lab", "revision", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
   viewer: ["today", "calendar", "stock", "lab", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"], // бригадир: заявки бригады + своя зарплата (объём и сумма)
@@ -201,8 +201,8 @@ const PRIMARY_NAV = {
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", lab: "🧪", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", mysalary: "💰", expenses: "💸", cashbox: "💵", access: "⚙️" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
+const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", lab: "🧪", revision: "🧮", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", mysalary: "💰", expenses: "💸", cashbox: "💵", access: "⚙️" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", revision: "Ревизия", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
@@ -1944,6 +1944,125 @@ function LabTab({ lab = [], reload, canEdit = true }) {
             <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
           </div>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+// 🧮 Ревизия склада — только у Администратора (Альяса). Записываешь, сколько мешков РЕАЛЬНО
+// стоит на складе; приложение сравнивает с учётным остатком (таблица stock) и показывает
+// недостачу/излишек по каждой позиции. Данные храним в notes id="revision" (без новой таблицы).
+function RevisionTab({ stock = [], notes = [], reload }) {
+  const rev = notes.find(n => n.id === "revision") || { id: "revision", date: TODAY(), items: {} };
+  const items = rev.items || {};
+  const [form, setForm] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "" });
+  const [saving, setSaving] = useState(false);
+
+  // Учётный остаток (мешков) по каждой позиции — сумма движений склада со знаком
+  const appBal = {};
+  stock.forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; appBal[k] = (appBal[k] || 0) + Number(s.bags || 0); });
+  const curKey = `${form.brand}|${form.grade}|${form.bag_kg}`;
+  const curApp = Math.round(appBal[curKey] || 0);
+
+  const saveDoc = async (newItems, extra = {}) => {
+    setSaving(true);
+    try { await dbUpsert("notes", { ...rev, id: "revision", items: newItems, date: rev.date || TODAY(), updatedAt: new Date().toISOString(), ...extra }); await reload("notes"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + ((e && e.message) || e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
+  const addPos = async () => {
+    const n = Number(form.bags);
+    if (form.bags === "" || isNaN(n) || n < 0) return;
+    await saveDoc({ ...items, [curKey]: n });
+    setForm(f => ({ ...f, bags: "" }));
+  };
+  const removePos = async k => { const ni = { ...items }; delete ni[k]; await saveDoc(ni); };
+  const clearAll = async () => { if (!confirm("Очистить всю ревизию и начать заново? Записанные цифры удалятся.")) return; await saveDoc({}, { date: TODAY() }); };
+  const editPos = k => { const [b, g, w] = k.split("|"); setForm({ brand: b, grade: g, bag_kg: Number(w), bags: String(items[k]) }); };
+
+  const rows = Object.keys(items).map(k => {
+    const [brand, grade, w] = k.split("|");
+    return { k, brand, grade, bag_kg: Number(w), actual: Number(items[k]) || 0, app: Math.round(appBal[k] || 0), diff: (Number(items[k]) || 0) - Math.round(appBal[k] || 0) };
+  }).sort((a, b) => a.brand.localeCompare(b.brand, "ru") || a.grade.localeCompare(b.grade, "ru") || b.bag_kg - a.bag_kg);
+
+  const shortKg = rows.filter(r => r.diff < 0).reduce((s, r) => s + (-r.diff) * r.bag_kg, 0);
+  const overKg = rows.filter(r => r.diff > 0).reduce((s, r) => s + r.diff * r.bag_kg, 0);
+  const okCnt = rows.filter(r => r.diff === 0).length;
+
+  // Позиции, которые ЕСТЬ в приложении, но ещё не посчитаны (5/10 кг не напоминаем — их не считаем)
+  const SKIP = new Set([5, 10]);
+  const uncounted = Object.keys(appBal).filter(k => !(k in items) && Math.round(appBal[k]) > 0 && !SKIP.has(Number(k.split("|")[2]))).sort((a, b) => a.localeCompare(b, "ru"));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-bold text-gray-800">🧮 Ревизия склада</h3>
+        {rows.length > 0 && <Btn size="sm" variant="secondary" onClick={clearAll}>Очистить</Btn>}
+      </div>
+      <p className="text-sm text-gray-500">Записывай, сколько мешков <b>реально</b> стоит на складе. Приложение само сравнит с учётом и покажет, где недостача, а где излишек. Мешки 5 и 10 кг можно не считать.</p>
+
+      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Sel label="Марка" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
+          <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
+          <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: Number(e.target.value) })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+          <Inp label="Мешков (реально)" type="number" inputMode="numeric" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} placeholder="напр. 40" />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-gray-500">В приложении: <b className={curApp < 0 ? "text-red-600" : "text-gray-700"}>{curApp} меш.</b>{items[curKey] !== undefined && <span className="text-amber-600"> · записано: {items[curKey]}</span>}</span>
+          <Btn onClick={addPos} disabled={saving || form.bags === ""}>{items[curKey] !== undefined ? "Обновить" : "Записать"}</Btn>
+        </div>
+      </div>
+
+      {rows.length > 0 && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-red-50 border border-red-100 rounded-2xl p-4">
+              <div className="text-xs font-medium text-red-600">▼ Недостача (не хватает)</div>
+              <div className="text-2xl font-black text-red-700 mt-0.5">{fmt(shortKg)} кг</div>
+            </div>
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4">
+              <div className="text-xs font-medium text-blue-600">▲ Излишек (лишнее)</div>
+              <div className="text-2xl font-black text-blue-700 mt-0.5">{fmt(overKg)} кг</div>
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+            <div className="grid grid-cols-[1fr_3rem_3.4rem_5.4rem_1.4rem] gap-x-2 text-[11px] text-gray-400 px-3 py-2 border-b border-gray-100 bg-gray-50/60">
+              <span>позиция</span><span className="text-right">прил.</span><span className="text-right">реально</span><span className="text-right">разница</span><span></span>
+            </div>
+            {rows.map(r => (
+              <div key={r.k} className="grid grid-cols-[1fr_3rem_3.4rem_5.4rem_1.4rem] gap-x-2 items-center px-3 py-2 border-b border-gray-50 last:border-0 text-sm">
+                <span className="min-w-0 cursor-pointer" onClick={() => editPos(r.k)} title="Нажми, чтобы поправить число">
+                  <span className="font-semibold text-gray-900">{r.brand}</span> <span className="text-gray-600">{r.grade} {r.bag_kg}кг</span>
+                </span>
+                <span className="text-right text-gray-500">{r.app}</span>
+                <span className="text-right font-semibold text-gray-900">{r.actual}</span>
+                <span className="text-right">
+                  {r.diff === 0
+                    ? <span className="text-emerald-600 text-xs font-medium">✓ сходится</span>
+                    : r.diff < 0
+                      ? <span className="text-red-600 font-bold text-xs">−{-r.diff} меш.</span>
+                      : <span className="text-blue-600 font-bold text-xs">+{r.diff} меш.</span>}
+                </span>
+                <button onClick={() => removePos(r.k)} className="text-gray-300 hover:text-red-500 text-right" title="Убрать">✕</button>
+              </div>
+            ))}
+            <div className="px-3 py-2 text-[11px] text-gray-400">Нажми на позицию — поправить число. {okCnt > 0 ? `Сходится: ${okCnt}.` : ""} «прил.» — сколько числится в приложении.</div>
+          </div>
+        </>
+      )}
+
+      {uncounted.length > 0 && (
+        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3">
+          <div className="text-sm font-semibold text-amber-800 mb-1.5">Ещё не посчитано (числится в приложении)</div>
+          <div className="flex flex-wrap gap-1.5">
+            {uncounted.map(k => {
+              const [b, g, w] = k.split("|");
+              return <button key={k} onClick={() => setForm({ brand: b, grade: g, bag_kg: Number(w), bags: "" })} className="px-2.5 py-1 rounded-full text-xs bg-white border border-amber-200 text-amber-700 hover:bg-amber-100">{b} {g} {w}кг · {Math.round(appBal[k])} меш.</button>;
+            })}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -6060,6 +6179,7 @@ export default function App() {
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
+            {tab === "revision" && <RevisionTab stock={data.stock} notes={data.notes} reload={reload} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
