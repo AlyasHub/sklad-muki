@@ -330,7 +330,13 @@ async function upsertFor(u, table, item) {
       const author = existing?.created_by_name
         ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }
         : { created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString(), created_by_role: "rep" };
-      return dbUpsert("orders", { ...item, ...author });
+      const saved = await dbUpsert("orders", { ...item, ...author });
+      // ⚠️ Списание склада делаем ЗДЕСЬ, на сервере: у торгпреда нет прав писать в stock,
+      // поэтому раньше его заявка отмечалась «отгружена», а мука со склада не списывалась —
+      // копилась недостача (ревизия 17.08.2026 показала 8.5 т). id движения = mv_<заявка>,
+      // повторное сохранение перезаписывает ту же строку и не задваивает расход.
+      await syncOrderStock(existing, { ...item, ...author });
+      return saved;
     }
     if (table === "payments") {
       const cli = await dbGet("clients", item.clientId);
@@ -340,6 +346,32 @@ async function upsertFor(u, table, item) {
     throw new Error("Нет прав на изменение");
   }
   throw new Error("Нет прав на изменение");
+}
+
+// Дата по Астане (UTC+5) — на сервере голый toISOString() дал бы вчерашний день вечером.
+function todayAstana() {
+  return new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+// Синхронизация склада со статусом заявки. Заявка стала «отгружена» → расход; перестала → откат.
+// Нужна там, где движение не может записать браузер (торгпред: нет прав на stock).
+async function syncOrderStock(existing, item) {
+  if (!item || item.fromKaraganda) return;
+  const was = existing?.status === "отгружена";
+  const now = item.status === "отгружена";
+  if (now === was) return;
+  const mvId = "mv_" + item.id;
+  if (now) {
+    const bags = Number(item.bags) || 0, bag_kg = Number(item.bag_kg) || 0;
+    if (!bags || !bag_kg) return;
+    await dbUpsert("stock", {
+      // дата — реальный день отгрузки (как пишет админ через TODAY()), а НЕ дата доставки
+      // из заявки: иначе движение уедет в будущее/прошлое и исказит сводки «за сегодня»/за месяц
+      id: mvId, date: todayAstana(), brand: item.brand, grade: item.grade,
+      bag_kg, bags: -bags, weight_kg: -(bags * bag_kg), note: `Отгрузка: ${item.clientName || ""}`,
+    });
+  } else {
+    try { await dbDelete("stock", mvId); } catch {}
+  }
 }
 
 async function deleteFor(u, table, id) {

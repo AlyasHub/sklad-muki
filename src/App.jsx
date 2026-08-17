@@ -207,7 +207,7 @@ const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
 const WEIGHTS = [5, 10, 25, 50];
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
-const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Прочее"];
+const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Ревизия", "Прочее"];
 const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
 // Способы оплаты клиента (для отметки «оплачено»)
 const PAY_METHODS = [["Kaspi перевод", "🔴"], ["Kaspi QR", "📲"], ["Наличные", "💵"], ["Безнал", "🏦"]];
@@ -474,7 +474,7 @@ function PhotoViewer({ url, onClose }) {
   );
 }
 
-function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false }) {
+function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
@@ -510,8 +510,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
   // Повторное списание (двойное нажатие, два администратора) перезаписывает ту же строку — не задваивается.
   // Отмена отгрузки удаляет эту строку — точный откат без «дрейфа» остатков.
   const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
-  const shipStock = o => dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+  // serverStock=true (торгпред): движение склада пишет СЕРВЕР при сохранении заявки — у роли rep
+  // нет прав на таблицу stock, и попытка записать её из браузера дала бы ложную ошибку.
+  const shipStock = o => serverStock ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
   const unshipStock = async o => {
+    if (serverStock) return; // откат тоже делает сервер
     if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id); // точный откат
     // заявки, списанные до этого обновления, возвращаем отдельной строкой (как раньше)
     return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
@@ -1988,9 +1991,17 @@ function RevisionTab({ stock = [], notes = [], reload }) {
   const [form, setForm] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "" });
   const [saving, setSaving] = useState(false);
 
-  // Учётный остаток (мешков) по каждой позиции — сумма движений склада со знаком
-  const appBal = {};
-  stock.forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; appBal[k] = (appBal[k] || 0) + Number(s.bags || 0); });
+  // Учётный остаток (мешков) по позиции — БЕЗ поправок этой же ревизии: иначе, если поправить
+  // ранее записанное число, разница считалась бы от уже выправленного остатка и учёт «уезжал».
+  const revDate = rev.date || TODAY();
+  const revPrefix = `rev_${revDate}_`;
+  const appBal = {}, appliedRev = {};
+  stock.forEach(s => {
+    const k = `${s.brand}|${s.grade}|${s.bag_kg}`;
+    const n = Number(s.bags || 0);
+    if (String(s.id || "").startsWith(revPrefix)) { appliedRev[k] = (appliedRev[k] || 0) + n; return; }
+    appBal[k] = (appBal[k] || 0) + n;
+  });
   const curKey = `${form.brand}|${form.grade}|${form.bag_kg}`;
   const curApp = Math.round(appBal[curKey] || 0);
 
@@ -2012,12 +2023,39 @@ function RevisionTab({ stock = [], notes = [], reload }) {
 
   const rows = Object.keys(items).map(k => {
     const [brand, grade, w] = k.split("|");
-    return { k, brand, grade, bag_kg: Number(w), actual: Number(items[k]) || 0, app: Math.round(appBal[k] || 0), diff: (Number(items[k]) || 0) - Math.round(appBal[k] || 0) };
+    const actual = Number(items[k]) || 0, app = Math.round(appBal[k] || 0);
+    const diff = actual - app, applied = Math.round(appliedRev[k] || 0);
+    return { k, brand, grade, bag_kg: Number(w), actual, app, diff, applied, fixed: diff !== 0 && applied === diff };
   }).sort((a, b) => a.brand.localeCompare(b.brand, "ru") || a.grade.localeCompare(b.grade, "ru") || b.bag_kg - a.bag_kg);
 
   const shortKg = rows.filter(r => r.diff < 0).reduce((s, r) => s + (-r.diff) * r.bag_kg, 0);
   const overKg = rows.filter(r => r.diff > 0).reduce((s, r) => s + r.diff * r.bag_kg, 0);
   const okCnt = rows.filter(r => r.diff === 0).length;
+
+  // Выправить учёт по факту: одна корректирующая строка на позицию (id детерминированный —
+  // повторное нажатие перезаписывает ту же строку, а не задваивает расход).
+  const [fixing, setFixing] = useState(false);
+  const applyRevision = async () => {
+    const bad = rows.filter(r => r.diff !== 0);
+    if (!bad.length) return;
+    const d = rev.date || TODAY();
+    if (!confirm(`Выправить остатки по ревизии от ${d.split("-").reverse().join(".")}?\n\nПо ${bad.length} позициям учёт станет равен факту. В истории склада появятся строки «Ревизия» — их видно и можно отменить.`)) return;
+    setFixing(true);
+    try {
+      for (const r of bad) {
+        await dbUpsert("stock", {
+          id: `rev_${d}_${r.brand}_${r.grade}_${r.bag_kg}`.replace(/\s+/g, ""),
+          date: d, brand: r.brand, grade: r.grade, bag_kg: r.bag_kg,
+          bags: r.diff, weight_kg: r.diff * r.bag_kg,
+          reason: r.diff < 0 ? "Ревизия" : "", // reason осмыслен только у списаний
+          note: `Ревизия ${d.split("-").reverse().join(".")}: было ${r.app}, по факту ${r.actual} меш.`,
+        });
+      }
+      await reload("stock");
+      alert("✓ Готово — остатки в приложении теперь совпадают с тем, что реально на складе.");
+    } catch (e) { alert("⚠️ Не получилось: " + ((e && e.message) || e)); }
+    setFixing(false);
+  };
 
   // Позиции, которые ЕСТЬ в приложении, но ещё не посчитаны (5/10 кг не напоминаем — их не считаем)
   const SKIP = new Set([5, 10]);
@@ -2057,6 +2095,16 @@ function RevisionTab({ stock = [], notes = [], reload }) {
             </div>
           </div>
 
+          {rows.some(r => r.diff !== 0) && (
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+              <div className="text-sm font-semibold text-gray-800 mb-1">Привести приложение к факту</div>
+              <p className="text-xs text-gray-500 mb-2">Остатки в приложении станут такими, как ты насчитал на складе. По каждой позиции появится строка «Ревизия» в истории склада — видно, что и когда выправили, можно отменить.</p>
+              <Btn onClick={applyRevision} disabled={fixing || rows.every(r => r.diff === 0 || r.fixed)}>
+                {fixing ? "Выправляю…" : rows.every(r => r.diff === 0 || r.fixed) ? "✓ Уже выправлено" : "✅ Выправить остатки по ревизии"}
+              </Btn>
+            </div>
+          )}
+
           <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
             <div className="grid grid-cols-[1fr_3rem_3.4rem_5.4rem_1.4rem] gap-x-2 text-[11px] text-gray-400 px-3 py-2 border-b border-gray-100 bg-gray-50/60">
               <span>позиция</span><span className="text-right">прил.</span><span className="text-right">реально</span><span className="text-right">разница</span><span></span>
@@ -2071,9 +2119,11 @@ function RevisionTab({ stock = [], notes = [], reload }) {
                 <span className="text-right">
                   {r.diff === 0
                     ? <span className="text-emerald-600 text-xs font-medium">✓ сходится</span>
-                    : r.diff < 0
-                      ? <span className="text-red-600 font-bold text-xs">−{-r.diff} меш.</span>
-                      : <span className="text-blue-600 font-bold text-xs">+{r.diff} меш.</span>}
+                    : r.fixed
+                      ? <span className="text-emerald-600 text-xs font-medium" title="Учёт уже выправлен по этой ревизии">✓ выправлено {r.diff < 0 ? "−" : "+"}{Math.abs(r.diff)}</span>
+                      : r.diff < 0
+                        ? <span className="text-red-600 font-bold text-xs">−{-r.diff} меш.</span>
+                        : <span className="text-blue-600 font-bold text-xs">+{r.diff} меш.</span>}
                 </span>
                 <button onClick={() => removePos(r.k)} className="text-gray-300 hover:text-red-500 text-right" title="Убрать">✕</button>
               </div>
@@ -5702,8 +5752,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
   // Железный учёт: одно движение склада на позицию (id = mv_<id заявки>) — не задваивается, отмена = точный откат
   const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
-  const shipStock = o => dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+  // У торгпреда (isRep) движение склада пишет СЕРВЕР при сохранении заявки: прав на таблицу
+  // stock у роли rep нет, запись из браузера дала бы ложную ошибку «Нет прав на изменение».
+  const shipStock = o => isRep ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
   const unshipStock = async o => {
+    if (isRep) return; // откат тоже делает сервер
     if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id);
     return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
   };
@@ -6237,7 +6290,7 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
