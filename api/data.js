@@ -329,6 +329,7 @@ async function upsertFor(u, table, item) {
       // Такую заявку торгпреду разрешаем (привязана к нему). Но считаем её пробником ТОЛЬКО если
       // и присланная, и существующая (если правим) — без клиента: нельзя «перекрасить» платную
       // заявку реального клиента в пробник, спрятав долг/продажу от учёта по клиенту.
+      // Пробник проспекту может быть БЕСПЛАТНЫМ или ПЛАТНЫМ (цену задаёт торгпред в форме).
       const prospectSample = (item.isSample || item.trial) && !item.clientId && (!existing || !existing.clientId);
       if (!prospectSample) {
         const cli = await dbGet("clients", item.clientId);
@@ -337,18 +338,18 @@ async function upsertFor(u, table, item) {
       } else if (existing && existing.created_by !== u.uid) {
         throw new Error("Это не ваша заявка"); // чужой ИЛИ «ничей» (без автора) пробник править нельзя
       }
+      // ЗАЩИТА: «перекрасить» платную заявку РЕАЛЬНОГО клиента в пробник (clientId→пусто), спрятав
+      // долг, нельзя — prospectSample требует, чтобы и существующая заявка была без клиента (см. выше).
       // Подписываем автора: кто (торгпред) добавил заявку — чтобы админ видел. На новой ставим, у существующей сохраняем.
       const author = existing?.created_by_name
         ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }
         : { created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString(), created_by_role: "rep" };
-      // Пробник у торгпреда ВСЕГДА бесплатный — не доверяем цене из браузера (второй рубеж).
-      const clean = prospectSample ? { ...item, price_per_kg: 0, paid: false } : item;
-      const saved = await dbUpsert("orders", { ...clean, ...author });
+      const saved = await dbUpsert("orders", { ...item, ...author });
       // ⚠️ Списание склада делаем ЗДЕСЬ, на сервере: у торгпреда нет прав писать в stock,
       // поэтому раньше его заявка отмечалась «отгружена», а мука со склада не списывалась —
       // копилась недостача (ревизия 17.08.2026 показала 8.5 т). id движения = mv_<заявка>,
       // повторное сохранение перезаписывает ту же строку и не задваивает расход.
-      await syncOrderStock(existing, { ...clean, ...author });
+      await syncOrderStock(existing, { ...item, ...author });
       return saved;
     }
     if (table === "payments") {

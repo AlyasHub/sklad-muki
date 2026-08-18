@@ -1270,7 +1270,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           {!form.trial && (
             <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
-              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно, без маршрута)</span>
+              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно или по цене, без маршрута)</span>
             </label>
           )}
           <div className="grid grid-cols-2 gap-3">
@@ -1986,67 +1986,59 @@ function LabTab({ lab = [], reload, canEdit = true }) {
 // 🧮 Ревизия склада — только у Администратора (Альяса). Записываешь, сколько мешков РЕАЛЬНО
 // стоит на складе; приложение сравнивает с учётным остатком (таблица stock) и показывает
 // недостачу/излишек по каждой позиции. Данные храним в notes id="revision" (без новой таблицы).
-function RevisionTab({ stock = [], notes = [], reload }) {
+function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {} }) {
   const rev = notes.find(n => n.id === "revision") || { id: "revision", date: TODAY(), items: {} };
   const items = rev.items || {};
   const [form, setForm] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "" });
-  const [saving, setSaving] = useState(false);
 
-  // Учётный остаток (мешков) по позиции — БЕЗ поправок этой же ревизии: иначе, если поправить
-  // ранее записанное число, разница считалась бы от уже выправленного остатка и учёт «уезжал».
-  const revDate = rev.date || TODAY();
-  const revPrefix = `rev_${revDate}_`;
-  const appBal = {}, appliedRev = {};
-  stock.forEach(s => {
-    const k = `${s.brand}|${s.grade}|${s.bag_kg}`;
-    const n = Number(s.bags || 0);
-    if (String(s.id || "").startsWith(revPrefix)) { appliedRev[k] = (appliedRev[k] || 0) + n; return; }
-    appBal[k] = (appBal[k] || 0) + n;
-  });
+  // «прил.» — РЕАЛЬНЫЙ текущий остаток в приложении: сумма ВСЕХ движений склада (включая прошлые
+  // поправки ревизии). Показываем ровно то, что сейчас числится на складе.
+  const appBal = {};
+  stock.forEach(s => { const k = `${s.brand}|${s.grade}|${s.bag_kg}`; appBal[k] = (appBal[k] || 0) + Number(s.bags || 0); });
   const curKey = `${form.brand}|${form.grade}|${form.bag_kg}`;
   const curApp = Math.round(appBal[curKey] || 0);
 
-  const saveDoc = async (newItems, extra = {}) => {
-    setSaving(true);
-    try { await dbUpsert("notes", { ...rev, id: "revision", items: newItems, date: rev.date || TODAY(), updatedAt: new Date().toISOString(), ...extra }); await reload("notes"); }
-    catch (e) { alert("⚠️ Не сохранилось: " + ((e && e.message) || e) + "\nПроверь интернет и попробуй ещё раз."); }
-    setSaving(false);
+  // Сохранение ревизии — оптимистично: экран меняется сразу, запись идёт в фоне. Иначе удаление
+  // по крестику «подвисало» в ожидании ответа сервера.
+  const saveDoc = (newItems, extra = {}) => {
+    const doc = { ...rev, id: "revision", items: newItems, date: rev.date || TODAY(), updatedAt: new Date().toISOString(), ...extra };
+    applyLocal("notes", ns => [...ns.filter(n => n.id !== "revision"), doc]);
+    dbUpsert("notes", doc).catch(e => { alert("⚠️ Не сохранилось: " + ((e && e.message) || e) + "\nПроверь интернет."); reload("notes"); });
   };
-  const addPos = async () => {
+  const addPos = () => {
     const n = Number(form.bags);
     if (form.bags === "" || isNaN(n) || n < 0) return;
-    await saveDoc({ ...items, [curKey]: n });
+    saveDoc({ ...items, [curKey]: n });
     setForm(f => ({ ...f, bags: "" }));
   };
-  const removePos = async k => { const ni = { ...items }; delete ni[k]; await saveDoc(ni); };
-  const clearAll = async () => { if (!confirm("Очистить всю ревизию и начать заново? Записанные цифры удалятся.")) return; await saveDoc({}, { date: TODAY() }); };
+  const removePos = k => { const ni = { ...items }; delete ni[k]; saveDoc(ni); };
+  const clearAll = () => { if (!confirm("Очистить всю ревизию и начать заново? Записанные цифры удалятся.")) return; saveDoc({}, { date: TODAY() }); };
   const editPos = k => { const [b, g, w] = k.split("|"); setForm({ brand: b, grade: g, bag_kg: Number(w), bags: String(items[k]) }); };
 
   const rows = Object.keys(items).map(k => {
     const [brand, grade, w] = k.split("|");
     const actual = Number(items[k]) || 0, app = Math.round(appBal[k] || 0);
-    const diff = actual - app, applied = Math.round(appliedRev[k] || 0);
-    return { k, brand, grade, bag_kg: Number(w), actual, app, diff, applied, fixed: diff !== 0 && applied === diff };
+    return { k, brand, grade, bag_kg: Number(w), actual, app, diff: actual - app };
   }).sort((a, b) => a.brand.localeCompare(b.brand, "ru") || a.grade.localeCompare(b.grade, "ru") || b.bag_kg - a.bag_kg);
 
   const shortKg = rows.filter(r => r.diff < 0).reduce((s, r) => s + (-r.diff) * r.bag_kg, 0);
   const overKg = rows.filter(r => r.diff > 0).reduce((s, r) => s + r.diff * r.bag_kg, 0);
   const okCnt = rows.filter(r => r.diff === 0).length;
 
-  // Выправить учёт по факту: одна корректирующая строка на позицию (id детерминированный —
-  // повторное нажатие перезаписывает ту же строку, а не задваивает расход).
+  // Выправить учёт по факту: на каждую расходящуюся позицию — движение на ТЕКУЩУЮ разницу
+  // (реально − приложение). Уникальный id: если пересчитать позже, добавится поправка только на
+  // остаточную разницу — после применения разница становится 0, задвоения нет.
   const [fixing, setFixing] = useState(false);
   const applyRevision = async () => {
     const bad = rows.filter(r => r.diff !== 0);
     if (!bad.length) return;
-    const d = rev.date || TODAY();
-    if (!confirm(`Выправить остатки по ревизии от ${d.split("-").reverse().join(".")}?\n\nПо ${bad.length} позициям учёт станет равен факту. В истории склада появятся строки «Ревизия» — их видно и можно отменить.`)) return;
+    const d = TODAY();
+    if (!confirm(`Привести остатки в приложении к тому, что ты насчитал (${bad.length} поз.)?\n\nВ истории склада появятся строки «Ревизия» — их видно и можно отменить.`)) return;
     setFixing(true);
     try {
       for (const r of bad) {
         await dbUpsert("stock", {
-          id: `rev_${d}_${r.brand}_${r.grade}_${r.bag_kg}`.replace(/\s+/g, ""),
-          date: d, brand: r.brand, grade: r.grade, bag_kg: r.bag_kg,
+          id: uid(), date: d, brand: r.brand, grade: r.grade, bag_kg: r.bag_kg,
           bags: r.diff, weight_kg: r.diff * r.bag_kg,
           reason: r.diff < 0 ? "Ревизия" : "", // reason осмыслен только у списаний
           note: `Ревизия ${d.split("-").reverse().join(".")}: было ${r.app}, по факту ${r.actual} меш.`,
@@ -2079,7 +2071,7 @@ function RevisionTab({ stock = [], notes = [], reload }) {
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-gray-500">В приложении: <b className={curApp < 0 ? "text-red-600" : "text-gray-700"}>{curApp} меш.</b>{items[curKey] !== undefined && <span className="text-amber-600"> · записано: {items[curKey]}</span>}</span>
-          <Btn onClick={addPos} disabled={saving || form.bags === ""}>{items[curKey] !== undefined ? "Обновить" : "Записать"}</Btn>
+          <Btn onClick={addPos} disabled={form.bags === ""}>{items[curKey] !== undefined ? "Обновить" : "Записать"}</Btn>
         </div>
       </div>
 
@@ -2100,8 +2092,8 @@ function RevisionTab({ stock = [], notes = [], reload }) {
             <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
               <div className="text-sm font-semibold text-gray-800 mb-1">Привести приложение к факту</div>
               <p className="text-xs text-gray-500 mb-2">Остатки в приложении станут такими, как ты насчитал на складе. По каждой позиции появится строка «Ревизия» в истории склада — видно, что и когда выправили, можно отменить.</p>
-              <Btn onClick={applyRevision} disabled={fixing || rows.every(r => r.diff === 0 || r.fixed)}>
-                {fixing ? "Выправляю…" : rows.every(r => r.diff === 0 || r.fixed) ? "✓ Уже выправлено" : "✅ Выправить остатки по ревизии"}
+              <Btn onClick={applyRevision} disabled={fixing || rows.every(r => r.diff === 0)}>
+                {fixing ? "Выправляю…" : "✅ Выправить остатки по ревизии"}
               </Btn>
             </div>
           )}
@@ -2120,11 +2112,9 @@ function RevisionTab({ stock = [], notes = [], reload }) {
                 <span className="text-right">
                   {r.diff === 0
                     ? <span className="text-emerald-600 text-xs font-medium">✓ сходится</span>
-                    : r.fixed
-                      ? <span className="text-emerald-600 text-xs font-medium" title="Учёт уже выправлен по этой ревизии">✓ выправлено {r.diff < 0 ? "−" : "+"}{Math.abs(r.diff)}</span>
-                      : r.diff < 0
-                        ? <span className="text-red-600 font-bold text-xs">−{-r.diff} меш.</span>
-                        : <span className="text-blue-600 font-bold text-xs">+{r.diff} меш.</span>}
+                    : r.diff < 0
+                      ? <span className="text-red-600 font-bold text-xs">−{-r.diff} меш.</span>
+                      : <span className="text-blue-600 font-bold text-xs">+{r.diff} меш.</span>}
                 </span>
                 <button onClick={() => removePos(r.k)} className="text-gray-300 hover:text-red-500 text-right" title="Убрать">✕</button>
               </div>
@@ -5847,7 +5837,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     if (isTrial && !form.clientId) { alert("Выбери клиента для пробы."); return; }
     setSavingManual(true);
     const client = form.isSample ? null : clients.find(c => c.id === form.clientId);
-    const price = (form.isSample || isTrial) ? 0 : (form.price_per_kg || (client ? priceFor(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
+    // Проба клиенту (trial) — всегда бесплатно. Пробник новой компании (isSample) — по введённой
+    // цене: пусто/0 = бесплатно, иначе платный пробник. Обычная заявка — цена из поля или из базы.
+    const price = isTrial ? 0
+      : form.isSample ? (Number(form.price_per_kg) || 0)
+      : (form.price_per_kg || (client ? priceFor(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
     // если у клиента на эту дату уже назначен водитель — наследуем его (чтобы новая позиция не «потерялась» у водителя)
     const inheritedDriver = (!form.isSample && form.clientId) ? (orders.find(o => o.clientId === form.clientId && o.date === form.date && o.driverId)?.driverId || "") : "";
     try {
@@ -6039,7 +6033,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           {!form.trial && !form.oneOff && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
-              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно, без маршрута)</span>
+              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно или по цене, без маршрута)</span>
             </label>
           )}
           {!form.trial && !form.isSample && (
@@ -6106,7 +6100,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            {!form.isSample && !form.trial && <Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
+            {!form.trial && <Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
             <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             {form.pickup
               ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
@@ -6295,7 +6289,7 @@ export default function App() {
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
-            {tab === "revision" && isDev && <RevisionTab stock={data.stock} notes={data.notes} reload={reload} />}
+            {tab === "revision" && isDev && <RevisionTab stock={data.stock} notes={data.notes} reload={reload} applyLocal={applyLocal} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
