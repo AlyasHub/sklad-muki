@@ -187,8 +187,17 @@ async function listFor(u, table) {
     return ["orders", "clients", "drivers"].includes(table) ? await dbList(table) : [];
   }
   if (u.role === "driver") {
-    // Заявки водителя — фильтром на сервере БД (не тянем всю таблицу заявок)
-    const myOrders = () => dbFindBy("orders", "driverId", u.driverId);
+    // Заявки водителя: где он развозит (driverId) ИЛИ грузит самовывоз (loaderId) — фильтром на сервере БД.
+    // Раньше брали только driverId → самовывозы, которые он грузил, не приходили (и не попадали в его тоннаж).
+    const myOrders = async () => {
+      const [a, b] = await Promise.all([
+        dbFindBy("orders", "driverId", u.driverId),
+        u.driverId ? dbFindBy("orders", "loaderId", u.driverId) : Promise.resolve([]),
+      ]);
+      const m = new Map();
+      for (const o of [...a, ...b]) if (o && o.id) m.set(o.id, o);
+      return [...m.values()];
+    };
     if (table === "orders") return await myOrders();
     if (table === "drivers") { const d = await dbGet("drivers", u.driverId); return d ? [d] : []; }
     if (table === "clients") {

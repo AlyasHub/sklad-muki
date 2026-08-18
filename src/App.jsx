@@ -4210,9 +4210,14 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
 
   const monthPicker = <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" />;
 
-  // 🚙 Младший / обычный водитель — показываем ТОЛЬКО объём за месяц (сумму говорит бригадир / считает админ)
+  // 🚙 Младший / обычный водитель — показываем ТОЛЬКО объём за месяц (сумму говорит бригадир / считает админ).
+  // Развоз (driverId) и погрузка самовывоза (loaderId) — раздельно: у них разные ставки.
   if (me.salary_type !== "brigadir") {
-    const myKg = orders.filter(o => o.status === "отгружена" && ((o.driverId === me.id && !o.pickup) || (o.pickup && o.loaderId === me.id)) && (o.date || "").startsWith(month)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+    const inMonth = o => o.status === "отгружена" && (o.date || "").startsWith(month);
+    const myDeliv = orders.filter(o => inMonth(o) && o.driverId === me.id && !o.pickup).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+    const myLoad = orders.filter(o => inMonth(o) && o.pickup && o.loaderId === me.id).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+    const myKg = myDeliv + myLoad;
+    const estimate = Math.round(myDeliv * (me.rate_per_kg || 0) + myLoad * (me.load_rate_per_kg || 0));
     const isJunior = me.salary_type === "junior";
     const foreman = isJunior ? drivers.find(d => d.id === me.foremanId) : null;
     return (
@@ -4221,11 +4226,11 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
         <div className="rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br from-sky-500 to-sky-600">
           <div className="text-sm font-medium opacity-90">Развёз за {month}</div>
           <div className="text-4xl font-black mt-1">{fmt(myKg)} кг</div>
-          <div className="text-sm opacity-90 mt-1">≈ {fmt(Math.round(myKg / 100) / 10)} т</div>
+          <div className="text-sm opacity-90 mt-1">≈ {fmt(Math.round(myKg / 100) / 10)} т{myLoad > 0 ? ` · 🚚 развоз ${fmt(myDeliv)} · 📦 погрузка ${fmt(myLoad)} кг` : ""}</div>
         </div>
         {isJunior
           ? <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">Сумму за развоз тебе скажет бригадир{foreman ? ` — ${foreman.name}` : ""}. Здесь виден только твой объём за месяц.</div>
-          : <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">По ставке {fmt(me.rate_per_kg || 0)} тг/кг это ≈ <b className="text-gray-900">{fmt(Math.round(myKg * (me.rate_per_kg || 0)))} тг</b> за месяц. Итог и выплаты — у администратора.</div>}
+          : <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">По ставкам ({fmt(me.rate_per_kg || 0)} тг/кг развоз{myLoad > 0 ? `, ${fmt(me.load_rate_per_kg || 0)} тг/кг погрузка` : ""}) это ≈ <b className="text-gray-900">{fmt(estimate)} тг</b> за месяц. Итог и выплаты — у администратора.</div>}
       </div>
     );
   }
