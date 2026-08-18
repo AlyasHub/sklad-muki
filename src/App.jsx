@@ -290,7 +290,7 @@ async function uploadPhoto(orderId, file) {
 }
 
 async function resolveGisCoords(link) {
-  const res = await fetch(`/api/resolve-gis?url=${encodeURIComponent(link)}`);
+  const res = await fetch(`/api/resolve-gis?url=${encodeURIComponent(link)}`, { headers: { Authorization: `Bearer ${authToken}` } });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throw new Error(e.error || "Не удалось определить координаты");
@@ -336,6 +336,7 @@ async function parseOrderWithAI(text, clients) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      token: authToken,
       text,
       today: TODAY(),
       tomorrow: TOMORROW(),
@@ -349,7 +350,7 @@ async function parseOrderWithAI(text, clients) {
 }
 
 async function parseClientWithAI(text) {
-  const res = await fetch("/api/parse-client", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  const res = await fetch("/api/parse-client", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken, text }) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Не удалось разобрать данные клиента");
   return JSON.parse(data.raw);
@@ -357,7 +358,7 @@ async function parseClientWithAI(text) {
 
 async function parseTruckWithAI(text) {
   // Разбор поставки (фуры) из WhatsApp — через серверную функцию /api/parse-truck
-  const res = await fetch("/api/parse-truck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, today: TODAY(), tomorrow: TOMORROW(), weekday: TODAY_WEEKDAY() }) });
+  const res = await fetch("/api/parse-truck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken, text, today: TODAY(), tomorrow: TOMORROW(), weekday: TODAY_WEEKDAY() }) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Не удалось разобрать поставку");
   return JSON.parse(data.raw);

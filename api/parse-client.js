@@ -1,7 +1,10 @@
 // Разбор данных клиента из свободного текста через Claude (для карточки клиента и договоров).
 // Ключ Anthropic — в переменной окружения ANTHROPIC_API_KEY (на сервере, не в браузере).
+import { verifyToken } from "./_lib.js";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Только POST" });
+  if (!verifyToken((req.body || {}).token)) return res.status(401).json({ error: "Войдите заново" });
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY не настроен на сервере" });
 

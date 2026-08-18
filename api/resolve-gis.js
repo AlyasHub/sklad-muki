@@ -1,9 +1,20 @@
 // Серверная функция Vercel: по ссылке 2ГИС определяет координаты места.
 // Браузер не может фетчить 2gis.kz напрямую (CORS), поэтому делаем это на сервере.
 
+import { verifyToken } from "./_lib.js";
+
 export default async function handler(req, res) {
+  // Требуем вход (токен в заголовке Authorization) — иначе сервер можно заставить ходить
+  // на произвольные адреса от своего имени (SSRF).
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!verifyToken(token)) return res.status(401).json({ error: "Войдите заново" });
+
   const { url } = req.query;
-  if (!url || !String(url).includes("2gis")) {
+  // Проверяем, что это ДЕЙСТВИТЕЛЬНО домен 2ГИС, а не любая ссылка, где встречается «2gis».
+  let host = "";
+  try { host = new URL(String(url)).hostname.toLowerCase(); } catch { host = ""; }
+  if (!/(^|\.)2gis\.[a-z]{2,}$/.test(host)) {
     return res.status(400).json({ error: "Нужна ссылка 2ГИС" });
   }
 

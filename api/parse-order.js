@@ -3,8 +3,14 @@
 // чтобы он никогда не попадал в браузерный код. Промпт строится здесь, на сервере,
 // поэтому этот endpoint умеет только разбирать заявки на муку — его нельзя использовать для чего-то ещё.
 
+import { verifyToken } from "./_lib.js";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Только POST" });
+
+  // Требуем вход: без валидного токена не тратим Anthropic-ключ (иначе endpoint можно
+  // дёргать анонимно и накручивать счёт на наш ключ). Токен приходит из приложения в теле.
+  if (!verifyToken((req.body || {}).token)) return res.status(401).json({ error: "Войдите заново" });
 
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY не настроен на сервере (добавь в Vercel → Settings → Environment Variables)" });
