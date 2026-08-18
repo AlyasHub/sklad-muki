@@ -229,12 +229,14 @@ async function listFor(u, table) {
     if (table === "clients") return myClients;
     if (table === "orders") {
       const all = await dbList("orders");
-      const mine = all.filter(o => myIds.has(o.clientId)); // свои клиенты — заявки целиком
+      // Свои = заявки своих клиентов + собственные пробники проспектам (без карточки клиента, но с его авторством)
+      const isMine = o => myIds.has(o.clientId) || (!o.clientId && o.created_by === u.uid);
+      const mine = all.filter(isMine);
       // Чужие заявки торгпред видит ТОЛЬКО как сводную загрузку водителей (тоннаж + число заявок),
       // чтобы понимать занятость водителя. БЕЗ кого/что/сколько по конкретному клиенту — никаких
       // имён, товара, адресов и цен наружу не уходит (агрегируем на сервере).
       const agg = {};
-      all.filter(o => !myIds.has(o.clientId) && o.status !== "отменена").forEach(o => {
+      all.filter(o => !isMine(o) && o.status !== "отменена").forEach(o => {
         const drv = o.driverId || "";
         const k = `${drv}|${o.date}`;
         const g = agg[k] = agg[k] || { driverId: drv, date: o.date, kg: 0, clients: new Set() };
@@ -322,28 +324,31 @@ async function upsertFor(u, table, item) {
       return dbUpsert("clients", { ...item, ownerId: u.uid }); // всегда в его группу — чужую нельзя
     }
     if (table === "orders") {
-      // Пробник/проба новому проспекту: у бесплатного образца может не быть карточки клиента
-      // (clientId пустой). Такую заявку торгпреду разрешаем (бесплатно, привязана к нему).
-      // Платную заявку — только своему клиенту.
-      const prospectSample = (item.isSample || item.trial) && !item.clientId;
       const existing = await dbGet("orders", item.id);
+      // Пробник/проба новому проспекту: бесплатный образец без карточки клиента (clientId пустой).
+      // Такую заявку торгпреду разрешаем (привязана к нему). Но считаем её пробником ТОЛЬКО если
+      // и присланная, и существующая (если правим) — без клиента: нельзя «перекрасить» платную
+      // заявку реального клиента в пробник, спрятав долг/продажу от учёта по клиенту.
+      const prospectSample = (item.isSample || item.trial) && !item.clientId && (!existing || !existing.clientId);
       if (!prospectSample) {
         const cli = await dbGet("clients", item.clientId);
         if (!cli || cli.ownerId !== u.uid) throw new Error("Заявку можно создавать только для своих клиентов");
         if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); }
-      } else if (existing && existing.created_by && existing.created_by !== u.uid) {
-        throw new Error("Это не ваша заявка"); // чужой пробник править нельзя
+      } else if (existing && existing.created_by !== u.uid) {
+        throw new Error("Это не ваша заявка"); // чужой ИЛИ «ничей» (без автора) пробник править нельзя
       }
       // Подписываем автора: кто (торгпред) добавил заявку — чтобы админ видел. На новой ставим, у существующей сохраняем.
       const author = existing?.created_by_name
         ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }
         : { created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString(), created_by_role: "rep" };
-      const saved = await dbUpsert("orders", { ...item, ...author });
+      // Пробник у торгпреда ВСЕГДА бесплатный — не доверяем цене из браузера (второй рубеж).
+      const clean = prospectSample ? { ...item, price_per_kg: 0, paid: false } : item;
+      const saved = await dbUpsert("orders", { ...clean, ...author });
       // ⚠️ Списание склада делаем ЗДЕСЬ, на сервере: у торгпреда нет прав писать в stock,
       // поэтому раньше его заявка отмечалась «отгружена», а мука со склада не списывалась —
       // копилась недостача (ревизия 17.08.2026 показала 8.5 т). id движения = mv_<заявка>,
       // повторное сохранение перезаписывает ту же строку и не задваивает расход.
-      await syncOrderStock(existing, { ...item, ...author });
+      await syncOrderStock(existing, { ...clean, ...author });
       return saved;
     }
     if (table === "payments") {
@@ -396,7 +401,7 @@ async function deleteFor(u, table, id) {
   if (u.role === "rep") {
     // Торгпред удаляет только своё
     if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); return dbDelete("clients", id); }
-    if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const cli = await dbGet("clients", ex.clientId); if (!cli || cli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
+    if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!cli || cli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
     if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || cli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); return dbDelete("payments", id); }
     throw new Error("Нет прав на удаление");
   }
