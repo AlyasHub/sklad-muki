@@ -2044,10 +2044,15 @@ function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {} }) 
           note: `Ревизия ${d.split("-").reverse().join(".")}: было ${r.app}, по факту ${r.actual} меш.`,
         });
       }
-      await reload("stock");
       alert("✓ Готово — остатки в приложении теперь совпадают с тем, что реально на складе.");
-    } catch (e) { alert("⚠️ Не получилось: " + ((e && e.message) || e)); }
-    setFixing(false);
+    } catch (e) {
+      alert("⚠️ Записалось не всё: " + ((e && e.message) || e) + "\nОстаток обновлён — посмотри разницу и при необходимости нажми «Выправить» ещё раз.");
+    } finally {
+      // ВСЕГДА подтягиваем свежий склад: если запись оборвалась на середине, повторная попытка
+      // должна считать разницу от фактически записанного, а не от устаревших данных (иначе задвоение).
+      await reload("stock");
+      setFixing(false);
+    }
   };
 
   // Позиции, которые ЕСТЬ в приложении, но ещё не посчитаны (5/10 кг не напоминаем — их не считаем)
@@ -5840,8 +5845,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     // Проба клиенту (trial) — всегда бесплатно. Пробник новой компании (isSample) — по введённой
     // цене: пусто/0 = бесплатно, иначе платный пробник. Обычная заявка — цена из поля или из базы.
     const price = isTrial ? 0
-      : form.isSample ? (Number(form.price_per_kg) || 0)
-      : (form.price_per_kg || (client ? priceFor(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
+      : form.isSample ? Math.max(0, Number(form.price_per_kg) || 0)
+      : Math.max(0, Number(form.price_per_kg) || (client ? priceFor(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
     // если у клиента на эту дату уже назначен водитель — наследуем его (чтобы новая позиция не «потерялась» у водителя)
     const inheritedDriver = (!form.isSample && form.clientId) ? (orders.find(o => o.clientId === form.clientId && o.date === form.date && o.driverId)?.driverId || "") : "";
     try {
@@ -6100,7 +6105,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
             <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            {!form.trial && <Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
+            {!form.trial && <Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" min="0" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
             <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             {form.pickup
               ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
