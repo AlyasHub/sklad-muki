@@ -185,7 +185,7 @@ const TABS_BY_ROLE = {
   viewer: ["today", "calendar", "stock", "lab", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"], // бригадир: заявки бригады + своя зарплата (объём и сумма)
-  driver: ["calendar"],
+  driver: ["calendar", "mysalary"],
   rep: ["today", "calendar", "clients", "debts", "invoice", "stock"], // торгпред: свои клиенты/заявки/долги + накладная + расписание и остатки
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
   kgdsenior: ["kgdm"], // старший менеджер Караганды: тот же раздел + история всех
@@ -196,7 +196,7 @@ const PRIMARY_NAV = {
   viewer: ["today", "calendar", "stock", "clients", "reports"],
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"],
-  driver: ["calendar"],
+  driver: ["calendar", "mysalary"],
   rep: ["today", "calendar", "clients", "debts", "stock"],
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
@@ -2627,6 +2627,23 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   );
 }
 
+// Разбивка зарплаты бригадира по тарифам для объёма бригады kg (кг за месяц).
+// Оклад включает incl тонн; тариф r1 действует incl→t1 тонн; тариф r2 — выше t1. Всё считается по всей бригаде.
+function brigadeSalary(d, kg) {
+  const base = Number(d.base_salary) || 0;
+  const incl = (Number(d.base_included_t) || 0) * 1000; // кг, включённые в оклад
+  const t1 = (Number(d.tier1_to_t) || 0) * 1000;        // порог второго тарифа, кг
+  const r1 = Number(d.tier1_rate) || 0, r2 = Number(d.tier2_rate) || 0;
+  const tier1kg = Math.max(0, Math.min(kg, t1) - incl);
+  const tier2kg = Math.max(0, kg - t1);
+  const tier1pay = Math.round(tier1kg * r1);
+  const tier2pay = Math.round(tier2kg * r2);
+  const total = Math.round(base + tier1kg * r1 + tier2kg * r2);
+  const toNext = kg < incl ? incl - kg : (kg < t1 ? t1 - kg : 0);
+  const nextLabel = kg < incl ? `до конца оклада (${fmt(incl / 1000)} т)` : (kg < t1 ? `до тарифа ${fmt(r2)} тг/кг (${fmt(t1 / 1000)} т)` : "");
+  return { base, incl, t1, r1, r2, tier1kg, tier1pay, tier2kg, tier2pay, total, toNext, nextLabel };
+}
+
 function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2658,11 +2675,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
     const brigade = new Set([d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)]);
     return orders.filter(o => o.status === "отгружена" && brigade.has(o.driverId) && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
   };
-  const brigadirPay = (d, kg) => {
-    const base = Number(d.base_salary) || 0, incl = (Number(d.base_included_t) || 0) * 1000, t1 = (Number(d.tier1_to_t) || 0) * 1000;
-    const r1 = Number(d.tier1_rate) || 0, r2 = Number(d.tier2_rate) || 0;
-    return Math.round(base + Math.max(0, Math.min(kg, t1) - incl) * r1 + Math.max(0, kg - t1) * r2);
-  };
+  const brigadirPay = (d, kg) => brigadeSalary(d, kg).total;
   const deleteDriver = async id => {
     const linked = (users || []).filter(u => u.driverId === id);
     if (!confirm(`Удалить рабочего${linked.length ? " и его логин? Он больше не сможет войти и его выкинет из приложения." : "?"}`)) return;
@@ -2747,31 +2760,72 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
       </Modal>)}
       {detailDriver && (() => {
         const d = detailDriver;
+        const pays = expenses.filter(x => x.driverId === d.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const paysBlock = (
+          <div>
+            <div className="font-semibold text-gray-700 mb-1">Выплаты</div>
+            {pays.length === 0 ? <div className="text-gray-400 text-sm">Выплат ещё не было</div> : (
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {pays.map(x => <div key={x.id} className="flex items-center justify-between text-sm border border-gray-100 rounded-lg px-3 py-2"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}{x.extra ? <span className="text-amber-700"> · доплата</span> : <span className="text-emerald-600"> · зарплата</span>}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
+              </div>
+            )}
+          </div>
+        );
+        // 👷 Бригадир: разбивка зарплаты по тарифам за месяц + сколько развёз каждый водитель бригады
+        if (d.salary_type === "brigadir") {
+          const brigade = [d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)];
+          const kgOf = id => orders.filter(o => o.status === "отгружена" && o.driverId === id && (o.date || "").startsWith(salMonth)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+          const perDriver = brigade.map(id => ({ id, name: drivers.find(x => x.id === id)?.name || "?", kg: kgOf(id), me: id === d.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
+          const kg = perDriver.reduce((s, x) => s + x.kg, 0);
+          const b = brigadeSalary(d, kg);
+          const paidM = wagePaidMonth(d.id);
+          const left = Math.max(0, b.total - paidM);
+          return (<Modal title={`👷 ${d.name} — детали за ${salMonth}`} onClose={() => setDetailDriver(null)}>
+            <div className="space-y-4">
+              <div className="rounded-2xl p-4 bg-gradient-to-br from-amber-500 to-amber-600 text-white">
+                <div className="text-sm opacity-90">Зарплата за месяц</div>
+                <div className="text-3xl font-black mt-0.5">{fmt(b.total)} тг</div>
+                <div className="text-sm opacity-90 mt-1 border-t border-white/30 pt-1">Объём бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т)</div>
+              </div>
+              <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
+                <div className="font-semibold text-gray-700 mb-1">Из чего складывается</div>
+                <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
+                <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
+                <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
+                <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold">Итого начислено</span><b>{fmt(b.total)} тг</b></div>
+                {b.toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё {fmt(b.toNext)} кг {b.nextLabel}</div>}
+              </div>
+              <div className="bg-white border border-gray-100 rounded-xl p-3 text-sm">
+                <div className="font-semibold text-gray-700 mb-1">Сколько развёз каждый водитель</div>
+                {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}>{x.me ? "👷 " : "🚙 "}{x.name}{x.me ? " (бригадир)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
+                {perDriver.every(x => x.kg === 0) && <div className="text-gray-400">Отгрузок за месяц ещё нет.</div>}
+              </div>
+              <div className="text-sm flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2">
+                <span>Выплачено за месяц: <b className="text-emerald-600">{fmt(paidM)} тг</b></span>
+                <span className={left > 0 ? "text-red-600 font-bold" : "text-gray-500"}>Осталось: {fmt(left)} тг</span>
+              </div>
+              {paysBlock}
+            </div>
+          </Modal>);
+        }
+        // 🚛 Обычный водитель/грузчик — по дням
         const byDate = {};
         orders.filter(o => o.status === "отгружена" && ((o.driverId === d.id && !o.pickup) || (o.pickup && o.loaderId === d.id))).forEach(o => {
           const rec = byDate[o.date] = byDate[o.date] || { delivKg: 0, loadKg: 0 };
           if (o.pickup) rec.loadKg += o.bags * o.bag_kg; else rec.delivKg += o.bags * o.bag_kg;
         });
         const days = Object.entries(byDate).map(([date, v]) => ({ date, ...v, owed: Math.round(v.delivKg * (d.rate_per_kg || 0) + v.loadKg * (d.load_rate_per_kg || 0)) })).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-        const pays = expenses.filter(x => x.driverId === d.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
         return (<Modal title={`🚛 ${d.name} — детали`} onClose={() => setDetailDriver(null)}>
           <div className="space-y-4">
             <div>
-              <div className="font-semibold text-gray-700 mb-1">По дням (развоз + отгрузка)</div>
+              <div className="font-semibold text-gray-700 mb-1">{d.salary_type === "junior" ? "По дням (развоз)" : "По дням (развоз + отгрузка)"}</div>
               {days.length === 0 ? <div className="text-gray-400 text-sm">Работы ещё не было</div> : (
                 <div className="space-y-1 max-h-60 overflow-y-auto">
-                  {days.map(x => <div key={x.date} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2"><span>{x.date.split("-").reverse().join(".")}{x.delivKg ? ` · 🚚 ${fmt(x.delivKg)}` : ""}{x.loadKg ? ` · 📦 ${fmt(x.loadKg)}` : ""} кг</span><span className="font-medium">должны {fmt(x.owed)} тг</span></div>)}
+                  {days.map(x => <div key={x.date} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2"><span>{x.date.split("-").reverse().join(".")}{x.delivKg ? ` · 🚚 ${fmt(x.delivKg)}` : ""}{x.loadKg ? ` · 📦 ${fmt(x.loadKg)}` : ""} кг</span>{d.salary_type === "junior" ? <span className="text-gray-400">тоннаж</span> : <span className="font-medium">должны {fmt(x.owed)} тг</span>}</div>)}
                 </div>
               )}
             </div>
-            <div>
-              <div className="font-semibold text-gray-700 mb-1">Выплаты</div>
-              {pays.length === 0 ? <div className="text-gray-400 text-sm">Выплат ещё не было</div> : (
-                <div className="space-y-1 max-h-60 overflow-y-auto">
-                  {pays.map(x => <div key={x.id} className="flex items-center justify-between text-sm border border-gray-100 rounded-lg px-3 py-2"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}{x.extra ? <span className="text-amber-700"> · доплата</span> : <span className="text-emerald-600"> · зарплата</span>}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
-                </div>
-              )}
-            </div>
+            {paysBlock}
           </div>
         </Modal>);
       })()}
@@ -4153,41 +4207,53 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
   const [month, setMonth] = useState(TODAY().slice(0, 7));
   const me = drivers.find(d => d.id === myDriverId);
   if (!me) return <div className="text-center py-12 text-gray-400">Карточка не найдена. Обратись к администратору.</div>;
-  if (me.salary_type !== "brigadir") return <div className="text-center py-12 text-gray-400">Зарплата по окладу пока не настроена. Обратись к администратору.</div>;
 
+  const monthPicker = <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" />;
+
+  // 🚙 Младший / обычный водитель — показываем ТОЛЬКО объём за месяц (сумму говорит бригадир / считает админ)
+  if (me.salary_type !== "brigadir") {
+    const myKg = orders.filter(o => o.status === "отгружена" && ((o.driverId === me.id && !o.pickup) || (o.pickup && o.loaderId === me.id)) && (o.date || "").startsWith(month)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+    const isJunior = me.salary_type === "junior";
+    const foreman = isJunior ? drivers.find(d => d.id === me.foremanId) : null;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">💰 Моя зарплата</h3>{monthPicker}</div>
+        <div className="rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br from-sky-500 to-sky-600">
+          <div className="text-sm font-medium opacity-90">Развёз за {month}</div>
+          <div className="text-4xl font-black mt-1">{fmt(myKg)} кг</div>
+          <div className="text-sm opacity-90 mt-1">≈ {fmt(Math.round(myKg / 100) / 10)} т</div>
+        </div>
+        {isJunior
+          ? <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">Сумму за развоз тебе скажет бригадир{foreman ? ` — ${foreman.name}` : ""}. Здесь виден только твой объём за месяц.</div>
+          : <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">По ставке {fmt(me.rate_per_kg || 0)} тг/кг это ≈ <b className="text-gray-900">{fmt(Math.round(myKg * (me.rate_per_kg || 0)))} тг</b> за месяц. Итог и выплаты — у администратора.</div>}
+      </div>
+    );
+  }
+
+  // 👷 Бригадир — полная разбивка по тарифам + объём каждого водителя бригады
   const brigadeIds = [me.id, ...drivers.filter(d => d.foremanId === me.id).map(d => d.id)];
   const kgOf = id => orders.filter(o => o.status === "отгружена" && o.driverId === id && (o.date || "").startsWith(month)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
-  const perDriver = brigadeIds.map(id => ({ id, name: drivers.find(d => d.id === id)?.name || "?", kg: kgOf(id), me: id === me.id })).filter(x => x.kg > 0 || x.me);
+  const perDriver = brigadeIds.map(id => ({ id, name: drivers.find(d => d.id === id)?.name || "?", kg: kgOf(id), me: id === me.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
   const kg = perDriver.reduce((s, x) => s + x.kg, 0);
-
-  const base = Number(me.base_salary) || 0, incl = (Number(me.base_included_t) || 0) * 1000, t1 = (Number(me.tier1_to_t) || 0) * 1000;
-  const r1 = Number(me.tier1_rate) || 0, r2 = Number(me.tier2_rate) || 0;
-  const tier1kg = Math.max(0, Math.min(kg, t1) - incl);
-  const tier2kg = Math.max(0, kg - t1);
-  const pay = Math.round(base + tier1kg * r1 + tier2kg * r2);
-  const toNext = kg < incl ? incl - kg : (kg < t1 ? t1 - kg : 0);
-  const nextLabel = kg < incl ? `до конца оклада (${fmt(incl / 1000)} т)` : (kg < t1 ? `до тарифа ${fmt(r2)} тг/кг (${fmt(t1 / 1000)} т)` : "");
+  const b = brigadeSalary(me, kg);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="font-bold text-gray-800">💰 Моя зарплата</h3>
-        <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" />
-      </div>
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">💰 Моя зарплата</h3>{monthPicker}</div>
 
       <div className="rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br from-emerald-500 to-emerald-600">
         <div className="text-sm font-medium opacity-90">Зарплата за {month}</div>
-        <div className="text-4xl font-black mt-1">{fmt(pay)} тг</div>
+        <div className="text-4xl font-black mt-1">{fmt(b.total)} тг</div>
         <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Объём бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т)</div>
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
         <div className="font-semibold text-gray-700 mb-1">Из чего складывается</div>
-        <div className="flex justify-between"><span className="text-gray-600">Оклад (вкл. {fmt(incl / 1000)} т)</span><b>{fmt(base)} тг</b></div>
-        {tier1kg > 0 && <div className="flex justify-between"><span className="text-gray-600">{fmt(incl / 1000)}–{fmt(t1 / 1000)} т: {fmt(tier1kg)} кг × {fmt(r1)} тг</span><b>+{fmt(tier1kg * r1)} тг</b></div>}
-        {tier2kg > 0 && <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(t1 / 1000)} т: {fmt(tier2kg)} кг × {fmt(r2)} тг</span><b>+{fmt(tier2kg * r2)} тг</b></div>}
-        <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого</span><b className="text-emerald-600">{fmt(pay)} тг</b></div>
-        {toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё <b>{fmt(toNext)} кг</b> {nextLabel}</div>}
+        <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
+        <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
+        <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
+        <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого</span><b className="text-emerald-600">{fmt(b.total)} тг</b></div>
+        {b.toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё <b>{fmt(b.toNext)} кг</b> {b.nextLabel}</div>}
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm">
@@ -4195,7 +4261,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
         {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}>{x.me ? "👷 " : "🚙 "}{x.name}{x.me ? " (я)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
       </div>
 
-      <div className="text-xs text-gray-400 text-center">Оклад {fmt(base)} тг (вкл. {fmt(incl / 1000)} т) · {fmt(incl / 1000)}–{fmt(t1 / 1000)} т по {fmt(r1)} тг/кг · свыше {fmt(t1 / 1000)} т по {fmt(r2)} тг/кг. Считается по всей бригаде за месяц.</div>
+      <div className="text-xs text-gray-400 text-center">Оклад {fmt(b.base)} тг (вкл. {fmt(b.incl / 1000)} т) · {fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т по {fmt(b.r1)} тг/кг · свыше {fmt(b.t1 / 1000)} т по {fmt(b.r2)} тг/кг. Считается по всей бригаде за месяц.</div>
     </div>
   );
 }
