@@ -5520,6 +5520,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
   const base = group.orders[0];
   const [positions, setPositions] = useState(group.orders.map(o => ({ id: o.id, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags, price_per_kg: o.price_per_kg ?? "", trial: !!o.trial })));
   const [note, setNote] = useState(group.orders.map(o => o.note).find(Boolean) || "");
+  const [date, setDate] = useState(base.date); // дата доставки — можно поправить, если поставили не на то число
   const [saving, setSaving] = useState(false);
   const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
   const upd = (i, f, v) => setPositions(ps => ps.map((p, idx) => idx === i ? { ...p, [f]: v } : p));
@@ -5543,9 +5544,9 @@ function EditGroupModal({ group, clients, reload, onClose }) {
         const carry = idx === 0 ? { photos: allPhotos, delivered_by_driver: anyDelivered } : {};
         if (p.id) {
           const orig = group.orders.find(o => o.id === p.id);
-          return dbUpsert("orders", { ...orig, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
+          return dbUpsert("orders", { ...orig, date, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
         }
-        return dbUpsert("orders", { id: uid(), date: base.date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
+        return dbUpsert("orders", { id: uid(), date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
       }));
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
       await Promise.all(group.orders.filter(o => !keep.has(o.id)).map(o => dbDelete("orders", o.id)));
@@ -5556,7 +5557,8 @@ function EditGroupModal({ group, clients, reload, onClose }) {
   return (
     <Modal title={`✏️ ${group.clientName || "Заявка"}`} onClose={onClose}>
       <div className="space-y-3">
-        <div className="text-xs text-gray-500">Измени сорт/количество/цену, удали лишнюю позицию (✕) или добавь новую.</div>
+        <div className="text-xs text-gray-500">Измени дату, сорт/количество/цену, удали лишнюю позицию (✕) или добавь новую.</div>
+        <Inp label="📅 Дата доставки" type="date" value={date} onChange={e => setDate(e.target.value)} />
         {positions.map((p, i) => (
           <div key={i} className="border border-gray-200 rounded-xl p-3 relative">
             <button onClick={() => rm(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600 text-lg leading-none" title="Удалить позицию">✕</button>
