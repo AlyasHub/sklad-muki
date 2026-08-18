@@ -322,10 +322,18 @@ async function upsertFor(u, table, item) {
       return dbUpsert("clients", { ...item, ownerId: u.uid }); // всегда в его группу — чужую нельзя
     }
     if (table === "orders") {
-      const cli = await dbGet("clients", item.clientId);
-      if (!cli || cli.ownerId !== u.uid) throw new Error("Заявку можно создавать только для своих клиентов");
+      // Пробник/проба новому проспекту: у бесплатного образца может не быть карточки клиента
+      // (clientId пустой). Такую заявку торгпреду разрешаем (бесплатно, привязана к нему).
+      // Платную заявку — только своему клиенту.
+      const prospectSample = (item.isSample || item.trial) && !item.clientId;
       const existing = await dbGet("orders", item.id);
-      if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); }
+      if (!prospectSample) {
+        const cli = await dbGet("clients", item.clientId);
+        if (!cli || cli.ownerId !== u.uid) throw new Error("Заявку можно создавать только для своих клиентов");
+        if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); }
+      } else if (existing && existing.created_by && existing.created_by !== u.uid) {
+        throw new Error("Это не ваша заявка"); // чужой пробник править нельзя
+      }
       // Подписываем автора: кто (торгпред) добавил заявку — чтобы админ видел. На новой ставим, у существующей сохраняем.
       const author = existing?.created_by_name
         ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }
