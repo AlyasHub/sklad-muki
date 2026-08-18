@@ -1,7 +1,13 @@
 // Офлайн-режим: кэшируем приложение и генератор PDF, чтобы менеджеры Караганды
 // могли формировать документы без интернета. Данные (api/*) — только по сети,
 // но приложение открывается и работает на сохранённом справочнике клиентов.
-const CACHE = "darad-v1";
+//
+// ВАЖНО (2026-08-18): оболочку (index.html / переходы по страницам) берём СНАЧАЛА ИЗ СЕТИ.
+// Раньше она бралась из кэша → после деплоя у пользователей (особенно установленной PWA)
+// оставалась старая версия бандла. Это ломало функции, где фронт и бэк должны совпадать
+// (например разбор заявок начал требовать токен, а старый фронт его не слал → «не удалось
+// разобрать»). Хэшированные ассеты (/assets/index-*.js) неизменяемы — их кэшируем навсегда.
+const CACHE = "darad-v2";
 const PDF_LIBS = [
   "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js",
@@ -25,6 +31,12 @@ self.addEventListener("activate", e => {
   })());
 });
 
+// HTML-оболочка: переход по страницам или явный запрос index.html / документа
+function isShell(req, url) {
+  return req.mode === "navigate" || (req.destination === "document") ||
+    url.pathname === "/" || url.pathname.endsWith("/index.html");
+}
+
 self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return; // записи в базу офлайн не кэшируем
@@ -36,7 +48,24 @@ self.addEventListener("fetch", e => {
     return;
   }
 
-  // Генератор PDF и статика — сначала из кэша (мгновенно и работает офлайн), обновляем в фоне
+  // Оболочка приложения — СНАЧАЛА СЕТЬ (чтобы всегда грузился актуальный бандл),
+  // офлайн — из кэша. Так после деплоя пользователь сразу получает новую версию.
+  if (isShell(req, url)) {
+    e.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        if (res && res.ok) { const c = await caches.open(CACHE); c.put("/", res.clone()).catch(() => {}); }
+        return res;
+      } catch {
+        const cache = await caches.open(CACHE);
+        return (await cache.match(req)) || (await cache.match("/")) ||
+          new Response("Офлайн", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+    })());
+    return;
+  }
+
+  // Хэшированные ассеты и генератор PDF — сначала из кэша (мгновенно и офлайн), обновляем в фоне
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(req, { ignoreSearch: false });
@@ -47,11 +76,6 @@ self.addEventListener("fetch", e => {
     if (hit) { net; return hit; }
     const res = await net;
     if (res) return res;
-    // Офлайн и нет в кэше: для переходов по страницам отдаём оболочку приложения
-    if (req.mode === "navigate") {
-      const shell = await cache.match("/");
-      if (shell) return shell;
-    }
     return new Response("Офлайн", { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   })());
 });
