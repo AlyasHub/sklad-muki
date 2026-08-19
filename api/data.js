@@ -216,7 +216,9 @@ async function listFor(u, table) {
     const brigade = new Set([u.driverId, ...allDrivers.filter(d => d.foremanId === u.driverId).map(d => d.id)]);
     if (table === "drivers") return allDrivers.filter(d => brigade.has(d.id)).map(d => d.id === u.driverId ? d : (({ rate_per_kg, load_rate_per_kg, base_salary, base_included_t, tier1_to_t, tier1_rate, tier2_rate, ...rest }) => rest)(d)); // свою зарплату бригадир видит, у младших — скрыто
     if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse");
-    const myOrders = (await dbList("orders")).filter(o => brigade.has(o.driverId));
+    // Заявки бригады: развоз (driverId ∈ бригада) + самовывоз, который грузил кто-то из бригады (loaderId ∈ бригада,
+    // у самовывоза driverId пустой). Иначе бригадир не видит свою погрузку самовывоза в «Моя ЗП».
+    const myOrders = (await dbList("orders")).filter(o => brigade.has(o.driverId) || (o.pickup && brigade.has(o.loaderId)));
     if (table === "orders") return myOrders;
     if (table === "clients") {
       const ids = new Set(myOrders.map(o => o.clientId).filter(Boolean));

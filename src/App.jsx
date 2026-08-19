@@ -2644,6 +2644,19 @@ function brigadeSalary(d, kg) {
   return { base, incl, t1, r1, r2, tier1kg, tier1pay, tier2kg, tier2pay, total, toNext, nextLabel };
 }
 
+// 📦 Погрузка самовывоза бригадой за месяц — считается ОТДЕЛЬНО от оклада/тарифов (не входит в объём бригады).
+// Заявки-самовывоз (pickup), которые грузил кто-то из бригады (loaderId), × ставка за погрузку (load_rate_per_kg, по умолч. 2.7 тг/кг).
+function brigadePickupLoad(d, drivers, orders, ym) {
+  const rate = Number(d.load_rate_per_kg) || 2.7;
+  const brigade = [d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)];
+  const per = brigade.map(id => ({
+    id, name: drivers.find(x => x.id === id)?.name || "?", me: id === d.id,
+    kg: orders.filter(o => o.status === "отгружена" && o.pickup && o.loaderId === id && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0),
+  })).filter(x => x.kg > 0);
+  const kg = per.reduce((s, x) => s + x.kg, 0);
+  return { rate, per, kg, pay: Math.round(kg * rate) };
+}
+
 function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2659,12 +2672,12 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
 
   const brigadirs = drivers.filter(d => d.salary_type === "brigadir"); // для выбора старшего у младшего
   const openNew = () => { setEditId(null); setForm(blankDriver); setShowAdd(true); };
-  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, salary_type: d.salary_type || "kg", rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.load_rate_per_kg ?? "", foremanId: d.foremanId || "", base_salary: d.base_salary ?? "650000", base_included_t: d.base_included_t ?? "60", tier1_to_t: d.tier1_to_t ?? "190", tier1_rate: d.tier1_rate ?? "6", tier2_rate: d.tier2_rate ?? "8" }); setShowAdd(true); };
+  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, salary_type: d.salary_type || "kg", rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.salary_type === "brigadir" ? (d.load_rate_per_kg || 2.7) : (d.load_rate_per_kg ?? ""), foremanId: d.foremanId || "", base_salary: d.base_salary ?? "650000", base_included_t: d.base_included_t ?? "60", tier1_to_t: d.tier1_to_t ?? "190", tier1_rate: d.tier1_rate ?? "6", tier2_rate: d.tier2_rate ?? "8" }); setShowAdd(true); };
   const saveDriver = async () => {
     setSaving(true);
     const t = form.salary_type;
     const rec = { id: editId || uid(), name: form.name, salary_type: t };
-    if (t === "brigadir") Object.assign(rec, { base_salary: Number(form.base_salary) || 0, base_included_t: Number(form.base_included_t) || 0, tier1_to_t: Number(form.tier1_to_t) || 0, tier1_rate: Number(form.tier1_rate) || 0, tier2_rate: Number(form.tier2_rate) || 0, rate_per_kg: 0, load_rate_per_kg: 0, foremanId: "" });
+    if (t === "brigadir") Object.assign(rec, { base_salary: Number(form.base_salary) || 0, base_included_t: Number(form.base_included_t) || 0, tier1_to_t: Number(form.tier1_to_t) || 0, tier1_rate: Number(form.tier1_rate) || 0, tier2_rate: Number(form.tier2_rate) || 0, rate_per_kg: 0, load_rate_per_kg: form.load_rate_per_kg === "" ? 2.7 : (Number(form.load_rate_per_kg) || 0), foremanId: "" });
     else if (t === "junior") Object.assign(rec, { foremanId: form.foremanId || "", rate_per_kg: 0, load_rate_per_kg: 0 });
     else Object.assign(rec, { rate_per_kg: Number(form.rate_per_kg) || 0, load_rate_per_kg: Number(form.load_rate_per_kg) || 0, foremanId: "" });
     try { await dbUpsert("drivers", rec); setShowAdd(false); setEditId(null); setForm(blankDriver); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
@@ -2697,7 +2710,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   expenses.filter(x => x.driverId).forEach(x => { const m = x.extra ? extraPaid : wagePaid; m[x.driverId] = (m[x.driverId] || 0) + (x.amount || 0); });
   const wagePaidMonth = id => expenses.filter(x => x.driverId === id && !x.extra && (x.date || "").startsWith(salMonth)).reduce((s, x) => s + (x.amount || 0), 0);
   // Заработано: бригадир — оклад+тарифы за выбранный месяц (по объёму всей бригады); младший — платит бригадир (0); обычный — по ставке (всё время)
-  const earnedOf = d => d.salary_type === "brigadir" ? brigadirPay(d, brigadeKgMonth(d, salMonth)) : d.salary_type === "junior" ? 0 : ((earnings[d.id] || 0) + (loadEarn[d.id] || 0));
+  const earnedOf = d => d.salary_type === "brigadir" ? brigadirPay(d, brigadeKgMonth(d, salMonth)) + brigadePickupLoad(d, drivers, orders, salMonth).pay : d.salary_type === "junior" ? 0 : ((earnings[d.id] || 0) + (loadEarn[d.id] || 0));
   const paidOf = d => d.salary_type === "brigadir" ? wagePaidMonth(d.id) : (wagePaid[d.id] || 0);
   const remainingOf = d => Math.max(0, Math.round(earnedOf(d) - paidOf(d)));
 
@@ -2739,7 +2752,8 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
             <Inp label="Тариф до порога, тг/кг" type="number" value={form.tier1_rate} onChange={e => setForm({ ...form, tier1_rate: e.target.value })} />
             <Inp label="Порог второго тарифа, тонн/мес" type="number" value={form.tier1_to_t} onChange={e => setForm({ ...form, tier1_to_t: e.target.value })} />
             <Inp label="Тариф выше порога, тг/кг" type="number" value={form.tier2_rate} onChange={e => setForm({ ...form, tier2_rate: e.target.value })} />
-            <p className="text-xs text-gray-500">Пример: оклад 650000 (вкл. 60 т), 60–190 т по 6 тг/кг, свыше 190 т по 8 тг/кг. Считается по объёму всей бригады за месяц.</p>
+            <Inp label="📦 Погрузка самовывоза, тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2.7" />
+            <p className="text-xs text-gray-500">Пример: оклад 650000 (вкл. 60 т), 60–190 т по 6 тг/кг, свыше 190 т по 8 тг/кг. Считается по объёму всей бригады за месяц. Погрузка самовывоза (клиент забрал сам) — отдельно, в объём бригады НЕ входит.</p>
           </>)}
         </div>
         <div className="flex gap-2 mt-4"><Btn onClick={saveDriver} disabled={saving || (form.salary_type === "junior" && !form.foremanId)}>{saving ? "Сохраняю..." : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
@@ -2778,23 +2792,33 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           const perDriver = brigade.map(id => ({ id, name: drivers.find(x => x.id === id)?.name || "?", kg: kgOf(id), me: id === d.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
           const kg = perDriver.reduce((s, x) => s + x.kg, 0);
           const b = brigadeSalary(d, kg);
+          const sv = brigadePickupLoad(d, drivers, orders, salMonth); // погрузка самовывоза — отдельно
+          const grand = b.total + sv.pay;
           const paidM = wagePaidMonth(d.id);
-          const left = Math.max(0, b.total - paidM);
+          const left = Math.max(0, grand - paidM);
           return (<Modal title={`👷 ${d.name} — детали за ${salMonth}`} onClose={() => setDetailDriver(null)}>
             <div className="space-y-4">
               <div className="rounded-2xl p-4 bg-gradient-to-br from-amber-500 to-amber-600 text-white">
                 <div className="text-sm opacity-90">Зарплата за месяц</div>
-                <div className="text-3xl font-black mt-0.5">{fmt(b.total)} тг</div>
-                <div className="text-sm opacity-90 mt-1 border-t border-white/30 pt-1">Объём бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т)</div>
+                <div className="text-3xl font-black mt-0.5">{fmt(grand)} тг</div>
+                <div className="text-sm opacity-90 mt-1 border-t border-white/30 pt-1">Развоз бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т){sv.kg > 0 ? <> · самовывоз: <b>{fmt(sv.kg)} кг</b></> : ""}</div>
               </div>
               <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
-                <div className="font-semibold text-gray-700 mb-1">Из чего складывается</div>
+                <div className="font-semibold text-gray-700 mb-1">🚚 За развоз (оклад + тарифы)</div>
                 <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
                 <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
                 <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
-                <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold">Итого начислено</span><b>{fmt(b.total)} тг</b></div>
+                <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold">Итого за развоз</span><b>{fmt(b.total)} тг</b></div>
                 {b.toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё {fmt(b.toNext)} кг {b.nextLabel}</div>}
               </div>
+              <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
+                <div className="font-semibold text-gray-700 mb-1">📦 Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
+                {sv.kg > 0 ? (<>
+                  {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600">{x.me ? "👷 " : "🚙 "}{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
+                  <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold">Итого за погрузку</span><b>+{fmt(sv.pay)} тг</b></div>
+                </>) : <div className="text-gray-400">Самовывоза в этом месяце не было.</div>}
+              </div>
+              <div className="flex justify-between bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm"><span className="font-bold text-amber-800">Всего к начислению</span><b className="text-amber-800">{fmt(grand)} тг</b></div>
               <div className="bg-white border border-gray-100 rounded-xl p-3 text-sm">
                 <div className="font-semibold text-gray-700 mb-1">Сколько развёз каждый водитель</div>
                 {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}>{x.me ? "👷 " : "🚙 "}{x.name}{x.me ? " (бригадир)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
@@ -4241,6 +4265,8 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
   const perDriver = brigadeIds.map(id => ({ id, name: drivers.find(d => d.id === id)?.name || "?", kg: kgOf(id), me: id === me.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
   const kg = perDriver.reduce((s, x) => s + x.kg, 0);
   const b = brigadeSalary(me, kg);
+  const sv = brigadePickupLoad(me, drivers, orders, month); // погрузка самовывоза — отдельно
+  const grand = b.total + sv.pay;
 
   return (
     <div className="space-y-4">
@@ -4248,25 +4274,35 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
 
       <div className="rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br from-emerald-500 to-emerald-600">
         <div className="text-sm font-medium opacity-90">Зарплата за {month}</div>
-        <div className="text-4xl font-black mt-1">{fmt(b.total)} тг</div>
-        <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Объём бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т)</div>
+        <div className="text-4xl font-black mt-1">{fmt(grand)} тг</div>
+        <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Развоз бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т){sv.kg > 0 ? <> · самовывоз: <b>{fmt(sv.kg)} кг</b></> : ""}</div>
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
-        <div className="font-semibold text-gray-700 mb-1">Из чего складывается</div>
+        <div className="font-semibold text-gray-700 mb-1">🚚 За развоз (оклад + тарифы)</div>
         <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
         <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
         <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
-        <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого</span><b className="text-emerald-600">{fmt(b.total)} тг</b></div>
+        <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого за развоз</span><b>{fmt(b.total)} тг</b></div>
         {b.toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё <b>{fmt(b.toNext)} кг</b> {b.nextLabel}</div>}
       </div>
+
+      <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
+        <div className="font-semibold text-gray-700 mb-1">📦 Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
+        {sv.kg > 0 ? (<>
+          {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600">{x.me ? "👷 " : "🚙 "}{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
+          <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого за погрузку</span><b>+{fmt(sv.pay)} тг</b></div>
+        </>) : <div className="text-gray-400">Самовывоза в этом месяце не было.</div>}
+      </div>
+
+      <div className="flex justify-between bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3"><span className="font-bold text-emerald-800">Всего к начислению</span><b className="text-emerald-800 text-lg">{fmt(grand)} тг</b></div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm">
         <div className="font-semibold text-gray-700 mb-1">По водителям бригады за {month}</div>
         {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}>{x.me ? "👷 " : "🚙 "}{x.name}{x.me ? " (я)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
       </div>
 
-      <div className="text-xs text-gray-400 text-center">Оклад {fmt(b.base)} тг (вкл. {fmt(b.incl / 1000)} т) · {fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т по {fmt(b.r1)} тг/кг · свыше {fmt(b.t1 / 1000)} т по {fmt(b.r2)} тг/кг. Считается по всей бригаде за месяц.</div>
+      <div className="text-xs text-gray-400 text-center">Оклад {fmt(b.base)} тг (вкл. {fmt(b.incl / 1000)} т) · {fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т по {fmt(b.r1)} тг/кг · свыше {fmt(b.t1 / 1000)} т по {fmt(b.r2)} тг/кг. Погрузка самовывоза — отдельно, по {fmt(sv.rate)} тг/кг.</div>
     </div>
   );
 }
