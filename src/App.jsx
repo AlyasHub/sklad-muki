@@ -484,8 +484,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
 
   // Отгрузки из Караганды идут напрямую клиенту — в маршруты Астаны не лезут, но в календаре видны отдельным блоком
   const local = orders.filter(o => !o.fromKaraganda);
-  // Водитель видит только свои отгрузки
-  const visAll = driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local;
+  // Водитель видит свои отгрузки (развоз по driverId) + самовывоз, где он грузчик/контролёр (loaderId, у самовывоза driverId пустой)
+  const visAll = driverFilter != null ? local.filter(o => o.driverId === driverFilter || o.loaderId === driverFilter) : local;
   const loadRows = visAll.filter(o => o.foreignLoad); // сводная загрузка чужих заявок (у торгпреда) — только тоннаж/число
   const vis = visAll.filter(o => !o.foreignLoad);
   const karagandaVis = driverFilter != null ? [] : orders.filter(o => o.fromKaraganda); // только директор/бухгалтер
@@ -562,6 +562,11 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
     const ids = new Set(g.orders.map(o => o.id));
     applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, loaderId } : o));
     try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, loaderId }))); } catch (e) { notifyErr(e); reload("orders"); }
+  };
+  const setGroupWatch = async (g, pickupWatch) => { // самовывоз: грузим сами ↔ только контроль (без оплаты)
+    const ids = new Set(g.orders.map(o => o.id));
+    applyLocal("orders", os => os.map(o => ids.has(o.id) ? { ...o, pickupWatch } : o));
+    try { await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, pickupWatch }))); } catch (e) { notifyErr(e); reload("orders"); }
   };
   const deleteGroup = async g => {
     const shipped = g.orders.some(o => o.status === "отгружена" && !o.fromKaraganda);
@@ -858,6 +863,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
               const client = clients.find(c => c.id === g.clientId);
               const driver = drivers.find(d => d.id === g.orders[0].driverId);
               const isPickup = g.orders.some(o => o.pickup);
+              const isWatch = isPickup && g.orders.some(o => o.pickupWatch); // самовывоз только под контролем (без погрузки)
               const isOneOff = g.orders.some(o => o.oneOff);
               const worker = isPickup ? drivers.find(d => d.id === g.orders.find(o => o.loaderId)?.loaderId) : driver;
               const statuses = [...new Set(g.orders.map(o => o.status))];
@@ -879,7 +885,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && <Badge color="blue">🚶 Самовывоз</Badge>}{isOneOff && <Badge color="green">💰 разовая</Badge>}{g.orders.some(o => o.from_client) && <Badge color="blue">🌐 от клиента</Badge>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">👀 самовывоз · контроль</span> : <Badge color="blue">🚶 Самовывоз</Badge>)}{isOneOff && <Badge color="green">💰 разовая</Badge>}{g.orders.some(o => o.from_client) && <Badge color="blue">🌐 от клиента</Badge>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
@@ -950,9 +956,12 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       {isPickup && (
                         <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].loaderId || ""} onChange={e => assignLoaderGroup(g, e.target.value)}>
-                          <option value="">📦 Грузчик</option>
+                          <option value="">{g.orders[0].pickupWatch ? "👀 Кто следит" : "📦 Грузчик"}</option>
                           {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                         </select>
+                      )}
+                      {isPickup && (
+                        <button onClick={() => setGroupWatch(g, !g.orders[0].pickupWatch)} className={`text-xs rounded-lg px-2 py-1.5 font-medium ${g.orders[0].pickupWatch ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"}`} title="Грузим сами / только контроль (клиент грузит сам)">{g.orders[0].pickupWatch ? "👀 Контроль" : "📦 Грузим"}</button>
                       )}
                       {!allShipped
                         ? <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Отгрузить</Btn>
@@ -978,7 +987,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     </div>
                     )
                   ) : (
-                    <div className="text-xs text-gray-400 mt-1">{worker ? `${isPickup ? "📦" : "🚛"} ${worker.name}` : ""}</div>
+                    <div className="text-xs text-gray-400 mt-1">{worker ? `${isPickup ? (g.orders[0].pickupWatch ? "👀" : "📦") : "🚛"} ${worker.name}${isPickup && g.orders[0].pickupWatch ? " · контроль" : ""}` : ""}</div>
                   )}
                 </div>
                 </Fragment>
@@ -2649,12 +2658,15 @@ function brigadeSalary(d, kg) {
 function brigadePickupLoad(d, drivers, orders, ym) {
   const rate = Number(d.load_rate_per_kg) || 2.7;
   const brigade = [d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)];
+  const inb = new Set(brigade);
   const per = brigade.map(id => ({
     id, name: drivers.find(x => x.id === id)?.name || "?", me: id === d.id,
-    kg: orders.filter(o => o.status === "отгружена" && o.pickup && o.loaderId === id && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0),
+    kg: orders.filter(o => o.status === "отгружена" && o.pickup && !o.pickupWatch && o.loaderId === id && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0),
   })).filter(x => x.kg > 0);
   const kg = per.reduce((s, x) => s + x.kg, 0);
-  return { rate, per, kg, pay: Math.round(kg * rate) };
+  // 👀 «только контроль» — клиент грузил сам, бригада проследила: тоннаж для статистики, но БЕЗ оплаты
+  const watchKg = orders.filter(o => o.status === "отгружена" && o.pickup && o.pickupWatch && inb.has(o.loaderId) && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  return { rate, per, kg, pay: Math.round(kg * rate), watchKg };
 }
 
 function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdit = true }) {
@@ -2703,7 +2715,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   const earnings = {}, loadEarn = {};
   orders.filter(o => o.status === "отгружена").forEach(o => {
     if (o.driverId && !o.pickup) { const d = drivers.find(x => x.id === o.driverId); if (d && d.salary_type !== "brigadir" && d.salary_type !== "junior") earnings[o.driverId] = (earnings[o.driverId] || 0) + o.bags * o.bag_kg * (d.rate_per_kg || 0); }
-    if (o.pickup && o.loaderId) { const d = drivers.find(x => x.id === o.loaderId); if (d && d.salary_type !== "brigadir" && d.salary_type !== "junior") loadEarn[o.loaderId] = (loadEarn[o.loaderId] || 0) + o.bags * o.bag_kg * (d.load_rate_per_kg || 0); }
+    if (o.pickup && o.loaderId && !o.pickupWatch) { const d = drivers.find(x => x.id === o.loaderId); if (d && d.salary_type !== "brigadir" && d.salary_type !== "junior") loadEarn[o.loaderId] = (loadEarn[o.loaderId] || 0) + o.bags * o.bag_kg * (d.load_rate_per_kg || 0); }
   });
   // Выплаты: зарплата (уменьшает долг) и доплаты за доп. работу (НЕ уменьшают долг)
   const wagePaid = {}, extraPaid = {};
@@ -2816,7 +2828,8 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
                 {sv.kg > 0 ? (<>
                   {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600">{x.me ? "👷 " : "🚙 "}{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
                   <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold">Итого за погрузку</span><b>+{fmt(sv.pay)} тг</b></div>
-                </>) : <div className="text-gray-400">Самовывоза в этом месяце не было.</div>}
+                </>) : <div className="text-gray-400">Самовывоза (с погрузкой) в этом месяце не было.</div>}
+                {sv.watchKg > 0 && <div className="flex justify-between border-t border-gray-200 pt-1 mt-1 text-purple-800"><span>👀 На контроле (клиент грузил сам)</span><b>{fmt(sv.watchKg)} кг · без оплаты</b></div>}
               </div>
               <div className="flex justify-between bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm"><span className="font-bold text-amber-800">Всего к начислению</span><b className="text-amber-800">{fmt(grand)} тг</b></div>
               <div className="bg-white border border-gray-100 rounded-xl p-3 text-sm">
@@ -2834,11 +2847,12 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
         }
         // 🚛 Обычный водитель/грузчик — по дням
         const byDate = {};
-        orders.filter(o => o.status === "отгружена" && ((o.driverId === d.id && !o.pickup) || (o.pickup && o.loaderId === d.id))).forEach(o => {
+        orders.filter(o => o.status === "отгружена" && ((o.driverId === d.id && !o.pickup) || (o.pickup && o.loaderId === d.id && !o.pickupWatch))).forEach(o => {
           const rec = byDate[o.date] = byDate[o.date] || { delivKg: 0, loadKg: 0 };
           if (o.pickup) rec.loadKg += o.bags * o.bag_kg; else rec.delivKg += o.bags * o.bag_kg;
         });
         const days = Object.entries(byDate).map(([date, v]) => ({ date, ...v, owed: Math.round(v.delivKg * (d.rate_per_kg || 0) + v.loadKg * (d.load_rate_per_kg || 0)) })).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const watchKg = orders.filter(o => o.status === "отгружена" && o.pickup && o.pickupWatch && o.loaderId === d.id).reduce((s, o) => s + o.bags * o.bag_kg, 0); // на контроле — без оплаты
         return (<Modal title={`🚛 ${d.name} — детали`} onClose={() => setDetailDriver(null)}>
           <div className="space-y-4">
             <div>
@@ -2849,6 +2863,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
                 </div>
               )}
             </div>
+            {watchKg > 0 && <div className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 text-sm text-purple-800">👀 На контроле (клиент грузил сам): <b>{fmt(watchKg)} кг</b> — без оплаты, для учёта.</div>}
             {paysBlock}
           </div>
         </Modal>);
@@ -2860,7 +2875,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           const isJunior = d.salary_type === "junior";
           const foreman = isJunior ? drivers.find(x => x.id === d.foremanId) : null;
           const juniors = isBrig ? drivers.filter(x => x.foremanId === d.id) : [];
-          const monthKg = isBrig ? brigadeKgMonth(d, salMonth) : orders.filter(o => o.status === "отгружена" && ((o.driverId === d.id && !o.pickup) || (o.pickup && o.loaderId === d.id)) && (o.date || "").startsWith(salMonth)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+          const monthKg = isBrig ? brigadeKgMonth(d, salMonth) : orders.filter(o => o.status === "отгружена" && ((o.driverId === d.id && !o.pickup) || (o.pickup && o.loaderId === d.id && !o.pickupWatch)) && (o.date || "").startsWith(salMonth)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
           const eDeliv = earnings[d.id] || 0, eLoad = loadEarn[d.id] || 0;
           const wage = wagePaid[d.id] || 0;
           const extra = extraPaid[d.id] || 0;
@@ -4239,7 +4254,8 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
   if (me.salary_type !== "brigadir") {
     const inMonth = o => o.status === "отгружена" && (o.date || "").startsWith(month);
     const myDeliv = orders.filter(o => inMonth(o) && o.driverId === me.id && !o.pickup).reduce((s, o) => s + o.bags * o.bag_kg, 0);
-    const myLoad = orders.filter(o => inMonth(o) && o.pickup && o.loaderId === me.id).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+    const myLoad = orders.filter(o => inMonth(o) && o.pickup && !o.pickupWatch && o.loaderId === me.id).reduce((s, o) => s + o.bags * o.bag_kg, 0);
+    const myWatch = orders.filter(o => inMonth(o) && o.pickup && o.pickupWatch && o.loaderId === me.id).reduce((s, o) => s + o.bags * o.bag_kg, 0);
     const myKg = myDeliv + myLoad;
     const estimate = Math.round(myDeliv * (me.rate_per_kg || 0) + myLoad * (me.load_rate_per_kg || 0));
     const isJunior = me.salary_type === "junior";
@@ -4255,6 +4271,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
         {isJunior
           ? <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">Сумму за развоз тебе скажет бригадир{foreman ? ` — ${foreman.name}` : ""}. Здесь виден только твой объём за месяц.</div>
           : <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">По ставкам ({fmt(me.rate_per_kg || 0)} тг/кг развоз{myLoad > 0 ? `, ${fmt(me.load_rate_per_kg || 0)} тг/кг погрузка` : ""}) это ≈ <b className="text-gray-900">{fmt(estimate)} тг</b> за месяц. Итог и выплаты — у администратора.</div>}
+        {myWatch > 0 && <div className="bg-purple-50 border border-purple-100 rounded-2xl p-3 text-sm text-purple-800">👀 На контроле (клиент грузил сам): <b>{fmt(myWatch)} кг</b> — без оплаты, для учёта.</div>}
       </div>
     );
   }
@@ -4292,7 +4309,8 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
         {sv.kg > 0 ? (<>
           {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600">{x.me ? "👷 " : "🚙 "}{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
           <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого за погрузку</span><b>+{fmt(sv.pay)} тг</b></div>
-        </>) : <div className="text-gray-400">Самовывоза в этом месяце не было.</div>}
+        </>) : <div className="text-gray-400">Самовывоза (с погрузкой) в этом месяце не было.</div>}
+        {sv.watchKg > 0 && <div className="flex justify-between border-t border-gray-100 pt-1 mt-1 text-purple-800"><span>👀 На контроле (клиент грузил сам)</span><b>{fmt(sv.watchKg)} кг · без оплаты</b></div>}
       </div>
 
       <div className="flex justify-between bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3"><span className="font-bold text-emerald-800">Всего к начислению</span><b className="text-emerald-800 text-lg">{fmt(grand)} тг</b></div>
@@ -5641,6 +5659,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
     const grpDriver = group.orders.find(o => o.driverId)?.driverId || ""; // водитель заявки (с любой позиции)
     const grpPickup = group.orders.some(o => o.pickup); // самовывоз
     const grpLoader = group.orders.find(o => o.loaderId)?.loaderId || ""; // грузчик заявки
+    const grpWatch = group.orders.some(o => o.pickupWatch); // самовывоз только под контролем (без погрузки)
     // Фото (накладные) и отметку доставки собираем со всей заявки и переносим на первую позицию — чтобы не потерять при удалении позиции
     const allPhotos = [...new Set(group.orders.flatMap(o => o.photos || []))];
     const anyDelivered = group.orders.some(o => o.delivered_by_driver);
@@ -5653,7 +5672,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
           const orig = group.orders.find(o => o.id === p.id);
           return dbUpsert("orders", { ...orig, date, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
         }
-        return dbUpsert("orders", { id: uid(), date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
+        return dbUpsert("orders", { id: uid(), date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, pickupWatch: grpWatch, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
       }));
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
       await Promise.all(group.orders.filter(o => !keep.has(o.id)).map(o => dbDelete("orders", o.id)));
@@ -5774,7 +5793,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const [showManual, setShowManual] = useState(false);
   const [savingManual, setSavingManual] = useState(false);
   const [editGroup, setEditGroup] = useState(null);
-  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "", pickup: false, loaderId: "", oneOff: false, oneOffName: "", payMethod: "Нал", oneOffAddress: "", gis_link: "", coords: null });
+  const [form, setForm] = useState({ clientId: "", brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", date: TODAY(), driverId: "", price_per_kg: "", isSample: false, sampleName: "", trial: false, note: "", pickup: false, loaderId: "", pickupWatch: false, oneOff: false, oneOffName: "", payMethod: "Нал", oneOffAddress: "", gis_link: "", coords: null });
   // Позиции разовой продажи (несколько сортов/цен за раз) + определение точки 2ГИС
   const ooBlank = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
   const [ooPos, setOoPos] = useState([{ ...ooBlank }]);
@@ -5795,7 +5814,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 
   const local = orders.filter(o => !o.fromKaraganda); // карагандинские отгрузки тут не показываем
   const loadRows = local.filter(o => o.foreignLoad); // сводная загрузка чужих заявок (торгпред) — только тоннаж/число
-  const vis = (driverFilter != null ? local.filter(o => o.driverId === driverFilter) : local).filter(o => !o.foreignLoad);
+  const vis = (driverFilter != null ? local.filter(o => o.driverId === driverFilter || o.loaderId === driverFilter) : local).filter(o => !o.foreignLoad);
   const groupCount = list => new Set(list.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
   const todayList = vis.filter(o => o.date === TODAY());
   const tomorrowList = vis.filter(o => o.date === TOMORROW());
@@ -5963,7 +5982,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
         id: uid(), date: form.date, brand: form.brand, grade: form.grade,
         bag_kg: Number(form.bag_kg), bags: Number(form.bags),
         driverId: form.pickup ? "" : (form.driverId || inheritedDriver),
-        pickup: !!form.pickup, loaderId: form.pickup ? (form.loaderId || "") : "",
+        pickup: !!form.pickup, loaderId: form.pickup ? (form.loaderId || "") : "", pickupWatch: !!form.pickup && !!form.pickupWatch,
         price_per_kg: Number(price), status: "новая",
         isSample: form.isSample, trial: isTrial, note: form.note || "",
         clientId: form.isSample ? null : form.clientId,
@@ -6070,6 +6089,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               const prevShipped = gi > 0 && arr[gi - 1].orders.every(o => o.status === "отгружена");
               const shippedCount = arr.filter(x => x.orders.every(o => o.status === "отгружена")).length;
               const isPickup = g.orders.some(o => o.pickup);
+              const isWatch = isPickup && g.orders.some(o => o.pickupWatch); // самовывоз только под контролем
               const isOneOff = g.orders.some(o => o.oneOff);
               const worker = drivers.find(d => d.id === (isPickup ? g.orders.find(o => o.loaderId)?.loaderId : g.orders.find(o => o.driverId)?.driverId));
               return (
@@ -6077,7 +6097,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                 {shipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚶 Самовывоз</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">💰 разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">🌐 от клиента</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isWatch ? "text-purple-700 bg-purple-100" : "text-sky-700 bg-sky-100"}`}>{isWatch ? "👀 Самовывоз · контроль" : "🚶 Самовывоз"}</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">💰 разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">🌐 от клиента</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}</span>
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
                   </div>
                   <div className="space-y-1">
@@ -6089,7 +6109,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                     ))}
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-bold text-amber-900 bg-amber-100 border-2 border-amber-400 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-base leading-none">📝</span><span className="break-words">{n}</span></div>)}
-                  {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? "📦 Грузчик: " : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
+                  {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? (isWatch ? "👀 Контроль: " : "📦 Грузчик: ") : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
                   {(() => {
                     // Куда, как пройти и маршрут — чтобы понимать направление движения водителя
@@ -6158,7 +6178,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           )}
           {!form.isSample && !form.oneOff && (
             <label className="flex items-center gap-2 mb-3 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
-              <input type="checkbox" checked={form.pickup} onChange={e => setForm({ ...form, pickup: e.target.checked, driverId: "" })} className="w-4 h-4 accent-sky-500" />
+              <input type="checkbox" checked={form.pickup} onChange={e => setForm({ ...form, pickup: e.target.checked, driverId: "", pickupWatch: false })} className="w-4 h-4 accent-sky-500" />
               <span className="text-sm font-medium text-gray-700">🚶 Самовывоз — клиент забирает сам (вместо водителя выбери грузчика)</span>
             </label>
           )}
@@ -6217,7 +6237,14 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             {!form.trial && <Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" min="0" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
             <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             {form.pickup
-              ? <div className="col-span-2"><Sel label="📦 Грузчик (кто отгрузит)" value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} /></div>
+              ? <div className="col-span-2 space-y-2">
+                  <Sel label={form.pickupWatch ? "👀 Кто проследит (контроль)" : "📦 Грузчик (кто отгрузит)"} value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: false })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${!form.pickupWatch ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}>📦 Грузим сами</button>
+                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: true })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.pickupWatch ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-600"}`}>👀 Только контроль</button>
+                  </div>
+                  {form.pickupWatch && <p className="text-xs text-purple-700 bg-purple-50 rounded-lg px-2 py-1">Клиент грузит сам, наш человек только следит, что забрали. Заявку он видит, но оплата за погрузку не начисляется.</p>}
+                </div>
               : <div className="col-span-2"><Sel label={isRep ? "🚚 Бригадир (он распределит)" : "🚚 Водитель"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— назначить позже —" }, ...driverPickOptions]} /></div>}
             <div className="col-span-2"><Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
