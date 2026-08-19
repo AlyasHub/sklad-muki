@@ -655,6 +655,15 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
   });
   // Сводная загрузка чужих заявок (торгпред) тоже влияет на «занятость дня» в календаре
   loadRows.forEach(o => { kgByDate[o.date] = (kgByDate[o.date] || 0) + (o.kg || 0); countByDate[o.date] = (countByDate[o.date] || 0) + (o.count || 0); });
+  // Статус дня для календаря: всё отгружено → зелёный, есть неотгруженные → жёлтый (чтобы сразу видеть, где забыли подтвердить отгрузку). Отменённые не считаем.
+  const shipByDate = {};
+  [...vis, ...karagandaVis].forEach(o => {
+    if (o.status === "отменена") return;
+    const r = shipByDate[o.date] = shipByDate[o.date] || { total: 0, shipped: 0 };
+    r.total++;
+    if (o.status === "отгружена") r.shipped++;
+  });
+  const dayShip = ds => { const r = shipByDate[ds]; return !r || r.total === 0 ? null : (r.shipped === r.total ? "done" : "pending"); };
 
   const cells = [];
   for (let i = 0; i < startOffset; i++) cells.push(null);
@@ -798,20 +807,28 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
           {cells.map((ds, i) => {
             if (!ds) return <div key={i} />;
             const dayNum = Number(ds.split("-")[2]);
-            const kg = kgByDate[ds] || 0;
             const cnt = countByDate[ds] || 0;
             const isToday = ds === TODAY();
             const isSelected = ds === selected;
+            const st = dayShip(ds); // "done" | "pending" | null
+            let cls = "aspect-square rounded-lg flex flex-col items-center justify-center text-sm relative transition-all ";
+            if (isSelected && !st) cls += "bg-amber-500 text-white ";
+            else if (st === "done") cls += "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 ";
+            else if (st === "pending") cls += "bg-amber-200 text-amber-900 hover:bg-amber-300 ";
+            else cls += "text-gray-600 hover:bg-gray-100 ";
+            if (isSelected && st) cls += "ring-2 ring-gray-800 font-bold ";
+            else if (isToday && !isSelected) cls += "ring-2 ring-amber-400 ";
             return (
-              <button key={ds} onClick={() => setSelected(ds)}
-                className={`aspect-square rounded-lg flex flex-col items-center justify-center text-sm relative transition-all
-                  ${isSelected ? "bg-amber-500 text-white" : cnt > 0 ? "bg-amber-50 hover:bg-amber-100 text-gray-800" : "hover:bg-gray-100 text-gray-600"}
-                  ${isToday && !isSelected ? "ring-2 ring-amber-400" : ""}`}>
+              <button key={ds} onClick={() => setSelected(ds)} className={cls}>
                 <span className={isToday ? "font-bold" : ""}>{dayNum}</span>
-                {cnt > 0 && <span className={`text-[9px] leading-none mt-0.5 ${isSelected ? "text-amber-100" : "text-amber-600"}`}>{cnt} зак.</span>}
+                {cnt > 0 && <span className={`text-[9px] leading-none mt-0.5 ${st === "done" ? "text-emerald-700" : st === "pending" ? "text-amber-800" : "text-gray-400"}`}>{st === "done" ? "✓ " : st === "pending" ? "● " : ""}{cnt} зак.</span>}
               </button>
             );
           })}
+        </div>
+        <div className="flex items-center justify-center gap-4 mt-3 text-xs text-gray-500">
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-emerald-200 inline-block"></span>всё отгружено</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-200 inline-block"></span>есть неотгруженные</span>
         </div>
       </div>
 
