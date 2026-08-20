@@ -454,6 +454,18 @@ const ICONS = {
   sparkle: '<path d="M12 3l1.8 4.7L18.5 9l-4.7 1.3L12 15l-1.8-4.7L5.5 9l4.7-1.3z"/><path d="M18.5 15l.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6z"/>',
   chat: '<path d="M4 12a8 8 0 1 1 3.6 6.7L4 20l1.3-3.6A8 8 0 0 1 4 12z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01"/>',
   pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
+  gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v8h14v-8"/><path d="M12 8v12"/><path d="M12 8C10.5 8 8 7.6 8 5.9 8 4.8 8.8 4 9.9 4 11.6 4 12 6.5 12 8z"/><path d="M12 8c1.5 0 4-.4 4-2.1C16 4.8 15.2 4 14.1 4 12.4 4 12 6.5 12 8z"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.5"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/>',
+  user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+  note: '<path d="M5 4h14a1 1 0 0 1 1 1v10l-5 5H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M15 20v-4a1 1 0 0 1 1-1h4"/><path d="M8 9h8M8 13h4"/>',
+  pin: '<path d="M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  camera: '<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.2"/>',
+  bag: '<path d="M6 8h12l-1 12H7z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
+  trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/>',
+  nav: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5 13 13l-4.5 2.5L11 11z"/>',
+  door: '<path d="M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17M4 21h16M14 12h.01"/>',
+  truckFast: '<path d="M3 6h11v10H3z"/><path d="M14 9h3.5l2.5 3v4h-6z"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>',
 };
 function Icon({ name, size = 22, className = "", stroke = 1.8 }) {
   const p = ICONS[name];
@@ -1326,13 +1338,13 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           {!form.isSample && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.trial} onChange={e => setForm({ ...form, trial: e.target.checked })} className="w-4 h-4 accent-orange-500" />
-              <span className="text-sm font-medium text-gray-700">🎁 На пробу — клиенту из базы (бесплатно, маршрут строится, без накладной)</span>
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="gift" size={16} className="text-orange-500 shrink-0" />На пробу — клиенту из базы (бесплатно, маршрут строится, без накладной)</span>
             </label>
           )}
           {!form.trial && (
             <label className="flex items-center gap-2 mb-3 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
-              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно или по цене, без маршрута)</span>
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="flask" size={16} className="text-amber-600 shrink-0" />Проба новой компании — нет в базе (бесплатно или по цене, без маршрута)</span>
             </label>
           )}
           <div className="grid grid-cols-2 gap-3">
@@ -5802,12 +5814,12 @@ function NotesBlock({ notes = [], me = "", canEdit = true, reload = () => {} }) 
   const hasNotes = !!text.trim();
 
   if (!open && !hasNotes) return (
-    <button onClick={() => setOpen(true)} className="w-full text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl py-2.5 font-medium hover:bg-amber-100">📝 Общие заметки — открыть</button>
+    <button onClick={() => setOpen(true)} className="w-full text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl py-2.5 font-medium hover:bg-amber-100 inline-flex items-center justify-center gap-1.5"><Icon name="note" size={15} />Общие заметки — открыть</button>
   );
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
       <div className="flex items-center justify-between mb-2">
-        <div className="font-bold text-amber-900">📝 Общие заметки</div>
+        <div className="font-display font-semibold text-amber-900 flex items-center gap-1.5"><Icon name="note" size={16} />Общие заметки</div>
         <div className="flex gap-3 text-xs items-center">
           {savedFlash && <span className="text-emerald-600">✓ сохранено</span>}
           {canEdit && hasNotes && <button onClick={clearAll} className="text-gray-400 hover:text-red-500">очистить</button>}
@@ -6087,7 +6099,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             ))}
             <label className="flex items-center gap-2 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={aiPickup} onChange={e => { setAiPickup(e.target.checked); setAiDriver(""); }} className="w-4 h-4 accent-sky-500" />
-              <span className="text-sm font-medium text-gray-700">🚶 Самовывоз — клиент забирает сам (выбери грузчика)</span>
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="bag" size={16} className="text-sky-600 shrink-0" />Самовывоз — клиент забирает сам (выбери грузчика)</span>
             </label>
             {(() => { const ok = aiPickup || aiDriver; return (
             <div className={`rounded-xl p-3 border ${ok ? "bg-gray-50 border-gray-100" : "bg-orange-50 border-orange-200"}`}>
@@ -6150,20 +6162,20 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                 {shipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{shipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">🎁 на пробу</span>}{isPickup && <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isWatch ? "text-purple-700 bg-purple-100" : "text-sky-700 bg-sky-100"}`}>{isWatch ? "👀 Самовывоз · контроль" : "🚶 Самовывоз"}</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">💰 разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">🌐 от клиента</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}</span>
+                    <span className="font-semibold text-gray-900 flex items-center gap-1.5 flex-wrap">{shipped && <span className="text-emerald-600"><Icon name="check" size={18} stroke={2.4} /></span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="gift" size={12} />на пробу</span>}{isPickup && <span className={`text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isWatch ? "text-purple-700 bg-purple-100" : "text-sky-700 bg-sky-100"}`}><Icon name={isWatch ? "eye" : "bag"} size={12} />{isWatch ? "Самовывоз · контроль" : "Самовывоз"}</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="coin" size={12} />разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="globe" size={12} />от клиента</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="user" size={12} />торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}</span>
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
                   </div>
                   <div className="space-y-1">
                     {mergedPositions(g.orders).map((m, mi) => (
                       <div key={mi} className="flex items-center gap-2 flex-wrap text-sm">
-                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {m.bags} меш. × {m.bag_kg} кг</span>
-                        <span className="text-gray-600">= <b>{fmt(m.bags * m.bag_kg)} кг</b> · {m.brand} {m.grade}{m.trial ? " · 🎁 на пробу" : ""}</span>
+                        <span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{m.bags} меш. × {m.bag_kg} кг</span>
+                        <span className="text-gray-600">= <b>{fmt(m.bags * m.bag_kg)} кг</b> · {m.brand} {m.grade}{m.trial ? " · на пробу" : ""}</span>
                       </div>
                     ))}
                   </div>
-                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-bold text-amber-900 bg-amber-100 border-2 border-amber-400 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-base leading-none">📝</span><span className="break-words">{n}</span></div>)}
-                  {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1">{isPickup ? (isWatch ? "👀 Контроль: " : "📦 Грузчик: ") : "🚛 Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
-                  {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
+                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
+                  {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1 flex items-center gap-1"><Icon name={isPickup ? (isWatch ? "eye" : "bag") : "truck"} size={14} />{isPickup ? (isWatch ? "Контроль: " : "Грузчик: ") : "Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
+                  {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
                   {(() => {
                     // Куда, как пройти и маршрут — чтобы понимать направление движения водителя
                     const client = clients.find(c => c.id === g.clientId);
@@ -6174,27 +6186,27 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                     if (!addr && !access && !gis && !co) return null;
                     return (<>
                       <div className="flex items-center gap-2 flex-wrap mt-1 text-xs">
-                        {addr && !isOneOff && <span className="text-gray-500">📍 {addr}</span>}
-                        {gis && <a href={gis} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
-                        {co && <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a>}
+                        {addr && !isOneOff && <span className="text-gray-500 inline-flex items-center gap-1"><Icon name="pin" size={13} />{addr}</span>}
+                        {gis && <a href={gis} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pin" size={12} />2ГИС</a>}
+                        {co && <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="nav" size={12} />Маршрут сюда</a>}
                       </div>
-                      {access && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span>🚪</span><span className="break-words">{access}</span></div>}
+                      {access && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{access}</span></div>}
                     </>);
                   })()}
                   {canEdit && !g.orders.some(o => o.foreign) && (
                     <div className="mt-3 space-y-2">
                       <div className="flex gap-2 flex-wrap items-center">
-                        {allNew && !isPickup && !isOneOff && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>🚚 В путь</Btn>}
-                        {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>{isPickup ? "✓ Отгрузить" : "✓ Доставлено"}</Btn>}
+                        {allNew && !isPickup && !isOneOff && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}><Icon name="truck" size={15} />В путь</Btn>}
+                        {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}><Icon name="check" size={15} stroke={2.4} />{isPickup ? "Отгрузить" : "Доставлено"}</Btn>}
                         {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, (isPickup || isOneOff) ? "новая" : "в пути")}>↩ {(isPickup || isOneOff) ? "Отменить" : "Не доставлено"}</Btn>}
-                        {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}>➕ В клиенты</Btn>}
-                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => softInvoiceFromOrders(g, clients.find(c => c.id === g.clientId))}>🧾 Накладная</Btn>}
-                        <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}>✏️ Изменить</Btn>
-                        <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>🗑</Btn>
+                        {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}><Icon name="plus" size={15} />В клиенты</Btn>}
+                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => softInvoiceFromOrders(g, clients.find(c => c.id === g.clientId))}><Icon name="receipt" size={15} />Накладная</Btn>}
+                        <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}><Icon name="pencil" size={15} />Изменить</Btn>
+                        <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}><Icon name="trash" size={15} /></Btn>
                       </div>
                       {!shipped && (
                         <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap pt-1 border-t border-gray-50">
-                          <span>📅 Перенести:</span>
+                          <span className="inline-flex items-center gap-1"><Icon name="calendar" size={13} />Перенести:</span>
                           <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].date} onChange={e => rescheduleGroup(g, e.target.value)} />
                           <button className="text-amber-600 hover:text-amber-700 font-medium" onClick={() => rescheduleGroup(g, TOMORROW())}>→ на завтра</button>
                         </div>
@@ -6210,29 +6222,29 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
       </div>
 
       {showManual && (
-        <Modal title={form.oneOff ? "💰 Единичная реализация" : form.isSample ? "🧪 Пробник" : form.trial ? "🎁 На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
+        <Modal title={form.oneOff ? "Единичная реализация" : form.isSample ? "Пробник" : form.trial ? "На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
           {!form.isSample && !form.oneOff && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.trial} onChange={e => setForm({ ...form, trial: e.target.checked })} className="w-4 h-4 accent-orange-500" />
-              <span className="text-sm font-medium text-gray-700">🎁 На пробу — клиенту из базы (бесплатно, маршрут строится, без накладной)</span>
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="gift" size={16} className="text-orange-500 shrink-0" />На пробу — клиенту из базы (бесплатно, маршрут строится, без накладной)</span>
             </label>
           )}
           {!form.trial && !form.oneOff && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.isSample} onChange={e => setForm({ ...form, isSample: e.target.checked, trial: false })} className="w-4 h-4 accent-amber-500" />
-              <span className="text-sm font-medium text-gray-700">🧪 Проба новой компании — нет в базе (бесплатно или по цене, без маршрута)</span>
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="flask" size={16} className="text-amber-600 shrink-0" />Проба новой компании — нет в базе (бесплатно или по цене, без маршрута)</span>
             </label>
           )}
           {!form.trial && !form.isSample && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-emerald-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.oneOff} onChange={e => setForm({ ...form, oneOff: e.target.checked, pickup: false, driverId: "", clientId: "", date: TODAY() })} className="w-4 h-4 accent-emerald-500" />
-              <span className="text-sm font-medium text-gray-700">💰 Единичная реализация — покупатель не из базы, за деньги (несколько сортов, можно с доставкой)</span>
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="coin" size={16} className="text-emerald-600 shrink-0" />Единичная реализация — покупатель не из базы, за деньги (несколько сортов, можно с доставкой)</span>
             </label>
           )}
           {!form.isSample && !form.oneOff && (
             <label className="flex items-center gap-2 mb-3 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.pickup} onChange={e => setForm({ ...form, pickup: e.target.checked, driverId: "", pickupWatch: false })} className="w-4 h-4 accent-sky-500" />
-              <span className="text-sm font-medium text-gray-700">🚶 Самовывоз — клиент забирает сам (вместо водителя выбери грузчика)</span>
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="bag" size={16} className="text-sky-600 shrink-0" />Самовывоз — клиент забирает сам (вместо водителя выбери грузчика)</span>
             </label>
           )}
           {form.oneOff ? (
@@ -6267,7 +6279,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-                <Sel label="🚚 Кто повезёт" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— забрал сам —" }, ...driverPickOptions]} />
+                <Sel label="Кто повезёт" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— забрал сам —" }, ...driverPickOptions]} />
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Оплата</label>
@@ -6291,14 +6303,14 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             {form.pickup
               ? <div className="col-span-2 space-y-2">
-                  <Sel label={form.pickupWatch ? "👀 Кто проследит (контроль)" : "📦 Грузчик (кто отгрузит)"} value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+                  <Sel label={form.pickupWatch ? "Кто проследит (контроль)" : "Грузчик (кто отгрузит)"} value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: false })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${!form.pickupWatch ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}>📦 Грузим сами</button>
-                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: true })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.pickupWatch ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-600"}`}>👀 Только контроль</button>
+                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: false })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${!form.pickupWatch ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="bag" size={15} />Грузим сами</button>
+                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: true })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${form.pickupWatch ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="eye" size={15} />Только контроль</button>
                   </div>
                   {form.pickupWatch && <p className="text-xs text-purple-700 bg-purple-50 rounded-lg px-2 py-1">Клиент грузит сам, наш человек только следит, что забрали. Заявку он видит, но оплата за погрузку не начисляется.</p>}
                 </div>
-              : <div className="col-span-2"><Sel label={isRep ? "🚚 Бригадир (он распределит)" : "🚚 Водитель"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— назначить позже —" }, ...driverPickOptions]} /></div>}
+              : <div className="col-span-2"><Sel label={isRep ? "Бригадир (он распределит)" : "Водитель"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— назначить позже —" }, ...driverPickOptions]} /></div>}
             <div className="col-span-2"><Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
           </div>
           )}
