@@ -2487,7 +2487,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
             <Inp label="Адрес доставки" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
             <div>
-              <div className="text-sm font-medium text-gray-700 mb-1">🚪 Как пройти / ориентиры</div>
+              <div className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="door" size={15} />Как пройти / ориентиры</div>
               <textarea rows={2} value={form.access_note || ""} onChange={e => setForm({ ...form, access_note: e.target.value })} placeholder="напр. от шлагбаума направо, вход в здание, 2 этаж, дверь справа" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
               <div className="text-xs text-gray-400 mt-0.5">Покажется водителю в каждой заявке этого клиента — писать каждый раз не нужно.</div>
             </div>
@@ -2524,7 +2524,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <div>
               <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value, coords: null })} placeholder="https://2gis.kz/astana/geo/..." />
               <div className="flex items-center gap-2 mt-2">
-                <Btn size="sm" variant="secondary" onClick={handleResolve} disabled={resolving || !form.gis_link}>{resolving ? "Определяю..." : "📍 Определить координаты"}</Btn>
+                <Btn size="sm" variant="secondary" onClick={handleResolve} disabled={resolving || !form.gis_link}>{resolving ? "Определяю..." : "Определить координаты"}</Btn>
                 {form.coords && <span className="text-xs text-emerald-600">✓ {form.coords.lat.toFixed(5)}, {form.coords.lon.toFixed(5)}</span>}
               </div>
               {resolveErr && <p className="text-xs text-red-500 mt-1">{resolveErr}. Введи координаты вручную ниже.</p>}
@@ -2564,15 +2564,15 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               <div className="flex items-start justify-between">
                 <div>
                   <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
-                  {c.org_name && <div className="text-sm text-gray-500">🏢 {c.org_name}</div>}
+                  {c.org_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="building" size={13} />{c.org_name}</div>}
                   {c.contact_name && <div className="text-sm text-gray-500">👤 {c.contact_name}</div>}
-                  {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
+                  {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
                   {c.contact && <div className="text-sm text-gray-500">📱 {c.contact}</div>}
                   <div className="text-xs text-gray-500 mt-1">🕒 {last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
-                  {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">📦 {c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
+                  {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-flex items-center gap-1"><Icon name="box" size={12} />{c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
                   {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
                 </div>
-                {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}>✕</Btn></div>}
+                {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}><Icon name="trash" size={15} /></Btn></div>}
               </div>
               <div className="flex gap-2 flex-wrap">
                 <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
@@ -2590,7 +2590,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <div key={g.key} className="space-y-3">
               <div className="flex items-center justify-between pt-1 border-b border-gray-100 pb-1">
                 <h4 className="font-bold text-gray-700">{g.key === "" ? "🏠 " : "🧑‍💼 "}{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
-                {canEdit && g.key !== "orphan" && <button onClick={() => renameGroup(g)} className="text-xs text-amber-600 hover:text-amber-700">✏️ переименовать</button>}
+                {canEdit && g.key !== "orphan" && <button onClick={() => renameGroup(g)} className="text-xs text-amber-600 hover:text-amber-700 inline-flex items-center gap-1"><Icon name="pencil" size={12} />переименовать</button>}
               </div>
               {g.items.map(card)}
             </div>
@@ -2641,7 +2641,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             {canEdit && (
               <div className="mb-3">
                 {!showPayForm ? (
-                  <Btn size="sm" onClick={() => { setShowPayForm(true); setPayForm({ amount: "", method: "Наличные", date: TODAY(), note: "" }); }}>💰 Клиент закинул сумму</Btn>
+                  <Btn size="sm" onClick={() => { setShowPayForm(true); setPayForm({ amount: "", method: "Наличные", date: TODAY(), note: "" }); }}><Icon name="cash" size={15} />Клиент закинул сумму</Btn>
                 ) : (
                   <div className="border-2 border-emerald-200 bg-emerald-50 rounded-xl p-3 space-y-2">
                     <div className="text-xs text-gray-600">Сумма, которую клиент прислал в счёт общего долга — она уменьшит долг.</div>
@@ -2658,7 +2658,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                   <div className="mt-2 space-y-1">
                     {(payments || []).filter(p => p.clientId === historyClient.id).sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(p => (
                       <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
-                        <span className="text-gray-600">💰 {(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
+                        <span className="text-gray-600 inline-flex items-center gap-1"><Icon name="cash" size={13} className="text-emerald-600" />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
                         <span className="flex items-center gap-2"><b className="text-emerald-600">{fmt(p.amount)} тг</b><button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button></span>
                       </div>
                     ))}
@@ -2814,8 +2814,8 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <Sel label="Тип оплаты" value={form.salary_type} onChange={e => setForm({ ...form, salary_type: e.target.value })} options={[{ value: "kg", label: "Обычный — ставка за кг" }, { value: "brigadir", label: "Бригадир — оклад + тарифы" }, { value: "junior", label: "Младший водитель (платит бригадир)" }]} />
           {form.salary_type === "kg" && (<>
-            <Inp label="🚚 Ставка за развоз (водитель), тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} placeholder="напр. 3" />
-            <Inp label="📦 Ставка за отгрузку (грузчик), тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2" />
+            <Inp label="Ставка за развоз (водитель), тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} placeholder="напр. 3" />
+            <Inp label="Ставка за отгрузку (грузчик), тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2" />
           </>)}
           {form.salary_type === "junior" && (
             brigadirs.length === 0
@@ -2829,7 +2829,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
             <Inp label="Тариф до порога, тг/кг" type="number" value={form.tier1_rate} onChange={e => setForm({ ...form, tier1_rate: e.target.value })} />
             <Inp label="Порог второго тарифа, тонн/мес" type="number" value={form.tier1_to_t} onChange={e => setForm({ ...form, tier1_to_t: e.target.value })} />
             <Inp label="Тариф выше порога, тг/кг" type="number" value={form.tier2_rate} onChange={e => setForm({ ...form, tier2_rate: e.target.value })} />
-            <Inp label="📦 Погрузка самовывоза, тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2.7" />
+            <Inp label="Погрузка самовывоза, тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2.7" />
             <p className="text-xs text-gray-500">Пример: оклад 650000 (вкл. 60 т), 60–190 т по 6 тг/кг, свыше 190 т по 8 тг/кг. Считается по объёму всей бригады за месяц. Погрузка самовывоза (клиент забрал сам) — отдельно, в объём бригады НЕ входит.</p>
           </>)}
         </div>
@@ -2847,7 +2847,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           <Inp label="Дата" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
           <Inp label="Сумма выплаты, тг" type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} />
         </div>
-        <div className="flex gap-2 mt-4"><Btn onClick={doPay} disabled={saving || !payAmount}>{saving ? "Сохраняю..." : "💵 Выплатить"}</Btn><Btn variant="secondary" onClick={() => setPayDriver(null)}>Отмена</Btn></div>
+        <div className="flex gap-2 mt-4"><Btn onClick={doPay} disabled={saving || !payAmount}>{saving ? "Сохраняю..." : <><Icon name="cash" size={16} />Выплатить</>}</Btn><Btn variant="secondary" onClick={() => setPayDriver(null)}>Отмена</Btn></div>
       </Modal>)}
       {detailDriver && (() => {
         const d = detailDriver;
@@ -2873,7 +2873,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           const grand = b.total + sv.pay;
           const paidM = wagePaidMonth(d.id);
           const left = Math.max(0, grand - paidM);
-          return (<Modal title={`👷 ${d.name} — детали за ${salMonth}`} onClose={() => setDetailDriver(null)}>
+          return (<Modal title={`${d.name} — детали за ${salMonth}`} onClose={() => setDetailDriver(null)}>
             <div className="space-y-4">
               <div className="rounded-2xl p-4 bg-gradient-to-br from-amber-500 to-amber-600 text-white">
                 <div className="text-sm opacity-90">Зарплата за месяц</div>
@@ -2881,7 +2881,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
                 <div className="text-sm opacity-90 mt-1 border-t border-white/30 pt-1">Развоз бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т){sv.kg > 0 ? <> · самовывоз: <b>{fmt(sv.kg)} кг</b></> : ""}</div>
               </div>
               <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
-                <div className="font-semibold text-gray-700 mb-1">🚚 За развоз (оклад + тарифы)</div>
+                <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="truck" size={15} />За развоз (оклад + тарифы)</div>
                 <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
                 <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
                 <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
@@ -2889,17 +2889,17 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
                 {b.toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё {fmt(b.toNext)} кг {b.nextLabel}</div>}
               </div>
               <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
-                <div className="font-semibold text-gray-700 mb-1">📦 Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
+                <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="box" size={15} />Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
                 {sv.kg > 0 ? (<>
-                  {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600">{x.me ? "👷 " : "🚙 "}{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
+                  {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600"><Icon name={x.me ? "user" : "truck"} size={12} className="inline-block mr-1 align-[-2px]" />{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
                   <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold">Итого за погрузку</span><b>+{fmt(sv.pay)} тг</b></div>
                 </>) : <div className="text-gray-400">Самовывоза (с погрузкой) в этом месяце не было.</div>}
-                {sv.watchKg > 0 && <div className="flex justify-between border-t border-gray-200 pt-1 mt-1 text-purple-800"><span>👀 На контроле (клиент грузил сам)</span><b>{fmt(sv.watchKg)} кг · без оплаты</b></div>}
+                {sv.watchKg > 0 && <div className="flex justify-between border-t border-gray-200 pt-1 mt-1 text-purple-800"><span className="inline-flex items-center gap-1"><Icon name="eye" size={13} />На контроле (клиент грузил сам)</span><b>{fmt(sv.watchKg)} кг · без оплаты</b></div>}
               </div>
               <div className="flex justify-between bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm"><span className="font-bold text-amber-800">Всего к начислению</span><b className="text-amber-800">{fmt(grand)} тг</b></div>
               <div className="bg-white border border-gray-100 rounded-xl p-3 text-sm">
                 <div className="font-semibold text-gray-700 mb-1">Сколько развёз каждый водитель</div>
-                {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}>{x.me ? "👷 " : "🚙 "}{x.name}{x.me ? " (бригадир)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
+                {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}><Icon name={x.me ? "user" : "truck"} size={12} className="inline-block mr-1 align-[-2px]" />{x.name}{x.me ? " (бригадир)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
                 {perDriver.every(x => x.kg === 0) && <div className="text-gray-400">Отгрузок за месяц ещё нет.</div>}
               </div>
               <div className="text-sm flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2">
@@ -2918,17 +2918,17 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
         });
         const days = Object.entries(byDate).map(([date, v]) => ({ date, ...v, owed: Math.round(v.delivKg * (d.rate_per_kg || 0) + v.loadKg * (d.load_rate_per_kg || 0)) })).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
         const watchKg = orders.filter(o => o.status === "отгружена" && o.pickup && o.pickupWatch && o.loaderId === d.id).reduce((s, o) => s + o.bags * o.bag_kg, 0); // на контроле — без оплаты
-        return (<Modal title={`🚛 ${d.name} — детали`} onClose={() => setDetailDriver(null)}>
+        return (<Modal title={`${d.name} — детали`} onClose={() => setDetailDriver(null)}>
           <div className="space-y-4">
             <div>
               <div className="font-semibold text-gray-700 mb-1">{d.salary_type === "junior" ? "По дням (развоз)" : "По дням (развоз + отгрузка)"}</div>
               {days.length === 0 ? <div className="text-gray-400 text-sm">Работы ещё не было</div> : (
                 <div className="space-y-1 max-h-60 overflow-y-auto">
-                  {days.map(x => <div key={x.date} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2"><span>{x.date.split("-").reverse().join(".")}{x.delivKg ? ` · 🚚 ${fmt(x.delivKg)}` : ""}{x.loadKg ? ` · 📦 ${fmt(x.loadKg)}` : ""} кг</span>{d.salary_type === "junior" ? <span className="text-gray-400">тоннаж</span> : <span className="font-medium">должны {fmt(x.owed)} тг</span>}</div>)}
+                  {days.map(x => <div key={x.date} className="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2"><span>{x.date.split("-").reverse().join(".")}{x.delivKg ? ` · развоз ${fmt(x.delivKg)}` : ""}{x.loadKg ? ` · погрузка ${fmt(x.loadKg)}` : ""} кг</span>{d.salary_type === "junior" ? <span className="text-gray-400">тоннаж</span> : <span className="font-medium">должны {fmt(x.owed)} тг</span>}</div>)}
                 </div>
               )}
             </div>
-            {watchKg > 0 && <div className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 text-sm text-purple-800">👀 На контроле (клиент грузил сам): <b>{fmt(watchKg)} кг</b> — без оплаты, для учёта.</div>}
+            {watchKg > 0 && <div className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 text-sm text-purple-800 flex items-center gap-1.5"><Icon name="eye" size={14} className="shrink-0" />На контроле (клиент грузил сам): <b>{fmt(watchKg)} кг</b> — без оплаты, для учёта.</div>}
             {paysBlock}
           </div>
         </Modal>);
@@ -2949,9 +2949,9 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
             <div key={d.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="font-bold text-gray-900 flex items-center gap-2">🚛 {d.name}
-                    {isBrig && <span className="text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">👷 Бригадир</span>}
-                    {isJunior && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">🚙 младший{foreman ? ` · ${foreman.name}` : ""}</span>}
+                  <div className="font-display font-semibold text-gray-900 flex items-center gap-2"><Icon name="truck" size={17} />{d.name}
+                    {isBrig && <span className="text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="user" size={11} />Бригадир</span>}
+                    {isJunior && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">младший{foreman ? ` · ${foreman.name}` : ""}</span>}
                   </div>
                   {isBrig ? (<>
                     <div className="text-xs text-gray-500 mt-0.5">Оклад {fmt(d.base_salary)} тг (вкл. {fmt(d.base_included_t)} т) · {fmt(d.base_included_t)}–{fmt(d.tier1_to_t)} т по {fmt(d.tier1_rate)} тг/кг · свыше {fmt(d.tier1_to_t)} т по {fmt(d.tier2_rate)} тг/кг</div>
@@ -2961,17 +2961,17 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
                   </>) : isJunior ? (
                     <div className="text-sm text-gray-500 mt-1">Развёз за {salMonth}: <b className="text-gray-700">{fmt(monthKg)} кг</b>. Зарплату платит бригадир{foreman ? ` ${foreman.name}` : ""} — в приложении не считаем.</div>
                   ) : (<>
-                    <div className="text-sm text-gray-500">🚚 развоз {fmt(d.rate_per_kg)} тг/кг · 📦 отгрузка {fmt(d.load_rate_per_kg || 0)} тг/кг</div>
+                    <div className="text-sm text-gray-500">развоз {fmt(d.rate_per_kg)} тг/кг · отгрузка {fmt(d.load_rate_per_kg || 0)} тг/кг</div>
                     <div className="text-sm mt-1">Развоз: <b>{fmt(eDeliv)} тг</b> · Отгрузка: <b>{fmt(eLoad)} тг</b></div>
                     <div className="text-sm">Всего заработал: <b>{fmt(eDeliv + eLoad)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(wage)} тг</span></div>
                     <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось выплатить: {fmt(left)} тг</div>
                   </>)}
                   {extra > 0 && <div className="text-xs text-amber-700 mt-0.5">Доплаты (доп. работа): {fmt(extra)} тг</div>}
                 </div>
-                {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(d)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}>✕</Btn></div>}
+                {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(d)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteDriver(d.id)}><Icon name="trash" size={15} /></Btn></div>}
               </div>
               <div className="flex gap-2 mt-3 flex-wrap">
-                {canEdit && !isJunior && <Btn size="sm" onClick={() => openPay(d, false)}>💵 Выплатить{isBrig ? " за месяц" : " зарплату"}</Btn>}
+                {canEdit && !isJunior && <Btn size="sm" onClick={() => openPay(d, false)}><Icon name="cash" size={15} />Выплатить{isBrig ? " за месяц" : " зарплату"}</Btn>}
                 {canEdit && <Btn size="sm" variant="secondary" onClick={() => openPay(d, true)}>+ Доплата</Btn>}
                 <Btn size="sm" variant="secondary" onClick={() => setDetailDriver(d)}>📋 Детали</Btn>
               </div>
@@ -3852,8 +3852,8 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
                 })()}
               </div>
               <div className="flex gap-1">
-                <Btn size="sm" variant="secondary" onClick={() => openEdit(u)}>✏️</Btn>
-                {u.id !== currentUser.id && <Btn size="sm" variant="danger" onClick={() => deleteUser(u.id)}>✕</Btn>}
+                <Btn size="sm" variant="secondary" onClick={() => openEdit(u)}><Icon name="pencil" size={15} /></Btn>
+                {u.id !== currentUser.id && <Btn size="sm" variant="danger" onClick={() => deleteUser(u.id)}><Icon name="trash" size={15} /></Btn>}
               </div>
             </div>
           );
@@ -4336,7 +4336,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
         {isJunior
           ? <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">Сумму за развоз тебе скажет бригадир{foreman ? ` — ${foreman.name}` : ""}. Здесь виден только твой объём за месяц.</div>
           : <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">По ставкам ({fmt(me.rate_per_kg || 0)} тг/кг развоз{myLoad > 0 ? `, ${fmt(me.load_rate_per_kg || 0)} тг/кг погрузка` : ""}) это ≈ <b className="text-gray-900">{fmt(estimate)} тг</b> за месяц. Итог и выплаты — у администратора.</div>}
-        {myWatch > 0 && <div className="bg-purple-50 border border-purple-100 rounded-2xl p-3 text-sm text-purple-800">👀 На контроле (клиент грузил сам): <b>{fmt(myWatch)} кг</b> — без оплаты, для учёта.</div>}
+        {myWatch > 0 && <div className="bg-purple-50 border border-purple-100 rounded-2xl p-3 text-sm text-purple-800 flex items-center gap-1.5"><Icon name="eye" size={14} className="shrink-0" />На контроле (клиент грузил сам): <b>{fmt(myWatch)} кг</b> — без оплаты, для учёта.</div>}
       </div>
     );
   }
@@ -4370,19 +4370,19 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
-        <div className="font-semibold text-gray-700 mb-1">📦 Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
+        <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="box" size={15} />Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
         {sv.kg > 0 ? (<>
-          {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600">{x.me ? "👷 " : "🚙 "}{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
+          {sv.per.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className="text-gray-600"><Icon name={x.me ? "user" : "truck"} size={12} className="inline-block mr-1 align-[-2px]" />{x.name}: {fmt(x.kg)} кг × {fmt(sv.rate)}</span><b>+{fmt(Math.round(x.kg * sv.rate))} тг</b></div>)}
           <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого за погрузку</span><b>+{fmt(sv.pay)} тг</b></div>
         </>) : <div className="text-gray-400">Самовывоза (с погрузкой) в этом месяце не было.</div>}
-        {sv.watchKg > 0 && <div className="flex justify-between border-t border-gray-100 pt-1 mt-1 text-purple-800"><span>👀 На контроле (клиент грузил сам)</span><b>{fmt(sv.watchKg)} кг · без оплаты</b></div>}
+        {sv.watchKg > 0 && <div className="flex justify-between border-t border-gray-100 pt-1 mt-1 text-purple-800"><span className="inline-flex items-center gap-1"><Icon name="eye" size={13} />На контроле (клиент грузил сам)</span><b>{fmt(sv.watchKg)} кг · без оплаты</b></div>}
       </div>
 
       <div className="flex justify-between bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3"><span className="font-bold text-emerald-800">Всего к начислению</span><b className="text-emerald-800 text-lg">{fmt(grand)} тг</b></div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm">
         <div className="font-semibold text-gray-700 mb-1">По водителям бригады за {month}</div>
-        {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}>{x.me ? "👷 " : "🚙 "}{x.name}{x.me ? " (я)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
+        {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}><Icon name={x.me ? "user" : "truck"} size={12} className="inline-block mr-1 align-[-2px]" />{x.name}{x.me ? " (я)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
       </div>
 
       <div className="text-xs text-gray-400 text-center">Оклад {fmt(b.base)} тг (вкл. {fmt(b.incl / 1000)} т) · {fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т по {fmt(b.r1)} тг/кг · свыше {fmt(b.t1 / 1000)} т по {fmt(b.r2)} тг/кг. Погрузка самовывоза — отдельно, по {fmt(sv.rate)} тг/кг.</div>
@@ -4466,11 +4466,11 @@ function CrmTab({ crm = [], clients = [], reload }) {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{c.name}</span><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${st.cls}`}>{st.label}</span></div>
                   {c.contact && <div className="text-sm text-gray-500 mt-0.5">📱 {c.contact}</div>}
-                  {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
+                  {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
                   {c.next_date && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">🔔 связаться {(c.next_date || "").split("-").reverse().join(".")}</div>}
                   {c.note && <div className="text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-2 mt-1.5 whitespace-pre-wrap">{c.note}</div>}
                 </div>
-                <div className="flex gap-1 flex-shrink-0"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => del(c.id)}>✕</Btn></div>
+                <div className="flex gap-1 flex-shrink-0"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(c.id)}><Icon name="trash" size={15} /></Btn></div>
               </div>
               <div className="flex items-center gap-2 flex-wrap mt-3">
                 <select value={c.status} onChange={e => setStatus(c, e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-xs">
@@ -4536,7 +4536,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
               <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг</div>
               <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}</div>
             </div>
-            {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}>✕</Btn></div>}
+            {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}><Icon name="trash" size={15} /></Btn></div>}
           </div>
         ))}
       </div>
@@ -5187,10 +5187,10 @@ function KgdManagersTab({ kgdClients = [], kgdDocs = [], reload, canManage = tru
                   <div className="min-w-0">
                     <div className="font-bold text-gray-900">{c.name}</div>
                     {c.bin && <div className="text-sm text-gray-500">БИН/ИИН {c.bin}</div>}
-                    {c.address && <div className="text-sm text-gray-500">📍 {c.address}</div>}
+                    {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
                     {(c.products || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.products.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.name} — {fmt(p.price_kg)} тг/кг</span>)}</div>}
                   </div>
-                  {canManage && <div className="flex gap-1 flex-shrink-0"><Btn size="sm" variant="secondary" onClick={() => openEditClient(c)}>✏️</Btn><Btn size="sm" variant="danger" onClick={() => deleteKgdClient(c)}>✕</Btn></div>}
+                  {canManage && <div className="flex gap-1 flex-shrink-0"><Btn size="sm" variant="secondary" onClick={() => openEditClient(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteKgdClient(c)}><Icon name="trash" size={15} /></Btn></div>}
                 </div>
               </div>
             ))}
@@ -5471,12 +5471,12 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
   return (
     <div className="space-y-4">
       <div className="bg-gradient-to-br from-rose-50 to-red-50 border border-rose-100 rounded-2xl p-4 flex items-center justify-between">
-        <div className="font-bold text-gray-800">💰 Общий долг клиентов</div>
-        <div className="text-2xl font-black text-red-600">{fmt(grand)} тг</div>
+        <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={17} />Общий долг клиентов</div>
+        <div className="text-2xl font-display font-semibold text-red-600">{fmt(grand)} тг</div>
       </div>
-      <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «💵 Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
+      <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
       {list.length > 0 && !reconcile && (
-        <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium">📄 Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
+        <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
       )}
       {reconcile && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
@@ -5521,12 +5521,12 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
                     <div className="flex justify-between border-t border-emerald-200 mt-1 pt-1"><span className="font-medium">Остаток долга</span><b className={c.net > 0 ? "text-red-600" : "text-emerald-600"}>{c.net > 0 ? fmt(c.net) + " тг" : (c.net < 0 ? "переплата " + fmt(-c.net) : "0 тг")}</b></div>
                   </div>
                 )}
-                {canEdit && <Btn size="sm" onClick={() => openPay(c)}>💵 Внести оплату в счёт долга</Btn>}
+                {canEdit && <Btn size="sm" onClick={() => openPay(c)}><Icon name="cash" size={15} />Внести оплату в счёт долга</Btn>}
                 {pays.length > 0 && (
                   <div className="space-y-1">
                     {pays.map(p => (
                       <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
-                        <span className="text-gray-600">💵 {(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
+                        <span className="text-gray-600 inline-flex items-center gap-1"><Icon name="cash" size={13} className="text-emerald-600" />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
                         <span className="flex items-center gap-2"><b className="text-emerald-600">{fmt(p.amount)} тг</b>{canEdit && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить оплату">✕</button>}</span>
                       </div>
                     ))}
@@ -5553,7 +5553,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
       })}
 
       {payClient && (
-        <Modal title={`💵 Оплата — ${payClient.name}`} onClose={() => setPayClient(null)}>
+        <Modal title={`Оплата — ${payClient.name}`} onClose={() => setPayClient(null)}>
           <div className="text-xs text-gray-500 mb-3">Клиент прислал сумму в счёт общего долга. Она уменьшит его долг, конкретные отгрузки отмечать не нужно.</div>
           <div className="space-y-3">
             <Inp label="Сколько прислал, тг" type="number" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} />
@@ -5663,7 +5663,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
         return (
           <div key={date} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
             <div className="flex items-center justify-between mb-2">
-              <div className="font-bold text-gray-800">🚛 {date.split("-").reverse().join(".")}</div>
+              <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="truck" size={16} />{date.split("-").reverse().join(".")}</div>
               <div className="text-sm text-gray-500">{fmt(dayKg)} кг</div>
             </div>
             <div className="space-y-3">
@@ -5686,7 +5686,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
                         </div>
                       ))}
                     </div>
-                    {g.orders[0].note && <div className="text-xs text-gray-400 mt-1">📝 {g.orders[0].note}</div>}
+                    {g.orders[0].note && <div className="text-xs text-gray-400 mt-1 flex items-center gap-1"><Icon name="note" size={12} />{g.orders[0].note}</div>}
                     {canEdit && (
                       <div className="mt-2">
                         {shipped
@@ -6270,7 +6270,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               <div>
                 <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value, coords: null })} placeholder="https://2gis.kz/astana/geo/..." />
                 <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <Btn size="sm" variant="secondary" onClick={ooResolve} disabled={ooResolving || !form.gis_link}>{ooResolving ? "Ищу точку..." : "📍 Определить точку"}</Btn>
+                  <Btn size="sm" variant="secondary" onClick={ooResolve} disabled={ooResolving || !form.gis_link}>{ooResolving ? "Ищу точку..." : "Определить точку"}</Btn>
                   {form.coords
                     ? <span className="text-xs text-emerald-600 font-medium">✓ точка найдена — встанет в маршрут водителя</span>
                     : <span className="text-xs text-gray-400">без точки заявка в маршрут не попадёт</span>}
