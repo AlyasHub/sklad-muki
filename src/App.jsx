@@ -885,7 +885,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
           <h4 className="font-semibold text-gray-700">Отгрузки на {selected.split("-").reverse().join(".")}</h4>
           {dayKg > 0 && (() => {
             const leftKg = dayOrders.filter(o => o.status !== "отгружена").reduce((s, o) => s + o.bags * o.bag_kg, 0);
-            return <span className="text-sm text-gray-500">📦 {fmt(dayKg)} кг{leftKg > 0 ? <> · <b className="text-amber-700">осталось {fmt(leftKg)} кг</b></> : <> · <b className="text-emerald-600">✓ всё отгружено</b></>}</span>;
+            return <span className="text-sm text-gray-500 inline-flex items-center gap-1"><Icon name="box" size={13} />{fmt(dayKg)} кг{leftKg > 0 ? <> · <b className="text-amber-700">осталось {fmt(leftKg)} кг</b></> : <> · <b className="text-emerald-600">✓ всё отгружено</b></>}</span>;
           })()}
         </div>
         {!driverMode && dayOrders.length > 0 && (
@@ -902,7 +902,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
           return (
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-3">
               <div className="flex items-center justify-between mb-2 gap-2">
-                <span className="font-semibold text-slate-700 text-sm">🚛 Загрузка водителей</span>
+                <span className="font-semibold text-slate-700 text-sm flex items-center gap-1.5"><Icon name="truck" size={16} />Загрузка водителей</span>
                 <span className="text-xs text-slate-500">{tCnt} заявок · {fmt(tKg)} кг</span>
               </div>
               <div className="space-y-1">
@@ -910,7 +910,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   const dr = drivers.find(d => d.id === o.driverId);
                   return (
                     <div key={o.id} className="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5">
-                      <span className="text-slate-700">{dr ? `🚛 ${dr.name}` : "— не распределено —"}</span>
+                      <span className="text-slate-700 inline-flex items-center gap-1">{dr ? <><Icon name="truck" size={13} />{dr.name}</> : "— не распределено —"}</span>
                       <span className="text-slate-500">{o.count} заявок · <b className="text-slate-700">{fmt(o.kg)} кг</b></span>
                     </div>
                   );
@@ -953,30 +953,30 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">👀 самовывоз · контроль</span> : <Badge color="blue">🚶 Самовывоз</Badge>)}{isOneOff && <Badge color="green">💰 разовая</Badge>}{g.orders.some(o => o.from_client) && <Badge color="blue">🌐 от клиента</Badge>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
-                  {client?.org_name && <div className="text-xs text-gray-500">🏢 {client.org_name}</div>}
+                  {client?.org_name && <div className="text-xs text-gray-500 flex items-center gap-1"><Icon name="building" size={12} />{client.org_name}</div>}
                   <div className="mt-1 space-y-1">
                     {mergedPositions(g.orders).map((m, mi) => (
                       <div key={mi} className="text-gray-600 flex items-center gap-2 flex-wrap">
                         <span>• {m.brand} {m.grade}</span>
-                        <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {m.bags} меш. × {m.bag_kg} кг</span>
+                        <span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{m.bags} меш. × {m.bag_kg} кг</span>
                         <span>= <b>{fmt(m.bags * m.bag_kg)} кг</b></span>
                         {m.trial ? <span className="text-orange-600 font-medium">🎁 на пробу</span> : (showPrices && m.tg ? <span className="text-gray-400">· {fmt(m.tg)} тг</span> : null)}
                       </div>
                     ))}
                   </div>
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
-                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-bold text-amber-900 bg-amber-100 border-2 border-amber-400 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-base leading-none">📝</span><span className="break-words">{n}</span></div>)}
-                  {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5">📍 {g.orders[0].oneOffAddress}</div>}
-                  {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5">📍 {client?.address || g.orders[0].address}</div>}
-                  {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span>🚪</span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
+                  {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
+                  {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
+                  {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{client?.address || g.orders[0].address}</div>}
+                  {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
-                    {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 2ГИС</a>}
-                    {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">🧭 Маршрут сюда</a> : null; })()}
+                    {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pin" size={12} />2ГИС</a>}
+                    {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="nav" size={12} />Маршрут сюда</a> : null; })()}
                     {!driverMode && !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
-                    {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">🧾 Накладная PDF</button>}
-                    {!driverMode && canEdit && !g.orders.some(o => o.foreign) && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">✏️ Изменить</button>}
-                    {g.orders[0].created_by_name && <span>✍️ {g.orders[0].created_by_name}</span>}
+                    {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
+                    {!driverMode && canEdit && !g.orders.some(o => o.foreign) && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pencil" size={12} />Изменить</button>}
+                    {g.orders[0].created_by_name && <span className="inline-flex items-center gap-1"><Icon name="pencil" size={11} />{g.orders[0].created_by_name}</span>}
                   </div>
                   {gPhotos.length > 0 && (() => {
                     const photoAt = Object.assign({}, ...g.orders.map(o => o.photo_at || {})); // когда загружен каждый документ
@@ -992,27 +992,27 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                       </div>
                     );
                   })()}
-                  {anyClaim && !allConfirmed && <div className="text-xs text-amber-600 mt-1">🚚 Водитель отметил «доставил» — ждёт подтверждения</div>}
+                  {anyClaim && !allConfirmed && <div className="text-xs text-amber-600 mt-1 flex items-center gap-1"><Icon name="truck" size={13} />Водитель отметил «доставил» — ждёт подтверждения</div>}
                   {allConfirmed && <div className="text-xs text-emerald-600 mt-1">✓ Подтверждено</div>}
 
                   {(driverMode || foremanMode) ? (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       {foremanMode && !isPickup && !isOneOff && (
                         <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}>
-                          <option value="">🚛 Передать водителю</option>
+                          <option value="">Передать водителю…</option>
                           {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                         </select>
                       )}
                       {!allShipped && (allLoaded
                         ? <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, false)}>↩ Не загружен</Btn>
-                        : <Btn size="sm" onClick={() => loadGroup(g, true)}>📦 Загрузил</Btn>)}
+                        : <Btn size="sm" onClick={() => loadGroup(g, true)}><Icon name="box" size={15} />Загрузил</Btn>)}
                       {allShipped
                         ? <span className="text-sm font-bold text-emerald-700">✓ Доставка подтверждена</span>
                         : (allDelivered
                           ? <Btn size="sm" variant="secondary" onClick={() => driverMarkGroup(g, false)}>↩ Отменить «доставил»</Btn>
                           : <Btn size="sm" onClick={() => driverMarkGroup(g, true)}>✓ Доставил</Btn>)}
                       <label className={`cursor-pointer text-xs rounded-lg px-3 py-1.5 font-medium ${uploadingId === firstId ? "bg-gray-200 text-gray-400" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}>
-                        {uploadingId === firstId ? "Загрузка..." : "📷 Фото"}
+                        {uploadingId === firstId ? "Загрузка..." : <span className="inline-flex items-center gap-1"><Icon name="camera" size={14} />Фото</span>}
                         <input type="file" accept="image/*" capture="environment" hidden disabled={uploadingId === firstId} onChange={e => { addPhoto(g.orders[0], e.target.files[0]); e.target.value = ""; }} />
                       </label>
                     </div>
@@ -1021,38 +1021,38 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       {isPickup && (
                         <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].loaderId || ""} onChange={e => assignLoaderGroup(g, e.target.value)}>
-                          <option value="">{g.orders[0].pickupWatch ? "👀 Кто следит" : "📦 Грузчик"}</option>
+                          <option value="">{g.orders[0].pickupWatch ? "Кто следит…" : "Грузчик…"}</option>
                           {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                         </select>
                       )}
                       {isPickup && (
-                        <button onClick={() => setGroupWatch(g, !g.orders[0].pickupWatch)} className={`text-xs rounded-lg px-2 py-1.5 font-medium ${g.orders[0].pickupWatch ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"}`} title="Грузим сами / только контроль (клиент грузит сам)">{g.orders[0].pickupWatch ? "👀 Контроль" : "📦 Грузим"}</button>
+                        <button onClick={() => setGroupWatch(g, !g.orders[0].pickupWatch)} className={`text-xs rounded-lg px-2 py-1.5 font-medium ${g.orders[0].pickupWatch ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"}`} title="Грузим сами / только контроль (клиент грузит сам)"><span className="inline-flex items-center gap-1"><Icon name={g.orders[0].pickupWatch ? "eye" : "bag"} size={13} />{g.orders[0].pickupWatch ? "Контроль" : "Грузим"}</span></button>
                       )}
                       {!allShipped
                         ? <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Отгрузить</Btn>
                         : <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "новая")}>↩ Отменить</Btn>}
-                      {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}>➕ В клиенты</Btn>}
-                      <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
+                      {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}><Icon name="plus" size={15} />В клиенты</Btn>}
+                      <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}><Icon name="trash" size={15} /></Btn>
                     </div>
                     ) : (
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}>
-                        <option value="">🚛 Водитель</option>
+                        <option value="">Водитель…</option>
                         {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                       </select>
                       {!allShipped && (allLoaded
                         ? <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, false)}>↩ Не загружен</Btn>
-                        : <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, true)}>📦 Загрузил</Btn>)}
+                        : <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, true)}><Icon name="box" size={15} />Загрузил</Btn>)}
                       {anyClaim && !allConfirmed
                         ? <Btn size="sm" onClick={() => confirmGroup(g)}>✓ Подтвердить</Btn>
                         : (!allShipped
                           ? <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>
                           : <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>↩ Не доставлено</Btn>)}
-                      <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
+                      <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}><Icon name="trash" size={15} /></Btn>
                     </div>
                     )
                   ) : (
-                    <div className="text-xs text-gray-400 mt-1">{worker ? `${isPickup ? (g.orders[0].pickupWatch ? "👀" : "📦") : "🚛"} ${worker.name}${isPickup && g.orders[0].pickupWatch ? " · контроль" : ""}` : ""}</div>
+                    worker ? <div className="text-xs text-gray-400 mt-1 flex items-center gap-1"><Icon name={isPickup ? (g.orders[0].pickupWatch ? "eye" : "bag") : "truck"} size={13} />{worker.name}{isPickup && g.orders[0].pickupWatch ? " · контроль" : ""}</div> : null
                   )}
                 </div>
                 </Fragment>
@@ -1085,7 +1085,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                       {mergedPositions(g.orders).map((m, mi) => (
                         <div key={mi} className="text-gray-600 flex items-center gap-2 flex-wrap">
                           <span>• {m.brand} {m.grade}</span>
-                          <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {m.bags} меш. × {m.bag_kg} кг</span>
+                          <span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{m.bags} меш. × {m.bag_kg} кг</span>
                           <span>= <b>{fmt(m.bags * m.bag_kg)} кг</b></span>
                           {showPrices && m.tg ? <span className="text-gray-400">· {fmt(m.tg)} тг</span> : null}
                         </div>
@@ -1093,7 +1093,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                     </div>
                     <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-2 flex-wrap">
                       {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
-                      {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">🧾 Накладная PDF</button>}
+                      {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
                       <span className="text-orange-600">🏬 фура из Караганды</span>
                     </div>
                     {canEdit && (
@@ -1160,7 +1160,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 </div>
               </div>
               <div className="space-y-1">
-                {[{ name: "📦 Best Mill (склад)", delivery_time: "" }, ...all.optimized].map((p, i) => (
+                {[{ name: "Best Mill (склад)", delivery_time: "" }, ...all.optimized].map((p, i) => (
                   <div key={i} className="flex items-center gap-2 text-sm">
                     <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0">{i}</span>
                     <span className="text-gray-700">{p.name}</span>
@@ -1174,7 +1174,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
             {driverBlocks.length > 1 && driverBlocks.map(b => (
               <div key={b.did || "none"} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                 <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                  <div className="font-bold text-gray-800">🚛 {b.name} <span className="text-xs font-normal text-gray-500">· {b.route.optimized.length} точек · ~{Math.round(b.route.dist)} км</span></div>
+                  <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="truck" size={16} />{b.name} <span className="text-xs font-normal text-gray-500">· {b.route.optimized.length} точек · ~{Math.round(b.route.dist)} км</span></div>
                   <div className="flex gap-2">
                     <a href={b.route.url} target="_blank" rel="noreferrer" className="bg-blue-50 text-blue-700 text-xs font-medium px-3 py-1.5 rounded-lg">Открыть →</a>
                     <button onClick={() => copyToClipboard(b.route.url)} className="bg-gray-100 text-gray-700 text-xs font-medium px-3 py-1.5 rounded-lg">📋 Ссылка</button>
@@ -1305,7 +1305,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   return (
     <div className="space-y-5">
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-5">
-        <div className="flex items-center gap-2 mb-2"><span className="text-xl">🤖</span><h3 className="font-bold text-gray-800">Принять заявку из WhatsApp</h3></div>
+        <div className="flex items-center gap-2 mb-2"><span className="text-amber-600"><Icon name="chat" size={20} /></span><h3 className="font-display font-semibold text-gray-800">Принять заявку из WhatsApp</h3></div>
         <p className="text-sm text-gray-500 mb-3">Вставь сообщение как есть — система разберёт сама</p>
         <textarea className="w-full border border-amber-200 rounded-xl p-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none" rows={3}
           placeholder='Например: "Мамыр хотят 10 мешков по 50кг высший ДАРАД на завтра"' value={aiText} onChange={e => setAiText(e.target.value)} />
@@ -1369,7 +1369,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
       <div className="flex flex-wrap items-center gap-3">
         <Inp type="date" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
         <Btn variant="ghost" size="sm" onClick={() => setFilterDate("")}>Все заявки</Btn>
-        {filtered.length > 0 && <div className="ml-auto flex gap-4 text-sm text-gray-600"><span>📦 {fmt(totalKg)} кг</span><span>💰 {fmt(totalSum)} тг</span></div>}
+        {filtered.length > 0 && <div className="ml-auto flex gap-4 text-sm text-gray-600"><span className="inline-flex items-center gap-1"><Icon name="box" size={13} />{fmt(totalKg)} кг</span><span className="inline-flex items-center gap-1"><Icon name="coin" size={13} />{fmt(totalSum)} тг</span></div>}
       </div>
 
       {filtered.length === 0 ? <div className="text-center py-12 text-gray-400">Заявок нет.</div> : (
@@ -1388,19 +1388,19 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
                   <div>
                     <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{g.clientName || "Клиент"}</span><Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>{g.isSample && <Badge color="yellow">🧪 Проба</Badge>}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
                     <div className="text-sm text-gray-500 mt-1 space-y-0.5">
-                      {g.orders.map(o => <div key={o.id} className="flex items-center gap-2 flex-wrap"><span>• {o.brand} · {o.grade}</span><span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span><span>= <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.trial ? " · 🎁 на пробу" : (o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : "")}</span></div>)}
+                      {g.orders.map(o => <div key={o.id} className="flex items-center gap-2 flex-wrap"><span>• {o.brand} · {o.grade}</span><span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{o.bags} меш. × {o.bag_kg} кг</span><span>= <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.trial ? " · на пробу" : (o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : "")}</span></div>)}
                     </div>
                     {g.orders.length > 1 && <div className="text-sm text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
-                    <div className="text-xs text-gray-400 mt-1">📅 {g.orders[0].date}{driver ? ` · 🚛 ${driver.name}` : ""}{g.orders[0].created_by_name ? ` · ✍️ ${g.orders[0].created_by_name}` : ""}</div>
+                    <div className="text-xs text-gray-400 mt-1 flex items-center gap-1"><Icon name="calendar" size={12} />{g.orders[0].date}{driver ? ` · ${driver.name}` : ""}{g.orders[0].created_by_name ? ` · ${g.orders[0].created_by_name}` : ""}</div>
                   </div>
                   <div className="flex gap-1 flex-wrap items-center">
                     {allNew && <><Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, "в пути")}>В путь</Btn><select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}><option value="">Водитель</option>{drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></>}
                     {allRoute && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}>✓ Доставлено</Btn>}
-                    <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}>✕</Btn>
+                    <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}><Icon name="trash" size={15} /></Btn>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-50 text-xs text-gray-500">
-                  <span>📅 Перенести:</span>
+                  <span className="inline-flex items-center gap-1"><Icon name="calendar" size={13} />Перенести:</span>
                   <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].date} onChange={e => rescheduleGroup(g, e.target.value)} />
                   <button className="text-amber-600 hover:text-amber-700 font-medium" onClick={() => rescheduleGroup(g, TOMORROW())}>→ на завтра</button>
                 </div>
@@ -5680,7 +5680,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
                     <div className="space-y-0.5">
                       {g.orders.map(o => (
                         <div key={o.id} className="text-sm text-gray-600 flex items-center gap-2 flex-wrap">
-                          <span className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md whitespace-nowrap">📦 {o.bags} меш. × {o.bag_kg} кг</span>
+                          <span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{o.bags} меш. × {o.bag_kg} кг</span>
                           <span>= <b>{fmt(o.bags * o.bag_kg)} кг</b> · {o.brand} {o.grade}{o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : ""}</span>
                           {canEdit && <button onClick={() => del(o)} className="text-red-300 hover:text-red-600 ml-auto" title="Удалить позицию">✕</button>}
                         </div>
@@ -6069,21 +6069,21 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
 
       {canEdit && (
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
-        <div className="font-semibold text-gray-800 mb-2">📲 Разобрать заявку из WhatsApp</div>
+        <div className="font-display font-semibold text-gray-800 mb-2 flex items-center gap-1.5"><Icon name="chat" size={17} />Разобрать заявку из WhatsApp</div>
         <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={3} placeholder="Вставь сюда сообщение из WhatsApp, напр.: Сегафредо 500 кг высший сорт на завтра" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
         {aiError && <div className="text-sm text-red-500 mt-2">{aiError}</div>}
         <div className="mt-2 flex gap-2">
-          <button onClick={handleAI} disabled={aiLoading || !aiText.trim()} style={{ flex: 2 }} className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{aiLoading ? "Разбираю..." : "📲 Разобрать"}</button>
-          <button onClick={() => setShowManual(true)} style={{ flex: 1 }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-3 py-2.5 text-sm whitespace-nowrap">✍️ Вручную</button>
+          <button onClick={handleAI} disabled={aiLoading || !aiText.trim()} style={{ flex: 2 }} className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm inline-flex items-center justify-center gap-1.5">{aiLoading ? "Разбираю..." : <><Icon name="chat" size={16} />Разобрать</>}</button>
+          <button onClick={() => setShowManual(true)} style={{ flex: 1 }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-3 py-2.5 text-sm whitespace-nowrap inline-flex items-center justify-center gap-1.5"><Icon name="pencil" size={15} />Вручную</button>
         </div>
         {aiResult && (
           <div className="mt-3 border-t border-gray-100 pt-3 space-y-2">
             {aiResult.map((p, i) => (
               <div key={i} className="bg-gray-50 rounded-xl p-3 text-sm">
-                <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{(p.matchOptions || []).length === 0 && <Badge color="red">Не в базе</Badge>}{p.clientId && p.matchBy === "адрес" && <Badge color="yellow">📍 найден по адресу — проверь</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
+                <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{(p.matchOptions || []).length === 0 && <Badge color="red">Не в базе</Badge>}{p.clientId && p.matchBy === "адрес" && <Badge color="yellow">найден по адресу — проверь</Badge>}{p.trial && <Badge color="yellow">на пробу</Badge>}</div>
                 {p.clientId && (() => {
                   const c = clients.find(x => x.id === p.clientId);
-                  return c && (c.org_name || c.address) ? <div className="text-xs text-gray-500 mt-0.5">{c.org_name ? `🏢 ${c.org_name}` : ""}{c.org_name && c.address ? " · " : ""}{c.address ? `📍 ${c.address}` : ""}</div> : null;
+                  return c && (c.org_name || c.address) ? <div className="text-xs text-gray-500 mt-0.5">{c.org_name || ""}{c.org_name && c.address ? " · " : ""}{c.address || ""}</div> : null;
                 })()}
                 <div className="mt-1">
                   {(p.matchOptions || []).length > 1 && <div className="text-xs text-orange-600 mb-1">⚠️ Несколько похожих клиентов — выбери, какая именно организация:</div>}
@@ -6094,7 +6094,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                 </div>
                 <div className="text-gray-600 mt-1">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
                 <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">бесплатно</span> : (p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">цена не найдена</span>)}</div>
-                {p.note && <div className="text-amber-800 bg-amber-50 rounded px-2 py-1 mt-1 text-xs">📝 {p.note}</div>}
+                {p.note && <div className="text-amber-800 bg-amber-50 rounded px-2 py-1 mt-1 text-xs flex items-center gap-1"><Icon name="note" size={12} />{p.note}</div>}
               </div>
             ))}
             <label className="flex items-center gap-2 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
@@ -6103,7 +6103,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             </label>
             {(() => { const ok = aiPickup || aiDriver; return (
             <div className={`rounded-xl p-3 border ${ok ? "bg-gray-50 border-gray-100" : "bg-orange-50 border-orange-200"}`}>
-              <div className={`text-sm font-medium mb-1 ${ok ? "text-gray-700" : "text-orange-700"}`}>{aiPickup ? "📦 Кто отгрузит (грузчик)?" : (isRep ? "🚛 Кому передать (бригадир)?" : "🚛 Кто повезёт?")} {!ok && "— выбери перед подтверждением"}</div>
+              <div className={`text-sm font-medium mb-1 ${ok ? "text-gray-700" : "text-orange-700"}`}>{aiPickup ? "Кто отгрузит (грузчик)?" : (isRep ? "Кому передать (бригадир)?" : "Кто повезёт?")} {!ok && "— выбери перед подтверждением"}</div>
               <select value={aiDriver} onChange={e => setAiDriver(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300">
                 <option value="">{aiPickup ? "— определить позже —" : (isRep ? "— выбери бригадира —" : "— выбери водителя —")}</option>
                 {(isRep && !aiPickup ? brigadirs : drivers).map(d => <option key={d.id} value={d.id}>{d.name}{d.salary_type === "brigadir" ? " (бригадир)" : ""}</option>)}
@@ -6128,13 +6128,13 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           return (
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-3">
               <div className="flex items-center justify-between mb-2 gap-2">
-                <span className="font-semibold text-slate-700 text-sm">🚛 Загрузка водителей</span>
+                <span className="font-semibold text-slate-700 text-sm flex items-center gap-1.5"><Icon name="truck" size={16} />Загрузка водителей</span>
                 <span className="text-xs text-slate-500">{tCnt} заявок · {fmt(tKg)} кг</span>
               </div>
               <div className="space-y-1">
                 {dl.sort((a, b) => (b.kg || 0) - (a.kg || 0)).map(o => {
                   const dr = drivers.find(d => d.id === o.driverId);
-                  return <div key={o.id} className="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5"><span className="text-slate-700">{dr ? `🚛 ${dr.name}` : "— не распределено —"}</span><span className="text-slate-500">{o.count} заявок · <b className="text-slate-700">{fmt(o.kg)} кг</b></span></div>;
+                  return <div key={o.id} className="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-1.5"><span className="text-slate-700 inline-flex items-center gap-1">{dr ? <><Icon name="truck" size={13} />{dr.name}</> : "— не распределено —"}</span><span className="text-slate-500">{o.count} заявок · <b className="text-slate-700">{fmt(o.kg)} кг</b></span></div>;
                 })}
               </div>
               <div className="text-[11px] text-slate-400 mt-1.5">Другие заявки — только объём, чтобы видеть загрузку водителя. Кому и что везут — не показывается.</div>
@@ -6284,8 +6284,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               <div>
                 <label className="text-sm font-medium text-gray-700">Оплата</label>
                 <div className="flex gap-2 mt-1">
-                  <button onClick={() => setForm({ ...form, payMethod: "Нал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Нал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>💵 Нал</button>
-                  <button onClick={() => setForm({ ...form, payMethod: "Безнал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Безнал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>💳 Безнал</button>
+                  <button onClick={() => setForm({ ...form, payMethod: "Нал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Нал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>Нал</button>
+                  <button onClick={() => setForm({ ...form, payMethod: "Безнал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Безнал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>Безнал</button>
                 </div>
               </div>
               <Inp label="Заметка" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. позвонить перед приездом" />
