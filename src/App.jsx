@@ -201,7 +201,7 @@ const PRIMARY_NAV = {
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
-const NAV_ICON = { today: "🏠", calendar: "📅", stock: "🏭", lab: "🧪", revision: "🧮", clients: "🏢", crm: "🎯", reactivate: "🔔", reports: "📊", debts: "💰", contracts: "📄", invoice: "🧾", orders: "📋", supply: "🚚", karaganda: "🏬", kgdm: "🗂️", drivers: "🚛", mysalary: "💰", expenses: "💸", cashbox: "💵", access: "⚙️" };
+const NAV_ICON = { today: "home", calendar: "calendar", stock: "box", lab: "flask", revision: "calculator", clients: "building", crm: "target", reactivate: "bell", reports: "chart", debts: "wallet", contracts: "file", invoice: "receipt", orders: "clipboard", supply: "truck", karaganda: "store", kgdm: "folder", drivers: "cash", mysalary: "wallet", expenses: "expense", cashbox: "coin", access: "settings" };
 const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", revision: "Ревизия", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт"];
@@ -423,6 +423,42 @@ function Btn({ variant = "primary", size = "md", children, onClick, disabled, ..
       {children}
     </button>
   );
+}
+// Иконки — inline SVG (стиль Tabler), работают офлайн в PWA. Цвет наследуется из text-* (currentColor).
+const ICONS = {
+  home: '<path d="M4 11 12 4l8 7"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/>',
+  calendar: '<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4M16 3v4M4 9h16"/>',
+  box: '<path d="M12 3 3.5 7.5v9L12 21l8.5-4.5v-9L12 3z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+  flask: '<path d="M9 3h6M10 3v6l-4.6 8.1A1.5 1.5 0 0 0 6.7 20h10.6a1.5 1.5 0 0 0 1.3-2.9L14 9V3"/><path d="M8 14h8"/>',
+  calculator: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8M8 12h.01M12 12h.01M16 12h.01M8 16h.01M12 16h.01M16 16h.01"/>',
+  building: '<path d="M3 21h18M5 21V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v15M15 21V10h2a2 2 0 0 1 2 2v9M8 8h.01M12 8h.01M8 12h.01M12 12h.01M8 16h.01M12 16h.01"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  bell: '<path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5H3.5S6 15 6 9z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
+  chart: '<path d="M4 4v16h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/>',
+  wallet: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M16 14h.01"/>',
+  file: '<path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>',
+  receipt: '<path d="M6 3h12v17l-2-1.3-2 1.3-2-1.3-2 1.3-2-1.3z"/><path d="M9 8h6M9 12h4"/>',
+  clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2.5" width="6" height="3" rx="1"/><path d="M9 11h6M9 15h6"/>',
+  truck: '<path d="M3 6h11v10H3z"/><path d="M14 9h3.5l2.5 3v4h-6z"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>',
+  store: '<path d="M4 10v10h16V10"/><path d="M3 10 4.5 4h15L21 10a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 1-4 0 2.5 2.5 0 0 1-4 0 2.5 2.5 0 0 1-5 0z"/><path d="M9 20v-5h6v5"/>',
+  folder: '<path d="M4 6a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/>',
+  cash: '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9h.01M18 15h.01"/>',
+  expense: '<rect x="3" y="7" width="13" height="10" rx="2"/><circle cx="9.5" cy="12" r="2"/><path d="M20 8v7m-2-2 2 2 2-2"/>',
+  coin: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5v9M14.5 9.8C14 8.9 13 8.5 12 8.5c-1.4 0-2.5.7-2.5 1.8s1.1 1.5 2.5 1.7 2.5.6 2.5 1.7-1.1 1.8-2.5 1.8c-1 0-2-.4-2.5-1.3"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+  refresh: '<path d="M19.9 13A8 8 0 1 1 18 6.7"/><path d="M18 2.5v4.2h-4.2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  dots: '<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  check: '<path d="M5 12.5 10 17 19 6"/>',
+  sparkle: '<path d="M12 3l1.8 4.7L18.5 9l-4.7 1.3L12 15l-1.8-4.7L5.5 9l4.7-1.3z"/><path d="M18.5 15l.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6z"/>',
+  chat: '<path d="M4 12a8 8 0 1 1 3.6 6.7L4 20l1.3-3.6A8 8 0 0 1 4 12z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01"/>',
+  pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
+};
+function Icon({ name, size = 22, className = "", stroke = 1.8 }) {
+  const p = ICONS[name];
+  if (!p) return null;
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true" dangerouslySetInnerHTML={{ __html: p }} />;
 }
 function Spinner() {
   return <div className="flex flex-col items-center justify-center py-16 gap-3"><div className="w-8 h-8 border-4 border-amber-400 border-t-transparent rounded-full animate-spin"></div><p className="text-sm text-gray-400">Загружаю данные...</p></div>;
@@ -6013,8 +6049,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">Заявки сегодня</div><div className="text-3xl font-black text-gray-900">{groupCount(todayList)}</div></div>
-        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">На завтра</div><div className="text-3xl font-black text-gray-900">{groupCount(tomorrowList)}</div></div>
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">Заявки сегодня</div><div className="text-3xl font-display font-semibold text-gray-900">{groupCount(todayList)}</div></div>
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">На завтра</div><div className="text-3xl font-display font-semibold text-gray-900">{groupCount(tomorrowList)}</div></div>
       </div>
 
       <NotesBlock notes={notes} me={me} canEdit={canEdit} reload={reload} />
@@ -6414,15 +6450,14 @@ export default function App() {
           <div className="flex items-center gap-2.5">
             <img src="/icon-192.png" alt="Darad" className="w-9 h-9 rounded-lg flex-shrink-0" />
             <div>
-              <h1 className="text-xl font-black text-gray-900">Darad</h1>
-              <p className="text-xs text-gray-400">{user.name} · {ROLES[user.role] || user.role}{lastSync ? ` · 🟢 ${lastSync}` : ""}</p>
+              <h1 className="text-xl font-display font-semibold text-gray-900">Darad</h1>
+              <p className="text-xs text-gray-400 flex items-center gap-1">{user.name} · {ROLES[user.role] || user.role}{lastSync ? <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block ml-0.5"></span>{lastSync}</> : ""}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-sm font-bold px-3 py-1.5 rounded-full">{newOrders} новых</div>}
+            {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-sm font-semibold px-3 py-1.5 rounded-full">{newOrders} новых</div>}
             <button onClick={manualRefresh} disabled={syncing} title="Обновить" className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-sm font-medium transition-all active:scale-90 ${syncDone ? "bg-emerald-50 border-emerald-300 text-emerald-600" : syncing ? "bg-amber-50 border-amber-300 text-amber-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-700"}`}>
-              <span className={`inline-block text-base leading-none ${syncing ? "animate-spin" : ""}`}>🔄</span>
-              {syncDone && <span className="font-bold">✓</span>}
+              <Icon name={syncDone ? "check" : "refresh"} size={16} className={syncing ? "animate-spin" : ""} />
             </button>
             <button onClick={logout} className="text-gray-400 hover:text-gray-600 text-sm" title="Выйти">Выйти</button>
           </div>
@@ -6472,15 +6507,15 @@ export default function App() {
             <div className="fixed inset-0 z-40" onClick={() => setFabOpen(false)} style={{ background: "rgba(0,0,0,0.35)" }}>
               <div className="max-w-2xl mx-auto px-4 relative h-full">
                 <div className="absolute right-4 bottom-40 flex flex-col items-end gap-3" onClick={e => e.stopPropagation()}>
-                  {isDirector && <button onClick={() => { setFabOpen(false); setAssistantOpen(true); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-bold text-amber-700">🤖 ИИ-помощник</span><span className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center text-xl shadow-lg ring-2 ring-amber-200">🤖</span></button>}
-                  <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">📲</span></button>
-                  <button onClick={() => { goTab("today"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">✍️</span></button>
-                  {isDirector && <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center text-lg shadow-lg">💸</span></button>}
+                  {isDirector && <button onClick={() => { setFabOpen(false); setAssistantOpen(true); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-semibold text-amber-700">ИИ-помощник</span><span className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-lg ring-2 ring-amber-200"><Icon name="sparkle" size={22} /></span></button>}
+                  <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="chat" size={20} /></span></button>
+                  <button onClick={() => { goTab("today"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="pencil" size={20} /></span></button>
+                  {isDirector && <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="expense" size={20} /></span></button>}
                 </div>
               </div>
             </div>
           )}
-          <button onClick={() => setFabOpen(v => !v)} className="fixed z-40 right-4 bottom-24 w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-3xl leading-none flex items-center justify-center shadow-xl transition-transform" style={{ transform: fabOpen ? "rotate(45deg)" : "none" }} aria-label="Добавить">+</button>
+          <button onClick={() => setFabOpen(v => !v)} className="fixed z-40 right-4 bottom-24 w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center shadow-xl transition-transform" style={{ transform: fabOpen ? "rotate(45deg)" : "none" }} aria-label="Добавить"><Icon name="plus" size={28} stroke={2.2} /></button>
           {isDirector && assistantOpen && <AssistantModal onClose={() => setAssistantOpen(false)} orders={data.orders} reload={reload} />}
         </>
       )}
@@ -6488,14 +6523,14 @@ export default function App() {
       <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-gray-100">
         <div className="max-w-2xl mx-auto flex justify-between px-2 py-1.5">
           {primaryNav.map(id => (
-            <button key={id} onClick={() => goTab(id)} className={`flex-1 flex flex-col items-center gap-0.5 py-1 ${tab === id ? "text-amber-600" : "text-gray-400"}`}>
-              <span className="text-xl leading-none">{NAV_ICON[id]}</span>
+            <button key={id} onClick={() => goTab(id)} className={`flex-1 flex flex-col items-center gap-1 py-1 ${tab === id ? "text-amber-600" : "text-gray-400"}`}>
+              <Icon name={NAV_ICON[id]} size={22} stroke={tab === id ? 2 : 1.7} />
               <span className="text-[10px] font-medium">{NAV_SHORT[id]}</span>
             </button>
           ))}
           {moreNav.length > 0 && (
-            <button onClick={() => setMoreOpen(true)} className={`flex-1 flex flex-col items-center gap-0.5 py-1 ${moreNav.includes(tab) ? "text-amber-600" : "text-gray-400"}`}>
-              <span className="text-xl leading-none">⋯</span>
+            <button onClick={() => setMoreOpen(true)} className={`flex-1 flex flex-col items-center gap-1 py-1 ${moreNav.includes(tab) ? "text-amber-600" : "text-gray-400"}`}>
+              <Icon name="dots" size={22} />
               <span className="text-[10px] font-medium">Ещё</span>
             </button>
           )}
@@ -6505,11 +6540,11 @@ export default function App() {
       {moreOpen && (
         <div className="fixed inset-0 z-40 flex items-end" onClick={() => setMoreOpen(false)} style={{ background: "rgba(0,0,0,0.4)" }}>
           <div className="bg-white w-full rounded-t-2xl max-w-2xl mx-auto p-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800">Ещё</h3><button onClick={() => setMoreOpen(false)} className="text-gray-400 text-2xl leading-none">&times;</button></div>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-display font-semibold text-gray-800">Ещё</h3><button onClick={() => setMoreOpen(false)} className="text-gray-400"><Icon name="close" size={22} /></button></div>
             <div className="grid grid-cols-3 gap-3">
               {moreNav.map(id => (
-                <button key={id} onClick={() => goTab(id)} className={`flex flex-col items-center gap-1 rounded-2xl border p-4 ${tab === id ? "border-amber-300 bg-amber-50" : "border-gray-100 bg-gray-50"}`}>
-                  <span className="text-2xl leading-none">{NAV_ICON[id]}</span>
+                <button key={id} onClick={() => goTab(id)} className={`flex flex-col items-center gap-2 rounded-2xl border p-4 ${tab === id ? "border-amber-300 bg-amber-50 text-amber-700" : "border-gray-100 bg-gray-50 text-gray-600"}`}>
+                  <span className={`w-10 h-10 rounded-xl flex items-center justify-center ${tab === id ? "bg-amber-100 text-amber-700" : "bg-white text-amber-600"}`}><Icon name={NAV_ICON[id]} size={22} /></span>
                   <span className="text-xs font-medium text-gray-700 text-center">{NAV_SHORT[id]}</span>
                 </button>
               ))}
