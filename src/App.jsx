@@ -1802,7 +1802,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
 
         {/* Фильтр по типу движения */}
         <div className="flex flex-wrap gap-1.5 mb-2">
-          {[["all", "Все"], ["in", "▲ Приход"], ["ship", "🚚 Отгрузки"], ["writeoff", "⚠️ Брак и списания"]].map(([v, l]) => (
+          {[["all", "Все"], ["in", "▲ Приход"], ["ship", "Отгрузки"], ["writeoff", "Брак и списания"]].map(([v, l]) => (
             <button key={v} onClick={() => { setHistType(v); setHistReason(null); setHistLimit(80); }}
               className={`px-3 py-1.5 rounded-full text-xs font-medium ${histType === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>
           ))}
@@ -1865,7 +1865,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
                         {day.rows.map(s => {
                           const ship = isShipmentRow(s);
                           const wo = isWriteoffRow(s);
-                          const label = s.weight_kg > 0 ? (isReturnRow(s) ? "↩ Возврат" : "▲ Приход") : ship ? "🚚 Отгрузка" : "⚠️ " + (s.reason || "Списание");
+                          const label = s.weight_kg > 0 ? (isReturnRow(s) ? "↩ Возврат" : "▲ Приход") : ship ? "Отгрузка" : (s.reason || "Списание");
                           const color = s.weight_kg > 0 ? "text-emerald-600" : wo ? "text-red-600" : "text-red-500";
                           return (
                             <div key={s.id} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-3 py-2 text-sm">
@@ -1876,7 +1876,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
                               </div>
                               <div className="flex items-center gap-2 flex-shrink-0">
                                 <div className="font-medium whitespace-nowrap">{s.weight_kg > 0 ? "+" : ""}{fmt(s.weight_kg)} кг</div>
-                                {canEdit && <button onClick={() => openEdit(s)} className="text-gray-400 hover:text-gray-700" title="Изменить">✏️</button>}
+                                {canEdit && <button onClick={() => openEdit(s)} className="text-gray-400 hover:text-gray-700" title="Изменить"><Icon name="pencil" size={15} /></button>}
                                 {canEdit && <button onClick={() => deleteMovement(s.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}
                               </div>
                             </div>
@@ -2002,7 +2002,7 @@ function LabTab({ lab = [], reload, canEdit = true }) {
                   <td className="px-2 py-2 text-gray-500 text-xs" style={{ maxWidth: "11rem" }}><span className="block truncate" title={r.extra}>{r.extra || "—"}</span></td>
                   {canEdit && (
                     <td className="px-2 py-2 whitespace-nowrap text-right">
-                      <button onClick={() => openEdit(r)} className="text-gray-400 hover:text-gray-700 mr-2" title="Изменить">✏️</button>
+                      <button onClick={() => openEdit(r)} className="text-gray-400 hover:text-gray-700 mr-2" title="Изменить"><Icon name="pencil" size={15} /></button>
                       <button onClick={() => del(r.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>
                     </td>
                   )}
@@ -2019,14 +2019,14 @@ function LabTab({ lab = [], reload, canEdit = true }) {
           {!editId && (
             <div className="mb-3">
               {!showAi ? (
-                <button onClick={() => setShowAi(true)} className="w-full text-sm bg-violet-50 text-violet-700 border border-violet-200 rounded-xl py-2 font-medium hover:bg-violet-100">🤖 Разобрать анализ из текста</button>
+                <button onClick={() => setShowAi(true)} className="w-full text-sm bg-violet-50 text-violet-700 border border-violet-200 rounded-xl py-2 font-medium hover:bg-violet-100 inline-flex items-center justify-center gap-1.5"><Icon name="sparkle" size={15} />Разобрать анализ из текста</button>
               ) : (
                 <div className="bg-violet-50 border border-violet-200 rounded-xl p-3">
                   <div className="text-xs text-violet-700 font-medium mb-1">Вставь протокол или сообщение с показателями — заполню поля сам</div>
                   <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={4} placeholder="напр.: ДАРАД в/с, произведено 12.08.2026, влажность 14,2; белизна 54; клейковина 28%; ИДК 75 (II группа); ЧП 320 с" className="w-full border border-violet-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300" />
                   {aiErr && <div className="text-xs text-red-600 mt-1">⚠️ {aiErr}</div>}
                   <div className="flex gap-2 mt-2">
-                    <Btn size="sm" onClick={runAi} disabled={aiBusy || !aiText.trim()}>{aiBusy ? "Разбираю…" : "🤖 Разобрать"}</Btn>
+                    <Btn size="sm" onClick={runAi} disabled={aiBusy || !aiText.trim()}>{aiBusy ? "Разбираю…" : <><Icon name="sparkle" size={15} />Разобрать</>}</Btn>
                     <Btn size="sm" variant="secondary" onClick={() => { setShowAi(false); setAiErr(""); }}>Свернуть</Btn>
                   </div>
                 </div>
@@ -3295,7 +3295,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
             <div className="grid grid-cols-2 gap-2">
               <div className="bg-emerald-50 rounded-xl p-3"><div className="text-xs text-emerald-700">Отгружено</div><div className="text-lg font-bold text-emerald-800">{fmt(repKg)} кг</div><div className="text-xs text-gray-500">{fmt(repBags)} мешков</div></div>
               <div className="bg-amber-50 rounded-xl p-3"><div className="text-xs text-amber-700">Сумма</div><div className="text-lg font-bold text-amber-800">{fmt(Math.round(repRev))} тг</div><div className="text-xs text-gray-500">{repOrdersCount} заявок</div></div>
-              <div className="bg-blue-50 rounded-xl p-3"><div className="text-xs text-blue-700">💰 Средняя цена продаж</div><div className="text-lg font-bold text-blue-800">{fmt(Math.round(repAvgPrice))} тг/кг</div>{repMinPrice !== repMaxPrice && <div className="text-xs text-gray-500">от {fmt(repMinPrice)} до {fmt(repMaxPrice)} тг/кг</div>}</div>
+              <div className="bg-blue-50 rounded-xl p-3"><div className="text-xs text-blue-700">Средняя цена продаж</div><div className="text-lg font-bold text-blue-800">{fmt(Math.round(repAvgPrice))} тг/кг</div>{repMinPrice !== repMaxPrice && <div className="text-xs text-gray-500">от {fmt(repMinPrice)} до {fmt(repMaxPrice)} тг/кг</div>}</div>
               <div className="bg-purple-50 rounded-xl p-3"><div className="text-xs text-purple-700">Средние</div><div className="text-sm font-bold text-purple-800">~{fmt(repDays ? Math.round(repKg / repDays) : 0)} кг/день</div><div className="text-xs text-gray-500">{repDays} дн. с продажами · ~{fmt(repOrdersCount ? Math.round(repKg / repOrdersCount) : 0)} кг/заявка</div></div>
             </div>
             <div>
@@ -3332,7 +3332,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
       {writeoffKg > 0 && (
         <div className="bg-gradient-to-br from-red-50 to-orange-50 border border-red-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="font-bold text-gray-800">🗑 Брак и списания за период</div>
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="trash" size={16} />Брак и списания за период</div>
             <div className="text-lg font-bold text-red-600">{fmt(writeoffKg)} кг</div>
           </div>
           <div className="space-y-1 text-sm">
@@ -3377,13 +3377,13 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
       {paidTotal > 0 && (
         <div className="bg-gradient-to-br from-emerald-50 to-green-50 border border-emerald-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="font-bold text-gray-800">💵 Приход от клиентов (всего)</div>
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="cash" size={16} />Приход от клиентов (всего)</div>
             <div className="text-lg font-bold text-emerald-700">{fmt(paidTotal)} тг</div>
           </div>
           <div className="space-y-1 text-sm">
             {Object.entries(paidByMethod).sort((a, b) => b[1] - a[1]).map(([m, v]) => (
               <div key={m} className="flex items-center justify-between">
-                <span className="text-gray-600">{m === "Нал" ? "💵 Нал" : m === "Безнал" ? "💳 Безнал" : m}</span>
+                <span className="text-gray-600">{m}</span>
                 <span className="font-medium">{fmt(v)} тг</span>
               </div>
             ))}
@@ -3394,7 +3394,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
       {totalDebt > 0 && (
         <div className="bg-gradient-to-br from-rose-50 to-red-50 border border-rose-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="font-bold text-gray-800">💰 Долги клиентов (всего)</div>
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={16} />Долги клиентов (всего)</div>
             <div className="text-lg font-bold text-red-600">{fmt(totalDebt)} тг</div>
           </div>
           <div className="space-y-1 text-sm">
@@ -3412,7 +3412,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
       {expTotal > 0 && (
         <div className="bg-gradient-to-br from-slate-50 to-gray-100 border border-gray-200 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="font-bold text-gray-800">💸 Расходы за период</div>
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="expense" size={16} />Расходы за период</div>
             <div className="text-lg font-bold text-gray-700">{fmt(expTotal)} тг</div>
           </div>
           <div className="space-y-1 text-sm">
@@ -3467,11 +3467,11 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
           </>
         )}
         <div className="mt-3 pt-3 border-t border-violet-100">
-          <Btn size="sm" onClick={getAdvice} disabled={adviceLoading}>{adviceLoading ? "Думаю..." : "🤖 Совет на неделю"}</Btn>
+          <Btn size="sm" onClick={getAdvice} disabled={adviceLoading}>{adviceLoading ? "Думаю..." : <><Icon name="sparkle" size={15} />Совет на неделю</>}</Btn>
           {advice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{cleanAdvice(advice)}</div>}
         </div>
         <div className="mt-3 pt-3 border-t border-violet-100">
-          <div className="font-medium text-gray-800 mb-2">🚚 Что взять в фуру</div>
+          <div className="font-medium text-gray-800 mb-2 flex items-center gap-1.5"><Icon name="truck" size={15} />Что взять в фуру</div>
           <div className="flex items-center gap-2 flex-wrap">
             <input type="number" value={truckCap} onChange={e => setTruckCap(e.target.value)} placeholder="вместимость" className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300" />
             <div className="flex">
@@ -3483,7 +3483,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
           {truckAdvice && <div className="mt-2 bg-white rounded-xl p-3 text-sm text-gray-700 whitespace-pre-wrap">{cleanAdvice(truckAdvice)}</div>}
           {canEdit && truckItems.length > 0 && (truckPlanned
             ? <div className="mt-2 text-sm text-emerald-700 font-medium">✓ Фура запланирована — поправь дату/фуриста/цену в разделе «Поставки».</div>
-            : <div className="mt-2"><Btn size="sm" onClick={planTruck}>🚚 Запланировать эту фуру</Btn></div>)}
+            : <div className="mt-2"><Btn size="sm" onClick={planTruck}><Icon name="truck" size={15} />Запланировать эту фуру</Btn></div>)}
         </div>
       </div>
 
@@ -3518,7 +3518,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
           return (<div key={i} className="bg-white border border-gray-100 rounded-xl px-4 py-3 text-sm">
             <div className="flex items-center justify-between flex-wrap gap-2"><div><span className="font-medium">{g.clientName}</span><span className="text-gray-400 ml-2">{g.date}</span></div><Badge color={{ "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red", "частично": "gray" }[st] || "gray"}>{st}</Badge></div>
             {g.orders.map(o => <div key={o.id} className="text-gray-500 mt-0.5">{o.brand} {o.grade} {o.bag_kg}кг × {o.bags} = {fmt(o.bags * o.bag_kg)}кг</div>)}
-            <div className="text-xs text-gray-400 mt-1">Итого {fmt(kg)} кг{driver ? ` · 🚛 ${driver.name}` : ""}</div>
+            <div className="text-xs text-gray-400 mt-1">Итого {fmt(kg)} кг{driver ? ` · ${driver.name}` : ""}</div>
           </div>);
         })}</div>;
       })()}</div>
@@ -3633,7 +3633,7 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
           <div className="space-y-3">
             {!editId && (
               <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-                <div className="text-sm font-medium text-gray-700 mb-1">📲 Разобрать из WhatsApp</div>
+                <div className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="chat" size={15} />Разобрать из WhatsApp</div>
                 <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={3} placeholder="Вставь сообщение о фуре, напр.: ДАРАД первый сорт 50кг - 10 тонн, высший 25кг - 5 тонн, фурист Асхат 87011234567, машина 123 ABC 01, цена 250000" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
                 {aiErr && <div className="text-xs text-red-500 mt-1">{aiErr}</div>}
                 <button onClick={handleParseTruck} disabled={aiLoading || !aiText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2 text-sm">{aiLoading ? "Разбираю..." : "✨ Разобрать и заполнить"}</button>
@@ -3672,7 +3672,7 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
         {sorted.map(t => (
           <div key={t.id} className={`rounded-2xl p-4 border ${t.status === "принята" ? "bg-white border-gray-100 shadow-sm" : "bg-amber-50 border-amber-200"}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className="font-bold text-gray-900">🚚 Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalKg(t))} кг{t.price ? ` · ${fmt(t.price)} тг` : ""}</span></div>
+              <div className="font-display font-semibold text-gray-900 flex items-center gap-1.5"><Icon name="truck" size={16} />Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalKg(t))} кг{t.price ? ` · ${fmt(t.price)} тг` : ""}</span></div>
               <Badge color={t.status === "принята" ? "green" : t.status === "в пути" ? "yellow" : "blue"}>{t.status}</Badge>
             </div>
             <div className="space-y-1 text-sm text-gray-600">
@@ -3680,7 +3680,7 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
             </div>
             {(t.driver_name || t.car_number || t.whatsapp || t.logist_phone) && (
               <div className="text-xs text-gray-500 mt-2 space-y-0.5">
-                {(t.driver_name || t.car_number) && <div>👤 {t.driver_name}{t.car_number ? ` · 🚛 ${t.car_number}` : ""}</div>}
+                {(t.driver_name || t.car_number) && <div className="flex items-center gap-1"><Icon name="user" size={13} />{t.driver_name}{t.car_number ? ` · ${t.car_number}` : ""}</div>}
                 {t.whatsapp && <div>📱 <a href={waLink(t.whatsapp)} target="_blank" rel="noreferrer" className="text-emerald-600">{t.whatsapp}</a></div>}
                 {t.logist_phone && <div>📞 Логист: {t.logist_phone}</div>}
               </div>
@@ -3695,14 +3695,14 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
             )}
             {canEdit && t.status !== "принята" && (
               <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 flex-wrap pt-2 border-t border-gray-100">
-                <span>📅 Дата прихода:</span>
+                <span className="inline-flex items-center gap-1"><Icon name="calendar" size={13} />Дата прихода:</span>
                 <input type="date" className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={t.date || ""} onChange={e => changeDate(t, e.target.value)} />
                 <button className="text-amber-600 hover:text-amber-700 font-medium" onClick={() => changeDate(t, TOMORROW())}>→ на завтра</button>
               </div>
             )}
             {canEdit && (
               <div className="mt-2 flex gap-2">
-                {t.status !== "принята" && <Btn size="sm" variant="secondary" onClick={() => openEdit(t)}>✏️ Изменить</Btn>}
+                {t.status !== "принята" && <Btn size="sm" variant="secondary" onClick={() => openEdit(t)}><Icon name="pencil" size={15} />Изменить</Btn>}
                 <Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn>
               </div>
             )}
@@ -3750,7 +3750,7 @@ function WarehouseSettings({ notes = [], reload }) {
         <Inp label="Название/адрес склада" value={addr} onChange={e => setAddr(e.target.value)} placeholder="напр. Астана, ул. …" />
         <Inp label="Ссылка 2ГИС на склад" value={link} onChange={e => { setLink(e.target.value); setCoords(null); }} placeholder="https://2gis.kz/astana/geo/..." />
         <div className="flex items-center gap-2 flex-wrap">
-          <Btn size="sm" variant="secondary" onClick={resolve} disabled={busy || !link.trim()}>📍 Определить точку</Btn>
+          <Btn size="sm" variant="secondary" onClick={resolve} disabled={busy || !link.trim()}><Icon name="pin" size={15} />Определить точку</Btn>
           <Btn size="sm" onClick={save} disabled={busy || !coords}>Сохранить</Btn>
           {coords && <span className="text-xs text-emerald-600">точка: {coords.lat.toFixed(5)}, {coords.lon.toFixed(5)}</span>}
         </div>
@@ -3842,11 +3842,11 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
             <div key={u.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
               <div>
                 <div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span>{u.dev && <span className="ml-1 align-middle text-[10px] font-bold text-white bg-violet-500 rounded px-1 py-0.5" title="Разработчик — видит «Ревизию»">р</span>}</div>
-                <div className="text-sm text-gray-500">{ROLES[u.role] || u.role}{linkedDriver ? ` · 🚛 ${linkedDriver.name}` : ""}{u.id === currentUser.id ? " · это вы" : ""}</div>
+                <div className="text-sm text-gray-500">{ROLES[u.role] || u.role}{linkedDriver ? ` · ${linkedDriver.name}` : ""}{u.id === currentUser.id ? " · это вы" : ""}</div>
                 {(() => {
                   if (!u.last_seen) return <div className="text-xs text-gray-400 mt-0.5">⚪ ещё не заходил(а)</div>;
                   const mins = Math.floor((Date.now() - Date.parse(u.last_seen)) / 60000);
-                  if (mins < 10) return <div className="text-xs text-emerald-600 mt-0.5">🟢 сейчас в приложении</div>;
+                  if (mins < 10) return <div className="text-xs text-emerald-600 mt-0.5 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>сейчас в приложении</div>;
                   const d = new Date(u.last_seen);
                   return <div className="text-xs text-gray-400 mt-0.5">🕐 был(а) в сети: {d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })} {d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</div>;
                 })()}
@@ -3937,7 +3937,7 @@ function BackupLog() {
             ))}
           </div>
           <div className="bg-white border border-gray-100 rounded-xl p-3">
-            <div className="font-bold text-gray-800 text-sm mb-1">📝 Журнал изменений</div>
+            <div className="font-display font-semibold text-gray-800 text-sm mb-1 flex items-center gap-1.5"><Icon name="note" size={15} />Журнал изменений</div>
             <div className="text-xs text-gray-400 mb-2">Кто что удалил или изменил. Удалённое можно вернуть кнопкой «Восстановить».</div>
             {changes.length === 0 && <div className="text-sm text-gray-400 py-2">Изменений пока нет.</div>}
             {changes.map(ch => {
@@ -4122,7 +4122,7 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">💵 Касса</h3></div>
+      <div className="flex items-center justify-between"><h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="coin" size={18} />Касса</h3></div>
       <div className={`rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br ${balance < 0 ? "from-red-500 to-red-600" : "from-emerald-500 to-emerald-600"}`}>
         <div className="text-sm font-medium opacity-90">Остаток в кассе</div>
         <div className="text-4xl font-black mt-1">{fmt(balance)} тг</div>
@@ -4152,7 +4152,7 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
       </div>
 
       {showAdd && (
-        <Modal title={editItem ? (dir === "in" ? "✏️ Приход" : "✏️ Трата") : (dir === "in" ? "💵 Приход — дали денег" : "− Трата")} onClose={() => { setShowAdd(false); setEditItem(null); }}>
+        <Modal title={editItem ? (dir === "in" ? "Приход" : "Трата") : (dir === "in" ? "Приход — дали денег" : "Трата")} onClose={() => { setShowAdd(false); setEditItem(null); }}>
           <div className="space-y-3">
             {/* переключатель Приход/Трата — чтобы можно было и тип поправить */}
             <div className="flex gap-2">
@@ -4178,7 +4178,7 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
             <button key={x.id} onClick={() => canEdit && openEdit(x)} disabled={!canEdit} className="w-full text-left bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm active:scale-[0.99] transition-transform">
               <div className="min-w-0">
                 <div className="font-medium text-gray-900">{isIn ? "▲ Приход" : "▼ Трата"}{x.note ? ` — ${x.note}` : ""}</div>
-                <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}{canEdit ? " · нажми чтобы изменить" : ""}</div>
+                <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ${x.created_by_name}` : ""}{canEdit ? " · нажми чтобы изменить" : ""}</div>
               </div>
               <span className={`font-bold flex-shrink-0 ${isIn ? "text-emerald-600" : "text-red-500"}`}>{isIn ? "+" : "−"}{fmt(x.amount)} тг</span>
             </button>
@@ -4257,7 +4257,7 @@ function AssistantModal({ onClose, orders = [], reload }) {
   const ACTION_ICON = { create_order: "📋", add_payment: "💰", cashbox: "💵", add_expense: "💸", add_truck: "🏬", mark_paid: "✓" };
 
   return (
-    <Modal title="🤖 ИИ-помощник" onClose={onClose}>
+    <Modal title="ИИ-помощник" onClose={onClose}>
       {(phase === "input" || phase === "loading") && (
         <div className="space-y-3">
           <div className="text-sm text-gray-500">Напиши задачу простым языком — я пойму, к чему это относится, и покажу, что сделать. Ты подтвердишь.</div>
@@ -4327,11 +4327,11 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
     const foreman = isJunior ? drivers.find(d => d.id === me.foremanId) : null;
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">💰 Моя зарплата</h3>{monthPicker}</div>
+        <div className="flex items-center justify-between"><h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={18} />Моя зарплата</h3>{monthPicker}</div>
         <div className="rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br from-sky-500 to-sky-600">
           <div className="text-sm font-medium opacity-90">Развёз за {month}</div>
           <div className="text-4xl font-black mt-1">{fmt(myKg)} кг</div>
-          <div className="text-sm opacity-90 mt-1">≈ {fmt(Math.round(myKg / 100) / 10)} т{myLoad > 0 ? ` · 🚚 развоз ${fmt(myDeliv)} · 📦 погрузка ${fmt(myLoad)} кг` : ""}</div>
+          <div className="text-sm opacity-90 mt-1">≈ {fmt(Math.round(myKg / 100) / 10)} т{myLoad > 0 ? ` · развоз ${fmt(myDeliv)} · погрузка ${fmt(myLoad)} кг` : ""}</div>
         </div>
         {isJunior
           ? <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-600">Сумму за развоз тебе скажет бригадир{foreman ? ` — ${foreman.name}` : ""}. Здесь виден только твой объём за месяц.</div>
@@ -4352,7 +4352,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">💰 Моя зарплата</h3>{monthPicker}</div>
+      <div className="flex items-center justify-between"><h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={18} />Моя зарплата</h3>{monthPicker}</div>
 
       <div className="rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br from-emerald-500 to-emerald-600">
         <div className="text-sm font-medium opacity-90">Зарплата за {month}</div>
@@ -4361,7 +4361,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
-        <div className="font-semibold text-gray-700 mb-1">🚚 За развоз (оклад + тарифы)</div>
+        <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="truck" size={15} />За развоз (оклад + тарифы)</div>
         <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
         <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
         <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
@@ -4534,7 +4534,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
           <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
             <div>
               <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг</div>
-              <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ✍️ ${x.created_by_name}` : ""}</div>
+              <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ${x.created_by_name}` : ""}</div>
             </div>
             {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}><Icon name="trash" size={15} /></Btn></div>}
           </div>
@@ -4828,7 +4828,7 @@ function SoftInvoiceTab({ clients, orders }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">🧾 Выбери клиента — подставятся все позиции его прайса с ценами за мешок. Проставь <b>только количество мешков</b> у нужных позиций: в накладную попадут именно они, ровно столько строк. Печать — две копии на листе.</div>
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800 flex items-start gap-2"><span className="mt-0.5 shrink-0"><Icon name="receipt" size={16} /></span><span>Выбери клиента — подставятся все позиции его прайса с ценами за мешок. Проставь <b>только количество мешков</b> у нужных позиций: в накладную попадут именно они, ровно столько строк. Печать — две копии на листе.</span></div>
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
         <Sel label="Клиент (покупатель)" value={clientId} onChange={e => pickClient(e.target.value)} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
         <div className="grid grid-cols-2 gap-3">
@@ -5097,7 +5097,7 @@ function KgdManagersTab({ kgdClients = [], kgdDocs = [], reload, canManage = tru
     <div className="space-y-4">
       <div className="flex gap-2">
         <button onClick={() => setView("new")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "new" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📄 Отгрузка</button>
-        <button onClick={() => setView("clients")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "clients" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>🏢 Клиенты ({kgdClients.length})</button>
+        <button onClick={() => setView("clients")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 ${view === "clients" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="building" size={15} />Клиенты ({kgdClients.length})</button>
         <button onClick={() => setView("history")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "history" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📋 История{pending > 0 ? ` (${pending}⏳)` : ""}</button>
       </div>
       {pending > 0 && (
@@ -5401,7 +5401,7 @@ function ReactivateTab({ clients, orders }) {
           </div>
           {c.contact && (
             <div className="flex gap-2 mt-3 items-center flex-wrap">
-              <a href={waLink(c)} target="_blank" rel="noreferrer" className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-4 py-2 rounded-lg">📲 Написать в WhatsApp</a>
+              <a href={waLink(c)} target="_blank" rel="noreferrer" className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-4 py-2 rounded-lg inline-flex items-center gap-1.5"><Icon name="chat" size={15} />Написать в WhatsApp</a>
               <span className="text-xs text-gray-400">📱 {c.contact}</span>
             </div>
           )}
@@ -5746,10 +5746,10 @@ function EditGroupModal({ group, clients, reload, onClose }) {
     setSaving(false);
   };
   return (
-    <Modal title={`✏️ ${group.clientName || "Заявка"}`} onClose={onClose}>
+    <Modal title={`${group.clientName || "Заявка"} — изменить`} onClose={onClose}>
       <div className="space-y-3">
         <div className="text-xs text-gray-500">Измени дату, сорт/количество/цену, удали лишнюю позицию (✕) или добавь новую.</div>
-        <Inp label="📅 Дата доставки" type="date" value={date} onChange={e => setDate(e.target.value)} />
+        <Inp label="Дата доставки" type="date" value={date} onChange={e => setDate(e.target.value)} />
         {positions.map((p, i) => (
           <div key={i} className="border border-gray-200 rounded-xl p-3 relative">
             <button onClick={() => rm(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600 text-lg leading-none" title="Удалить позицию">✕</button>
