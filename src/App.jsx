@@ -468,6 +468,9 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
   phone: '<path d="M5 4h3l1.6 5-2 1.4a12 12 0 0 0 5.9 5.9l1.4-2 5 1.6v3a1.5 1.5 0 0 1-1.7 1.5A16 16 0 0 1 3.5 6.7 1.5 1.5 0 0 1 5 4z"/>',
   link: '<path d="M9.5 14.5 14.5 9.5"/><path d="M10.5 6.8 12.3 5a4 4 0 0 1 5.7 5.7l-1.8 1.8"/><path d="M13.5 17.2 11.7 19a4 4 0 0 1-5.7-5.7l1.8-1.8"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M10.9 12.1 20 3M16.5 6.5l2 2M14.5 8.5l1.5 1.5"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  download: '<path d="M12 3v12M7 11l5 5 5-5M5 20h14"/>',
 };
 function Icon({ name, size = 22, className = "", stroke = 1.8 }) {
   const p = ICONS[name];
@@ -892,8 +895,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
         </div>
         {!driverMode && dayOrders.length > 0 && (
           <div className="flex gap-2 mb-3">
-            <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Отчёт_${selected}.txt`, buildReport(), "text/plain;charset=utf-8")}>📄 Отчёт за день</Btn>
-            <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Склад_${selected}.csv`, buildCsv(), "text/csv;charset=utf-8")}>📊 Excel</Btn>
+            <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Отчёт_${selected}.txt`, buildReport(), "text/plain;charset=utf-8")}><Icon name="download" size={15} />Отчёт за день</Btn>
+            <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Склад_${selected}.csv`, buildCsv(), "text/csv;charset=utf-8")}><Icon name="download" size={15} />Excel</Btn>
           </div>
         )}
         {(() => {
@@ -952,7 +955,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">👀 самовывоз · контроль</span> : <Badge color="blue">🚶 Самовывоз</Badge>)}{isOneOff && <Badge color="green">💰 разовая</Badge>}{g.orders.some(o => o.from_client) && <Badge color="blue">🌐 от клиента</Badge>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
+                    <span className="font-semibold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600"><Icon name="check" size={18} stroke={2.4} /></span>}{g.clientName || "Клиент"}{g.isSample && <Badge color="yellow">Проба</Badge>}{g.isTrial && <Badge color="yellow">на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="eye" size={12} />самовывоз · контроль</span> : <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="bag" size={12} />Самовывоз</span>)}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="coin" size={12} />разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="globe" size={12} />от клиента</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="user" size={12} />торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="box" size={12} />в машине</span>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500 flex items-center gap-1"><Icon name="building" size={12} />{client.org_name}</div>}
@@ -972,10 +975,10 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{client?.address || g.orders[0].address}</div>}
                   {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                    {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">⏰ {clientTime(client)}</span>}
+                    {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="clock" size={12} />{clientTime(client)}</span>}
                     {(client?.gis_link || g.orders[0].gis_link) && <a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pin" size={12} />2ГИС</a>}
                     {(() => { const co = client ? (client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual)) : g.orders[0].coords; return co ? <a href={buildGisToPointUrl(co)} target="_blank" rel="noreferrer" className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="nav" size={12} />Маршрут сюда</a> : null; })()}
-                    {!driverMode && !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                    {!driverMode && !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
                     {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
                     {!driverMode && canEdit && !g.orders.some(o => o.foreign) && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pencil" size={12} />Изменить</button>}
                     {g.orders[0].created_by_name && <span className="inline-flex items-center gap-1"><Icon name="pencil" size={11} />{g.orders[0].created_by_name}</span>}
@@ -1064,13 +1067,13 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
         )}
         {!driverMode && allDayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length > 0 && (
           <div className="mt-3">
-            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + allDayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}>📋 Скопировать все накладные ({allDayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
+            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + allDayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}><Icon name="copy" size={15} />Скопировать все накладные ({allDayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
           </div>
         )}
 
         {karagandaDayGroups.length > 0 && (
           <div className="mt-5">
-            <h4 className="font-semibold text-gray-700 mb-2">🏬 Из Караганды (напрямую клиентам)</h4>
+            <h4 className="font-semibold text-gray-700 mb-2 flex items-center gap-1.5"><Icon name="store" size={15} />Из Караганды (напрямую клиентам)</h4>
             <div className="space-y-2">
               {karagandaDayGroups.map(g => {
                 const statuses = [...new Set(g.orders.map(o => o.status))];
@@ -1094,9 +1097,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                       ))}
                     </div>
                     <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-2 flex-wrap">
-                      {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">📋 Для накладной</button>}
+                      {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
                       {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
-                      <span className="text-orange-600">🏬 фура из Караганды</span>
+                      <span className="text-orange-600 inline-flex items-center gap-1"><Icon name="store" size={12} />фура из Караганды</span>
                     </div>
                     {canEdit && (
                       <div className="flex gap-2 mt-2">
@@ -1158,7 +1161,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 </div>
                 <div className="flex gap-2">
                   <a href={all.url} target="_blank" rel="noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-3 py-2 rounded-xl">Открыть →</a>
-                  <button onClick={() => copyToClipboard(all.url)} className="bg-white border border-blue-200 text-blue-700 text-sm font-medium px-3 py-2 rounded-xl">📋 Ссылка</button>
+                  <button onClick={() => copyToClipboard(all.url)} className="bg-white border border-blue-200 text-blue-700 text-sm font-medium px-3 py-2 rounded-xl inline-flex items-center gap-1.5"><Icon name="link" size={14} />Ссылка</button>
                 </div>
               </div>
               <div className="space-y-1">
@@ -1170,7 +1173,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   </div>
                 ))}
               </div>
-              <div className="text-xs text-gray-400 mt-2">«📋 Ссылка» — скопировать маршрут в 2ГИС и отправить водителю (в т.ч. разовому, не заводя в систему).</div>
+              <div className="text-xs text-gray-400 mt-2">«Ссылка» — скопировать маршрут в 2ГИС и отправить водителю (в т.ч. разовому, не заводя в систему).</div>
             </div>
 
             {driverBlocks.length > 1 && driverBlocks.map(b => (
@@ -1179,7 +1182,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="truck" size={16} />{b.name} <span className="text-xs font-normal text-gray-500">· {b.route.optimized.length} точек · ~{Math.round(b.route.dist)} км</span></div>
                   <div className="flex gap-2">
                     <a href={b.route.url} target="_blank" rel="noreferrer" className="bg-blue-50 text-blue-700 text-xs font-medium px-3 py-1.5 rounded-lg">Открыть →</a>
-                    <button onClick={() => copyToClipboard(b.route.url)} className="bg-gray-100 text-gray-700 text-xs font-medium px-3 py-1.5 rounded-lg">📋 Ссылка</button>
+                    <button onClick={() => copyToClipboard(b.route.url)} className="bg-gray-100 text-gray-700 text-xs font-medium px-3 py-1.5 rounded-lg inline-flex items-center gap-1"><Icon name="link" size={13} />Ссылка</button>
                   </div>
                 </div>
                 <div className="text-xs text-gray-600 space-y-0.5">
@@ -1559,7 +1562,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
         <div className="text-sm text-amber-100 mt-1.5 border-t border-amber-400 pt-1.5">Сегодня: <b className="text-white">▲ +{fmt(todayIn)} кг</b> приход · <b className="text-white">▼ −{fmt(todayOut)} кг</b> расход</div>
         {(() => {
           const reservedKg = orders.filter(o => (o.status === "новая" || o.status === "в пути") && !o.fromKaraganda).reduce((s, o) => s + o.bags * o.bag_kg, 0);
-          return <div className="text-sm text-amber-100 mt-1">📋 В заявках (бронь): <b className="text-white">{fmt(reservedKg)} кг</b> · свободно: <b className="text-white">{fmt(totalKg - reservedKg)} кг</b></div>;
+          return <div className="text-sm text-amber-100 mt-1 flex items-center gap-1.5"><Icon name="clipboard" size={14} />В заявках (бронь): <b className="text-white">{fmt(reservedKg)} кг</b> · свободно: <b className="text-white">{fmt(totalKg - reservedKg)} кг</b></div>;
         })()}
       </div>
       {negatives.length > 0 && (
@@ -2478,7 +2481,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
         <Modal title={editId ? "Редактировать" : "Новый клиент"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
             <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
-              <div className="text-sm font-medium text-gray-700 mb-1">📋 Вставь все данные — разберу по полям</div>
+              <div className="text-sm font-medium text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="clipboard" size={15} />Вставь все данные — разберу по полям</div>
               <textarea value={clientText} onChange={e => setClientText(e.target.value)} rows={3} placeholder="напр.: ИП Салават, БИН 880101300123, тел +7 701 234 5678, адрес Астана, ул. Абая 10, Kaspi Bank, ИИК KZ12..., БИК CASPKZKA" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
               {clientParseErr && <div className="text-xs text-red-500 mt-1">{clientParseErr}</div>}
               <button onClick={handleParseClient} disabled={parsingClient || !clientText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2 text-sm">{parsingClient ? "Разбираю..." : "✨ Разобрать и заполнить"}</button>
@@ -2600,7 +2603,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
           return groups.filter(g => g.items.length).map(g => (
             <div key={g.key} className="space-y-3">
               <div className="flex items-center justify-between pt-1 border-b border-gray-100 pb-1">
-                <h4 className="font-bold text-gray-700">{g.key === "" ? "🏠 " : "🧑‍💼 "}{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
+                <h4 className="font-semibold text-gray-700 flex items-center gap-1.5"><Icon name={g.key === "" ? "home" : "user"} size={15} />{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
                 {canEdit && g.key !== "orphan" && <button onClick={() => renameGroup(g)} className="text-xs text-amber-600 hover:text-amber-700 inline-flex items-center gap-1"><Icon name="pencil" size={12} />переименовать</button>}
               </div>
               {g.items.map(card)}
@@ -2632,7 +2635,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
         const debtAll = orders.filter(o => o.clientId === historyClient.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0) - manualPaid;
         const periods = [["day", "День"], ["week", "Неделя"], ["month", "Месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
         return (
-          <Modal title={`📋 ${historyClient.name}`} onClose={() => setHistoryClient(null)}>
+          <Modal title={`${historyClient.name} — история`} onClose={() => setHistoryClient(null)}>
             <div className="flex flex-wrap gap-1 mb-2">
               {periods.map(([v, l]) => <button key={v} onClick={() => setHistPeriod(v)} className={`text-xs px-2.5 py-1 rounded-full font-medium ${histPeriod === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{l}</button>)}
             </div>
@@ -2984,7 +2987,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
               <div className="flex gap-2 mt-3 flex-wrap">
                 {canEdit && !isJunior && <Btn size="sm" onClick={() => openPay(d, false)}><Icon name="cash" size={15} />Выплатить{isBrig ? " за месяц" : " зарплату"}</Btn>}
                 {canEdit && <Btn size="sm" variant="secondary" onClick={() => openPay(d, true)}>+ Доплата</Btn>}
-                <Btn size="sm" variant="secondary" onClick={() => setDetailDriver(d)}>📋 Детали</Btn>
+                <Btn size="sm" variant="secondary" onClick={() => setDetailDriver(d)}><Icon name="clipboard" size={15} />Детали</Btn>
               </div>
             </div>
           );
@@ -3218,7 +3221,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
 
       {pl.length > 0 && totalKg > 0 && (
         <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100 rounded-2xl p-4">
-          <div className="font-bold text-gray-800 mb-2">🎯 Приоритеты закупа за период</div>
+          <div className="font-display font-semibold text-gray-800 mb-2 flex items-center gap-1.5"><Icon name="target" size={16} />Приоритеты закупа за период</div>
           <div className="space-y-1.5 text-sm">
             {pl.slice(0, 3).map(([name, v], i) => (
               <div key={name} className="flex items-center justify-between">
@@ -3236,7 +3239,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
       {totalKg > 0 && Object.keys(brandTree).length > 0 && (
         <div className="bg-white border border-gray-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-1">
-            <div className="font-bold text-gray-800">📊 По брендам, сортам и фасовкам</div>
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="chart" size={16} />По брендам, сортам и фасовкам</div>
             <button onClick={downloadGradeDetail} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-3 py-1.5 font-medium">⬇️ Excel</button>
           </div>
           <div className="text-xs text-gray-400 mb-3">Продажи за выбранный период.</div>
@@ -3378,7 +3381,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
       {karagandaKg > 0 && (
         <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100 rounded-2xl p-4">
           <div className="flex items-center justify-between">
-            <div className="font-bold text-gray-800">🏬 Из Караганды (напрямую клиентам)</div>
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="store" size={16} />Из Караганды (напрямую клиентам)</div>
             <div className="text-right"><div className="text-lg font-bold text-orange-600">{fmt(karagandaKg)} кг</div>{karagandaSum > 0 && <div className="text-xs text-gray-500">{fmt(karagandaSum)} тг</div>}</div>
           </div>
           <div className="text-xs text-gray-500 mt-2">Входит в объём и деньги, но склад Астаны не трогает и в закуп не считается.</div>
@@ -3517,7 +3520,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
           </>}
         </div>
       </div>
-      {Object.keys(ds).length > 0 && <div><h4 className="font-semibold text-gray-700 mb-3">Расчёт с водителями</h4><div className="space-y-2">{Object.values(ds).map((d, i) => <div key={i} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between"><div><div className="font-medium">🚛 {d.name}</div><div className="text-sm text-gray-500">{fmt(d.kg)} кг</div></div><div className="text-emerald-600 font-bold">{fmt(d.pay)} тг</div></div>)}</div></div>}
+      {Object.keys(ds).length > 0 && <div><h4 className="font-semibold text-gray-700 mb-3">Расчёт с водителями</h4><div className="space-y-2">{Object.values(ds).map((d, i) => <div key={i} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between"><div><div className="font-medium flex items-center gap-1.5"><Icon name="truck" size={15} />{d.name}</div><div className="text-sm text-gray-500">{fmt(d.kg)} кг</div></div><div className="text-emerald-600 font-bold">{fmt(d.pay)} тг</div></div>)}</div></div>}
       <div><h4 className="font-semibold text-gray-700 mb-3">Маршрутный лист</h4>{filtered.length === 0 ? <div className="text-center py-8 text-gray-400">Нет заявок</div> : (() => {
         const groups = {};
         [...filtered].sort((a, b) => a.date.localeCompare(b.date)).forEach(o => { const key = (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date; (groups[key] = groups[key] || { clientName: o.clientName, date: o.date, orders: [] }).orders.push(o); });
@@ -3668,7 +3671,7 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
                 <Inp type="number" placeholder="кг" value={it.kg} onChange={e => setIt({ ...it, kg: e.target.value })} />
               </div>
               <Btn size="sm" variant={editItemIdx != null ? "primary" : "secondary"} onClick={saveItem}>{editItemIdx != null ? "✓ Сохранить позицию" : "+ Добавить позицию"}</Btn>
-              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm gap-2 ${editItemIdx === i ? "bg-amber-100" : "bg-gray-50"}`}><span className="min-w-0">{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium ml-auto whitespace-nowrap">{fmt(itemKg(p))} кг</span><button className="text-gray-400 hover:text-amber-600 flex-shrink-0" title="Изменить" onClick={() => editItem(i)}>✏️</button><button className="text-red-400 hover:text-red-600 flex-shrink-0" title="Удалить" onClick={() => removeItem(i)}>✕</button></div>)}</div>}
+              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm gap-2 ${editItemIdx === i ? "bg-amber-100" : "bg-gray-50"}`}><span className="min-w-0">{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium ml-auto whitespace-nowrap">{fmt(itemKg(p))} кг</span><button className="text-gray-400 hover:text-amber-600 flex-shrink-0" title="Изменить" onClick={() => editItem(i)}><Icon name="pencil" size={15} /></button><button className="text-red-400 hover:text-red-600 flex-shrink-0" title="Удалить" onClick={() => removeItem(i)}><Icon name="trash" size={15} /></button></div>)}</div>}
             </div>
             <Inp label="Примечание" value={f.note} onChange={e => setF({ ...f, note: e.target.value })} />
           </div>
@@ -3692,7 +3695,7 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
             {(t.driver_name || t.car_number || t.whatsapp || t.logist_phone) && (
               <div className="text-xs text-gray-500 mt-2 space-y-0.5">
                 {(t.driver_name || t.car_number) && <div className="flex items-center gap-1"><Icon name="user" size={13} />{t.driver_name}{t.car_number ? ` · ${t.car_number}` : ""}</div>}
-                {t.whatsapp && <div>📱 <a href={waLink(t.whatsapp)} target="_blank" rel="noreferrer" className="text-emerald-600">{t.whatsapp}</a></div>}
+                {t.whatsapp && <div className="flex items-center gap-1.5"><Icon name="phone" size={13} /><a href={waLink(t.whatsapp)} target="_blank" rel="noreferrer" className="text-emerald-600">{t.whatsapp}</a></div>}
                 {t.logist_phone && <div>📞 Логист: {t.logist_phone}</div>}
               </div>
             )}
@@ -3755,7 +3758,7 @@ function WarehouseSettings({ notes = [], reload }) {
   };
   return (
     <div className="bg-white border border-gray-100 rounded-xl p-4">
-      <div className="font-bold text-gray-800 mb-1">🏭 Адрес склада (старт маршрутов)</div>
+      <div className="font-display font-semibold text-gray-800 mb-1 flex items-center gap-1.5"><Icon name="box" size={16} />Адрес склада (старт маршрутов)</div>
       <div className="text-xs text-gray-400 mb-3">Отсюда строится маршрут доставки. Вставь ссылку 2ГИС на склад и определи точку.{coords ? "" : " Сейчас — адрес по умолчанию."}</div>
       <div className="space-y-2">
         <Inp label="Название/адрес склада" value={addr} onChange={e => setAddr(e.target.value)} placeholder="напр. Астана, ул. …" />
@@ -4001,7 +4004,7 @@ function LoginLog({ logins }) {
           <div className="bg-white border border-gray-100 rounded-xl p-3 space-y-2">
             <Sel label="Кто" value={who} onChange={e => setWho(e.target.value)} options={[{ value: "", label: "— все —" }, ...people.map(p => ({ value: p.id, label: p.name }))]} />
             <div className="grid grid-cols-2 gap-2">
-              <Sel label="Тип" value={kind} onChange={e => setKind(e.target.value)} options={[{ value: "all", label: "Все" }, { value: "open", label: "📱 Открыл приложение" }, { value: "login", label: "🔑 Вход по паролю" }]} />
+              <Sel label="Тип" value={kind} onChange={e => setKind(e.target.value)} options={[{ value: "all", label: "Все" }, { value: "open", label: "Открыл приложение" }, { value: "login", label: "Вход по паролю" }]} />
               <Inp label="За дату" type="date" value={day} onChange={e => setDay(e.target.value)} />
             </div>
             {(who || kind !== "all" || day) && <button onClick={() => { setWho(""); setKind("all"); setDay(""); }} className="text-xs text-amber-600 font-medium">Сбросить фильтры</button>}
@@ -4010,7 +4013,7 @@ function LoginLog({ logins }) {
           {filtered.slice(0, 300).map(l => (
             <div key={l.id} className="bg-white border border-gray-100 rounded-lg px-3 py-2 flex items-center justify-between text-sm">
               <div>
-                <span className="mr-1" title={l.kind === "login" ? "вход по паролю" : "открыл приложение"}>{l.kind === "login" ? "🔑" : "📱"}</span>
+                <span className="mr-1 inline-flex text-gray-400" title={l.kind === "login" ? "вход по паролю" : "открыл приложение"}><Icon name={l.kind === "login" ? "key" : "phone"} size={13} /></span>
                 <span className="font-medium text-gray-900">{l.name || l.username}</span>
                 <span className="text-xs text-gray-400 ml-1">· {ROLES[l.role] || l.role}</span>
               </div>
@@ -4442,7 +4445,7 @@ function CrmTab({ crm = [], clients = [], reload }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><div><h3 className="font-bold text-gray-800">🎯 Мои потенциальные клиенты</h3><p className="text-xs text-gray-400">Личная база — заношу, кому продать, и веду записи по ним.</p></div><Btn onClick={openNew}>+ Добавить</Btn></div>
+      <div className="flex items-center justify-between"><div><h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="target" size={17} />Мои потенциальные клиенты</h3><p className="text-xs text-gray-400">Личная база — заношу, кому продать, и веду записи по ним.</p></div><Btn onClick={openNew}>+ Добавить</Btn></div>
 
       <div className="flex flex-wrap gap-1.5">
         <button onClick={() => setFilter("all")} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === "all" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Все · {crm.length}</button>
@@ -4476,9 +4479,9 @@ function CrmTab({ crm = [], clients = [], reload }) {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{c.name}</span><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${st.cls}`}>{st.label}</span></div>
-                  {c.contact && <div className="text-sm text-gray-500 mt-0.5">📱 {c.contact}</div>}
+                  {c.contact && <div className="text-sm text-gray-500 mt-0.5 flex items-center gap-1.5"><Icon name="phone" size={13} />{c.contact}</div>}
                   {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
-                  {c.next_date && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-block">🔔 связаться {(c.next_date || "").split("-").reverse().join(".")}</div>}
+                  {c.next_date && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-flex items-center gap-1"><Icon name="bell" size={12} />связаться {(c.next_date || "").split("-").reverse().join(".")}</div>}
                   {c.note && <div className="text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-2 mt-1.5 whitespace-pre-wrap">{c.note}</div>}
                 </div>
                 <div className="flex gap-1 flex-shrink-0"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(c.id)}><Icon name="trash" size={15} /></Btn></div>
@@ -5107,9 +5110,9 @@ function KgdManagersTab({ kgdClients = [], kgdDocs = [], reload, canManage = tru
   return (
     <div className="space-y-4">
       <div className="flex gap-2">
-        <button onClick={() => setView("new")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "new" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📄 Отгрузка</button>
+        <button onClick={() => setView("new")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 ${view === "new" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="file" size={15} />Отгрузка</button>
         <button onClick={() => setView("clients")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 ${view === "clients" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="building" size={15} />Клиенты ({kgdClients.length})</button>
-        <button onClick={() => setView("history")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${view === "history" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📋 История{pending > 0 ? ` (${pending}⏳)` : ""}</button>
+        <button onClick={() => setView("history")} className={`flex-1 py-2.5 rounded-xl text-sm font-medium inline-flex items-center justify-center gap-1.5 ${view === "history" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="clipboard" size={15} />История{pending > 0 ? ` (${pending})` : ""}</button>
       </div>
       {pending > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-sm text-amber-800">⏳ {pending} документ(ов) ждут отправки в историю — уйдут сами, когда появится интернет.</div>
@@ -5234,7 +5237,7 @@ function KgdManagersTab({ kgdClients = [], kgdDocs = [], reload, canManage = tru
         return (
           <div className="space-y-3">
             <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">
-              {isSenior ? "📋 История всех менеджеров: кто, когда и что выбил." : "📋 Твоя история сформированных документов."} Эти данные <b>не попадают</b> в склад и отчёты компании.
+              {isSenior ? "История всех менеджеров: кто, когда и что выбил." : "Твоя история сформированных документов."} Эти данные <b>не попадают</b> в склад и отчёты компании.
             </div>
             {list.length > 0 && (
               <div className="grid grid-cols-2 gap-2">
@@ -5325,11 +5328,11 @@ function ContractsTab({ clients }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">📄 Данные Покупателя берутся из клиента или из вставленного текста. Метки <b>〔…〕</b> — впиши вручную перед печатью (номер, дата, <b>пункт 2.2</b>). Чего не нашлось — тоже отметится 〔ВПИШИТЕ〕.</div>
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">Данные Покупателя берутся из клиента или из вставленного текста. Метки <b>〔…〕</b> — впиши вручную перед печатью (номер, дата, <b>пункт 2.2</b>). Чего не нашлось — тоже отметится 〔ВПИШИТЕ〕.</div>
 
       <div className="flex gap-2">
         <button onClick={() => { setSource("client"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${source === "client" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="user" size={15} />Из клиентов</button>
-        <button onClick={() => { setSource("text"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${source === "text" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📋 Вставить текст</button>
+        <button onClick={() => { setSource("text"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${source === "text" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="clipboard" size={15} />Вставить текст</button>
       </div>
 
       {source === "client"
@@ -5346,12 +5349,12 @@ function ContractsTab({ clients }) {
 
       {party && (
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
-          <div className="flex items-center justify-between mb-2"><div className="font-bold text-gray-800">Реквизиты {source === "text" ? "(из текста)" : "клиента"}</div><Btn size="sm" variant="secondary" onClick={() => copyToClipboard(requisites)}>📋 Копировать</Btn></div>
+          <div className="flex items-center justify-between mb-2"><div className="font-bold text-gray-800">Реквизиты {source === "text" ? "(из текста)" : "клиента"}</div><Btn size="sm" variant="secondary" onClick={() => copyToClipboard(requisites)}><Icon name="copy" size={15} />Копировать</Btn></div>
           <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans">{requisites}</pre>
         </div>
       )}
 
-      <Btn onClick={fill} disabled={!party}>📄 Сформировать договор</Btn>
+      <Btn onClick={fill} disabled={!party}><Icon name="file" size={16} />Сформировать договор</Btn>
 
       {result && (
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
@@ -5359,7 +5362,7 @@ function ContractsTab({ clients }) {
             <div className="font-bold text-gray-800">Готовый договор</div>
             <div className="flex gap-2 flex-wrap">
               <Btn size="sm" onClick={printContract}>🖨 Печать</Btn>
-              <Btn size="sm" variant="secondary" onClick={() => copyToClipboard(result)}>📋 Копировать</Btn>
+              <Btn size="sm" variant="secondary" onClick={() => copyToClipboard(result)}><Icon name="copy" size={15} />Копировать</Btn>
               <Btn size="sm" variant="secondary" onClick={() => downloadDocx(`Договор_${partyName}.docx`, result)}>⬇️ Скачать Word</Btn>
             </div>
           </div>
@@ -5397,7 +5400,7 @@ function ReactivateTab({ clients, orders }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">🔔 Клиенты, которые брали муку регулярно, но сейчас задержались <b>дольше своего обычного графика</b>. Можно напомнить и предложить заявку. Те, у кого уже есть активная заявка, сюда не попадают.</div>
+      <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">Клиенты, которые брали муку регулярно, но сейчас задержались <b>дольше своего обычного графика</b>. Можно напомнить и предложить заявку. Те, у кого уже есть активная заявка, сюда не попадают.</div>
       {rows.length === 0 ? (
         <div className="text-center py-12 text-gray-400">Никто не выбивается из своего графика 👍</div>
       ) : rows.map(({ c, avgDays, daysSince, last, count }) => (
@@ -5413,7 +5416,7 @@ function ReactivateTab({ clients, orders }) {
           {c.contact && (
             <div className="flex gap-2 mt-3 items-center flex-wrap">
               <a href={waLink(c)} target="_blank" rel="noreferrer" className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-4 py-2 rounded-lg inline-flex items-center gap-1.5"><Icon name="chat" size={15} />Написать в WhatsApp</a>
-              <span className="text-xs text-gray-400">📱 {c.contact}</span>
+              <span className="text-xs text-gray-400 inline-flex items-center gap-1"><Icon name="phone" size={12} />{c.contact}</span>
             </div>
           )}
         </div>
@@ -5493,7 +5496,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
           <div className="text-sm text-amber-800">Отметь галочками компании для акта сверки — скопируется список «название — БИН» для бухгалтера.</div>
           <div className="flex gap-2 flex-wrap">
-            <Btn size="sm" onClick={copyReconcile} disabled={!selectedList.length}>📋 Скопировать ({selectedList.length})</Btn>
+            <Btn size="sm" onClick={copyReconcile} disabled={!selectedList.length}><Icon name="copy" size={15} />Скопировать ({selectedList.length})</Btn>
             <Btn size="sm" variant="secondary" onClick={() => setSelected(Object.fromEntries(list.map(c => [c.key, true])))}>Выбрать все</Btn>
             <Btn size="sm" variant="secondary" onClick={() => { setReconcile(false); setSelected({}); }}>✕ Готово</Btn>
           </div>
@@ -5626,7 +5629,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   return (
     <div className="space-y-4">
       <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-800">
-        🏬 Склад <b>Караганда</b>. Фуры идут <b>напрямую клиентам</b>. Записываешь как <b>«в пути»</b>; когда отправили — жмёшь <b>«Отгружено»</b>, и сумма идёт клиенту в долг и в отчёт. Склад в Астане <b>не трогается</b>.
+        Склад <b>Караганда</b>. Фуры идут <b>напрямую клиентам</b>. Записываешь как <b>«в пути»</b>; когда отправили — жмёшь <b>«Отгружено»</b>, и сумма идёт клиенту в долг и в отчёт. Склад в Астане <b>не трогается</b>.
       </div>
       <div className="flex items-center justify-between">
         <div className="text-sm text-gray-500">Всего отправлено: <b>{fmt(totalKg)} кг</b></div>
