@@ -465,7 +465,9 @@ const ICONS = {
   trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/>',
   nav: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5 13 13l-4.5 2.5L11 11z"/>',
   door: '<path d="M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17M4 21h16M14 12h.01"/>',
-  truckFast: '<path d="M3 6h11v10H3z"/><path d="M14 9h3.5l2.5 3v4h-6z"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  phone: '<path d="M5 4h3l1.6 5-2 1.4a12 12 0 0 0 5.9 5.9l1.4-2 5 1.6v3a1.5 1.5 0 0 1-1.7 1.5A16 16 0 0 1 3.5 6.7 1.5 1.5 0 0 1 5 4z"/>',
+  link: '<path d="M9.5 14.5 14.5 9.5"/><path d="M10.5 6.8 12.3 5a4 4 0 0 1 5.7 5.7l-1.8 1.8"/><path d="M13.5 17.2 11.7 19a4 4 0 0 1-5.7-5.7l1.8-1.8"/>',
 };
 function Icon({ name, size = 22, className = "", stroke = 1.8 }) {
   const p = ICONS[name];
@@ -1164,7 +1166,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   <div key={i} className="flex items-center gap-2 text-sm">
                     <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0">{i}</span>
                     <span className="text-gray-700">{p.name}</span>
-                    {p.delivery_time && <span className="text-xs text-blue-600 ml-auto">⏰ {p.delivery_time}</span>}
+                    {p.delivery_time && <span className="text-xs text-blue-600 ml-auto inline-flex items-center gap-1"><Icon name="clock" size={12} />{p.delivery_time}</span>}
                   </div>
                 ))}
               </div>
@@ -1181,7 +1183,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   </div>
                 </div>
                 <div className="text-xs text-gray-600 space-y-0.5">
-                  {b.route.optimized.map((p, i) => <div key={i}>{i + 1}. {p.name}{p.delivery_time ? ` · ⏰ ${p.delivery_time}` : ""}</div>)}
+                  {b.route.optimized.map((p, i) => <div key={i}>{i + 1}. {p.name}{p.delivery_time ? ` · ${p.delivery_time}` : ""}</div>)}
                 </div>
               </div>
             ))}
@@ -2348,8 +2350,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", prices: c.prices || [], ownerId: c.ownerId || "" }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", prices: [], ownerId: isRep ? myUid : "" }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "" }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "" }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -2522,6 +2524,14 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               <p className="text-xs text-gray-400 mt-1">Если заполнишь — будет показываться как «08:00–10:00» вместо общего.</p>
             </div>
             <div>
+              <label className="text-sm font-medium text-gray-700">Время работы клиента</label>
+              <div className="flex items-center gap-2 mt-1">
+                <input type="text" value={form.work_hours || ""} onChange={e => setForm({ ...form, work_hours: e.target.value })} placeholder="напр. 9:00–18:00" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                <button type="button" onClick={() => setForm({ ...form, work_hours: form.work_hours === "24/7" ? "" : "24/7" })} className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${form.work_hours === "24/7" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>24/7</button>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Когда клиент открыт. Нажми «24/7», если круглосуточно.</p>
+            </div>
+            <div>
               <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value, coords: null })} placeholder="https://2gis.kz/astana/geo/..." />
               <div className="flex items-center gap-2 mt-2">
                 <Btn size="sm" variant="secondary" onClick={handleResolve} disabled={resolving || !form.gis_link}>{resolving ? "Определяю..." : "Определить координаты"}</Btn>
@@ -2567,16 +2577,17 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                   {c.org_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="building" size={13} />{c.org_name}</div>}
                   {c.contact_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="user" size={13} />{c.contact_name}</div>}
                   {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
-                  {c.contact && <div className="text-sm text-gray-500">📱 {c.contact}</div>}
-                  <div className="text-xs text-gray-500 mt-1">🕒 {last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
+                  {c.work_hours && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="clock" size={13} />Работает: <b className="text-gray-700 font-medium">{c.work_hours}</b></div>}
+                  {c.contact && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="phone" size={13} />{c.contact}</div>}
+                  <div className="text-xs text-gray-500 mt-1 flex items-center gap-1.5"><Icon name="calendar" size={12} />{last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
                   {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-flex items-center gap-1"><Icon name="box" size={12} />{c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
                   {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
                 </div>
                 {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}><Icon name="trash" size={15} /></Btn></div>}
               </div>
               <div className="flex gap-2 flex-wrap">
-                <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}>📋 История и оплаты</Btn>
-                {canEdit && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}>🔗 Заказ-ссылка</Btn>}
+                <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}><Icon name="clipboard" size={15} />История и оплаты</Btn>
+                {canEdit && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}><Icon name="link" size={15} />Заказ-ссылка</Btn>}
               </div>
             </div>
             );
