@@ -950,7 +950,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">👀 самовывоз · контроль</span> : <Badge color="blue">🚶 Самовывоз</Badge>)}{isOneOff && <Badge color="green">💰 разовая</Badge>}{g.orders.some(o => o.from_client) && <Badge color="blue">🌐 от клиента</Badge>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
+                    <span className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600 text-lg">✓</span>}{g.clientName || "Клиент"}{g.isSample && " 🧪"}{g.isTrial && <Badge color="yellow">на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">👀 самовывоз · контроль</span> : <Badge color="blue">🚶 Самовывоз</Badge>)}{isOneOff && <Badge color="green">💰 разовая</Badge>}{g.orders.some(o => o.from_client) && <Badge color="blue">🌐 от клиента</Badge>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full">🧑‍💼 торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <Badge color="blue">📦 в машине</Badge>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500 flex items-center gap-1"><Icon name="building" size={12} />{client.org_name}</div>}
@@ -960,7 +960,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                         <span>• {m.brand} {m.grade}</span>
                         <span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{m.bags} меш. × {m.bag_kg} кг</span>
                         <span>= <b>{fmt(m.bags * m.bag_kg)} кг</b></span>
-                        {m.trial ? <span className="text-orange-600 font-medium">🎁 на пробу</span> : (showPrices && m.tg ? <span className="text-gray-400">· {fmt(m.tg)} тг</span> : null)}
+                        {m.trial ? <span className="text-orange-600 font-medium">на пробу</span> : (showPrices && m.tg ? <span className="text-gray-400">· {fmt(m.tg)} тг</span> : null)}
                       </div>
                     ))}
                   </div>
@@ -1321,9 +1321,9 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           <h4 className="font-bold text-gray-800 mb-3">✅ Проверь и подтверди</h4>
           {aiResult.map((p, i) => (
             <div key={i} className="bg-gray-50 rounded-xl p-4 mb-3 text-sm space-y-1">
-              <div className="flex items-center gap-2"><span className="font-semibold">{p.clientFound}</span>{!p.clientId && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
+              <div className="flex items-center gap-2"><span className="font-semibold">{p.clientFound}</span>{!p.clientId && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">на пробу</Badge>}</div>
               <div className="text-gray-600">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
-              <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">🎁 бесплатно (на пробу)</span> : <>Цена: {p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">не найдена</span>}</>}</div>
+              <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">бесплатно (на пробу)</span> : <>Цена: {p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">не найдена</span>}</>}</div>
             </div>
           ))}
           <div className="flex gap-2">
@@ -1334,7 +1334,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
       )}
 
       {showManual && (
-        <Modal title={form.isSample ? "🧪 Пробник" : form.trial ? "🎁 На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
+        <Modal title={form.isSample ? "Пробник" : form.trial ? "На пробу клиенту" : "Новая заявка"} onClose={() => setShowManual(false)}>
           {!form.isSample && (
             <label className="flex items-center gap-2 mb-2 cursor-pointer bg-orange-50 rounded-lg px-3 py-2">
               <input type="checkbox" checked={form.trial} onChange={e => setForm({ ...form, trial: e.target.checked })} className="w-4 h-4 accent-orange-500" />
@@ -1386,7 +1386,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
               <div key={g.key} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div>
-                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{g.clientName || "Клиент"}</span><Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>{g.isSample && <Badge color="yellow">🧪 Проба</Badge>}{g.isTrial && <Badge color="yellow">🎁 на пробу</Badge>}</div>
+                    <div className="flex items-center gap-2 flex-wrap"><span className="font-bold text-gray-900">{g.clientName || "Клиент"}</span><Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>{g.isSample && <Badge color="yellow">Проба</Badge>}{g.isTrial && <Badge color="yellow">на пробу</Badge>}</div>
                     <div className="text-sm text-gray-500 mt-1 space-y-0.5">
                       {g.orders.map(o => <div key={o.id} className="flex items-center gap-2 flex-wrap"><span>• {o.brand} · {o.grade}</span><span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{o.bags} меш. × {o.bag_kg} кг</span><span>= <b>{fmt(o.bags * o.bag_kg)} кг</b>{o.trial ? " · на пробу" : (o.price_per_kg ? ` · ${fmt(o.bags * o.bag_kg * o.price_per_kg)} тг` : "")}</span></div>)}
                     </div>
@@ -1961,10 +1961,10 @@ function LabTab({ lab = [], reload, canEdit = true }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-bold text-gray-800">🧪 Лаборатория — анализы муки</h3>
+        <h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="flask" size={18} />Лаборатория — анализы муки</h3>
         {canEdit && <Btn onClick={openNew}>+ Анализ</Btn>}
       </div>
-      <p className="text-sm text-gray-500">Показатели каждой партии муки. «+ Анализ» — занести вручную или вставить протокол и нажать «🤖 Разобрать» — поля заполнятся сами.</p>
+      <p className="text-sm text-gray-500">Показатели каждой партии муки. «+ Анализ» — занести вручную или вставить протокол и нажать «Разобрать» — поля заполнятся сами.</p>
       {lab.length > 3 && <Inp placeholder="🔎 Поиск: марка, сорт, дата…" value={q} onChange={e => setQ(e.target.value)} />}
 
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-x-auto">
@@ -2565,7 +2565,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                 <div>
                   <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
                   {c.org_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="building" size={13} />{c.org_name}</div>}
-                  {c.contact_name && <div className="text-sm text-gray-500">👤 {c.contact_name}</div>}
+                  {c.contact_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="user" size={13} />{c.contact_name}</div>}
                   {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
                   {c.contact && <div className="text-sm text-gray-500">📱 {c.contact}</div>}
                   <div className="text-xs text-gray-500 mt-1">🕒 {last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
@@ -2682,7 +2682,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                     {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} — {o.status}</div>)}
                     <div className="mt-2">
                       {isFree
-                        ? <span className="text-orange-600 font-medium text-xs">🎁 На пробу — бесплатно</span>
+                        ? <span className="text-orange-600 font-medium text-xs">На пробу — бесплатно</span>
                         : allPaid
                         ? <div className="flex items-center gap-2 flex-wrap"><span className="text-emerald-700 font-medium text-xs">✓ Оплачено{method ? ` · ${method}` : ""}</span>{canEdit && <Btn size="sm" variant="ghost" onClick={() => markPaid(historyClient.id, date, false)}>отменить</Btn>}</div>
                         : (canEdit
@@ -3078,7 +3078,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
   const trialCost = Math.round(trialDel.reduce((s, o) => s + o.bags * o.bag_kg * (costPerKg[`${o.brand}|${o.grade}|${o.bag_kg}`] || 0), 0));
   const trialByProduct = {};
   trialDel.forEach(o => { const p = `${o.brand} ${o.grade}`; trialByProduct[p] = (trialByProduct[p] || 0) + o.bags * o.bag_kg; });
-  if (trialCost > 0) expByCat["🎁 На пробу"] = (expByCat["🎁 На пробу"] || 0) + trialCost;
+  if (trialCost > 0) expByCat["На пробу"] = (expByCat["На пробу"] || 0) + trialCost;
   // Общие расходы = ручные расходы + оценка стоимости проб
   const expTotal = expInPeriod.reduce((s, x) => s + (x.amount || 0), 0) + trialCost;
   // Зарплаты за период — реально выплаченные людям (водители/бригадир/грузчики/зарплата), а не расчётная ставка
@@ -3349,7 +3349,7 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
       {trialKg > 0 && (
         <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
-            <div className="font-bold text-gray-800">🎁 На пробу (бесплатно) за период</div>
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="gift" size={16} />На пробу (бесплатно) за период</div>
             <div className="text-right"><div className="text-lg font-bold text-orange-600">{fmt(trialKg)} кг</div>{trialCost > 0 && <div className="text-xs text-gray-500">≈ {fmt(trialCost)} тг по закупке</div>}</div>
           </div>
           <div className="space-y-1 text-sm">
@@ -5317,7 +5317,7 @@ function ContractsTab({ clients }) {
       <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800">📄 Данные Покупателя берутся из клиента или из вставленного текста. Метки <b>〔…〕</b> — впиши вручную перед печатью (номер, дата, <b>пункт 2.2</b>). Чего не нашлось — тоже отметится 〔ВПИШИТЕ〕.</div>
 
       <div className="flex gap-2">
-        <button onClick={() => { setSource("client"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${source === "client" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>👤 Из клиентов</button>
+        <button onClick={() => { setSource("client"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${source === "client" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="user" size={15} />Из клиентов</button>
         <button onClick={() => { setSource("text"); setResult(""); }} className={`flex-1 py-2 rounded-lg text-sm font-medium ${source === "text" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>📋 Вставить текст</button>
       </div>
 
@@ -5759,7 +5759,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
               <Sel label="Фасовка" value={p.bag_kg} onChange={e => upd(i, "bag_kg", e.target.value)} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
               <Inp label="Мешков" type="number" value={p.bags} onChange={e => upd(i, "bags", e.target.value)} />
               {p.trial
-                ? <div className="col-span-2 text-xs text-orange-600 font-medium">🎁 на пробу (бесплатно)</div>
+                ? <div className="col-span-2 text-xs text-orange-600 font-medium">на пробу (бесплатно)</div>
                 : <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={p.price_per_kg || ""} onChange={e => upd(i, "price_per_kg", e.target.value)} /></div>}
             </div>
           </div>
