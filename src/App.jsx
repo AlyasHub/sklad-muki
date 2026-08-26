@@ -2998,7 +2998,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   );
 }
 
-function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [], reload = () => {}, canEdit = true }) {
+function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [], clients = [], users = [], reload = () => {}, canEdit = true }) {
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   // 🔍 Свой отчёт: фильтры по бренду, сорту и фасовкам (период — общий сверху)
@@ -3078,6 +3078,16 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
   const paidTotal = paidOrders.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
   const paidByMethod = {};
   paidOrders.forEach(o => { const m = o.pay_method || "Не указано"; paidByMethod[m] = (paidByMethod[m] || 0) + o.bags * o.bag_kg * (o.price_per_kg || 0); });
+  // 📊 По торгпредам: оборот/тоннаж/заявки за период + текущий долг (всё неоплаченное минус оплаты)
+  const repsList = (users || []).filter(u => u.role === "rep");
+  const ownerByClient = {}; (clients || []).forEach(c => { if (c.ownerId) ownerByClient[c.id] = c.ownerId; });
+  const ownerOf = o => ownerByClient[o.clientId] || (o.created_by_role === "rep" ? o.created_by : null); // клиент → его торгпред (или автор-пробник)
+  const repAgg = {};
+  const repEnsure = id => (repAgg[id] = repAgg[id] || { kg: 0, rev: 0, ordSet: new Set(), cliSet: new Set(), debt: 0 });
+  delivered.forEach(o => { const owner = ownerOf(o); if (!owner) return; const a = repEnsure(owner); a.kg += o.bags * o.bag_kg; a.rev += o.bags * o.bag_kg * (o.price_per_kg || 0); a.ordSet.add((o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date); if (o.clientId) a.cliSet.add(o.clientId); });
+  orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const owner = ownerOf(o); if (!owner) return; const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) repEnsure(owner).debt += sum; });
+  (payments || []).forEach(p => { const owner = ownerByClient[p.clientId]; if (owner && repAgg[owner]) repAgg[owner].debt -= (p.amount || 0); });
+  const repStats = repsList.map(r => { const a = repAgg[r.id] || { kg: 0, rev: 0, ordSet: new Set(), cliSet: new Set(), debt: 0 }; return { id: r.id, name: r.group_name || r.name, kg: a.kg, rev: a.rev, orders: a.ordSet.size, clientsN: a.cliSet.size, debt: Math.max(0, a.debt) }; }).sort((a, b) => b.rev - a.rev);
   // Расходы за период
   const expInPeriod = expenses.filter(filterFn);
   const expByCat = {};
@@ -3237,11 +3247,33 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
         </div>
       )}
 
+      {repStats.length > 0 && (
+        <div className="bg-white border border-gray-100 rounded-2xl p-4">
+          <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5 mb-3"><Icon name="user" size={16} />По торгпредам <span className="text-xs font-normal text-gray-400">за период</span></div>
+          <div className="space-y-3">
+            {repStats.map(r => (
+              <div key={r.id} className="border border-gray-100 rounded-xl p-3">
+                <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                  <span className="font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="user" size={14} />{r.name}</span>
+                  <span className="text-xs text-gray-400">{r.orders} заявок · {r.clientsN} клиентов</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-emerald-50 rounded-lg py-2 px-1"><div className="text-[11px] text-emerald-700">Оборот</div><div className="font-display font-semibold text-emerald-800 text-sm">{fmt(Math.round(r.rev))} тг</div></div>
+                  <div className="bg-gray-50 rounded-lg py-2 px-1"><div className="text-[11px] text-gray-500">Отгружено</div><div className="font-display font-semibold text-gray-800 text-sm">{fmt(r.kg)} кг</div></div>
+                  <div className={`rounded-lg py-2 px-1 ${r.debt > 0 ? "bg-red-50" : "bg-gray-50"}`}><div className={`text-[11px] ${r.debt > 0 ? "text-red-600" : "text-gray-500"}`}>Долг</div><div className={`font-display font-semibold text-sm ${r.debt > 0 ? "text-red-700" : "text-gray-800"}`}>{fmt(Math.round(r.debt))} тг</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-gray-400 mt-2">Оборот и тоннаж — за выбранный период. Долг — текущий (всё неоплаченное минус оплаты).</div>
+        </div>
+      )}
+
       {totalKg > 0 && Object.keys(brandTree).length > 0 && (
         <div className="bg-white border border-gray-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-1">
             <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="chart" size={16} />По брендам, сортам и фасовкам</div>
-            <button onClick={downloadGradeDetail} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-3 py-1.5 font-medium">⬇️ Excel</button>
+            <button onClick={downloadGradeDetail} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg px-3 py-1.5 font-medium inline-flex items-center gap-1"><Icon name="download" size={13} />Excel</button>
           </div>
           <div className="text-xs text-gray-400 mb-3">Продажи за выбранный период.</div>
           <div className="space-y-5">
@@ -6523,7 +6555,7 @@ export default function App() {
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
             {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} reload={reload} canEdit={isDirector} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} reload={reload} canEdit={isDirector} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} />}
           </>
         )}
