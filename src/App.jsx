@@ -973,6 +973,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
                   {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{client?.address || g.orders[0].address}</div>}
+                  {(client?.work_hours || g.orders[0].work_hours) && <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-amber-800 bg-amber-100 border border-amber-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Работает: {client?.work_hours || g.orders[0].work_hours}</div>}
                   {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {clientTime(client) && <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="clock" size={12} />{clientTime(client)}</span>}
@@ -1065,9 +1066,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
             })}
           </div>
         )}
-        {!driverMode && allDayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length > 0 && (
+        {!driverMode && allDayGroups.filter(g => !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample)).length > 0 && (
           <div className="mt-3">
-            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + allDayGroups.map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}><Icon name="copy" size={15} />Скопировать все накладные ({allDayGroups.filter(g => g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
+            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + allDayGroups.filter(g => !g.orders.some(o => o.foreign)).map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}><Icon name="copy" size={15} />Скопировать все накладные ({allDayGroups.filter(g => !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
           </div>
         )}
 

@@ -230,35 +230,36 @@ async function listFor(u, table) {
   }
   if (u.role === "rep") {
     // Торговый представитель: СВОИ клиенты (по ownerId), свои оплаты, общий склад (без цен закупа),
-    // водители (без ставок) и ВСЕ заявки как расписание — но чужие обезличены и без цен.
+    // водители (без ставок). ВСЕ заявки видит как расписание (куда/кого/что/адрес/2ГИС/водитель),
+    // но чужие — ТОЛЬКО ДЛЯ ЧТЕНИЯ и БЕЗ цен. Нужно, чтобы он видел маршруты и не уводил водителя.
     if (!["clients", "orders", "stock", "drivers", "payments", "notes"].includes(table)) return [];
     if (table === "stock") return (await dbList("stock")).map(({ price_per_kg, ...s }) => s); // без закупочных цен
     if (table === "drivers") return (await dbList("drivers")).map(({ rate_per_kg, load_rate_per_kg, ...d }) => d); // без ставок
     if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse"); // адрес склада для маршрута
     const myClients = await dbFindBy("clients", "ownerId", u.uid);
     const myIds = new Set(myClients.map(c => c.id));
-    if (table === "clients") return myClients;
+    if (table === "clients") return myClients; // только свои — чужие карточки (контакты/цены/реквизиты) не отдаём
     if (table === "orders") {
-      const all = await dbList("orders");
+      const [all, allCli] = await Promise.all([dbList("orders"), dbList("clients")]);
+      const cliMap = new Map(allCli.map(c => [c.id, c]));
       // Свои = заявки своих клиентов + собственные пробники проспектам (без карточки клиента, но с его авторством)
       const isMine = o => myIds.has(o.clientId) || (!o.clientId && o.created_by === u.uid);
-      const mine = all.filter(isMine);
-      // Чужие заявки торгпред видит ТОЛЬКО как сводную загрузку водителей (тоннаж + число заявок),
-      // чтобы понимать занятость водителя. БЕЗ кого/что/сколько по конкретному клиенту — никаких
-      // имён, товара, адресов и цен наружу не уходит (агрегируем на сервере).
-      const agg = {};
-      all.filter(o => !isMine(o) && o.status !== "отменена").forEach(o => {
-        const drv = o.driverId || "";
-        const k = `${drv}|${o.date}`;
-        const g = agg[k] = agg[k] || { driverId: drv, date: o.date, kg: 0, clients: new Set() };
-        g.kg += (Number(o.bags) || 0) * (Number(o.bag_kg) || 0);
-        g.clients.add(o.clientId || ("nm:" + (o.clientName || ""))); // считаем заявки по клиентам, не по позициям
+      // Свои — как есть (с ценами, редактируемые). Чужие (не карагандинские) — для чтения, БЕЗ цен
+      // (price=0, foreign:true), с адресом/2ГИС/координатами/временем работы из карточки клиента,
+      // но БЕЗ контактов, цен и реквизитов. Так торгпред видит весь маршрут, но чужого не трогает и цен не знает.
+      return all.filter(o => isMine(o) || !o.fromKaraganda).map(o => {
+        if (isMine(o)) return o;
+        const c = cliMap.get(o.clientId);
+        const { price_per_kg, ...rest } = o;
+        return {
+          ...rest, price_per_kg: 0, foreign: true,
+          address: o.address || (c && c.address) || "",
+          gis_link: o.gis_link || (c && c.gis_link) || "",
+          coords: o.coords || (c && c.coords) || null,
+          access_note: o.access_note || (c && c.access_note) || "",
+          work_hours: o.work_hours || (c && c.work_hours) || "",
+        };
       });
-      const loadRows = Object.values(agg).map(g => ({
-        id: `load|${g.date}|${g.driverId}`, date: g.date, driverId: g.driverId,
-        foreign: true, foreignLoad: true, kg: g.kg, count: g.clients.size,
-      }));
-      return [...mine, ...loadRows];
     }
     if (table === "payments") return (await dbList("payments")).filter(p => myIds.has(p.clientId));
     return [];
