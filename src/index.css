@@ -11,3 +11,29 @@ html, body { overflow-x: hidden; width: 100%; max-width: 100%; }
 #root { overflow-x: hidden; }
 /* Ничто внутри не шире экрана (ловит редкие широкие блоки/строки) */
 img, table, pre, video, iframe { max-width: 100%; }
+
+/* 🌙 Тёмная тема — централизованно переопределяем нейтральные утилиты Tailwind под html.dark.
+   Акцентные цвета (глина/зелёный/красный и т.п.) не трогаем — они остаются. */
+html.dark { color-scheme: dark; }
+html.dark body { background-color: #1B1815; }
+html.dark .bg-gray-50 { background-color: #201C18 !important; }
+html.dark .bg-white { background-color: #29241F !important; }
+html.dark .bg-gray-100 { background-color: #2F2A24 !important; }
+html.dark .bg-gray-200 { background-color: #3A342D !important; }
+html.dark .text-gray-900, html.dark .text-gray-800, html.dark .text-gray-700 { color: #F4F2EF !important; }
+html.dark .text-gray-600 { color: #CBC5BD !important; }
+html.dark .text-gray-500 { color: #ABA49B !important; }
+html.dark .text-gray-400 { color: #837C73 !important; }
+html.dark .border, html.dark .border-gray-50, html.dark .border-gray-100, html.dark .border-gray-200 { border-color: #3A342D !important; }
+html.dark input, html.dark textarea, html.dark select { background-color: #29241F !important; color: #F4F2EF !important; border-color: #3A342D !important; }
+html.dark input::placeholder, html.dark textarea::placeholder { color: #837C73 !important; }
+html.dark .shadow-sm, html.dark .shadow, html.dark .shadow-lg, html.dark .shadow-xl { --tw-shadow-color: rgba(0,0,0,.5); }
+/* Приглушаем светлые цветные подложки-подсказки (bg-*-50) на тёмном фоне */
+html.dark .bg-amber-50 { background-color: #2A2013 !important; }
+html.dark .bg-emerald-50 { background-color: #12251C !important; }
+html.dark .bg-red-50, html.dark .bg-rose-50 { background-color: #2C1616 !important; }
+html.dark .bg-sky-50 { background-color: #12252F !important; }
+html.dark .bg-blue-50 { background-color: #14223A !important; }
+html.dark .bg-violet-50, html.dark .bg-purple-50 { background-color: #221835 !important; }
+html.dark .bg-orange-50 { background-color: #2A1B12 !important; }
+html.dark .bg-indigo-50 { background-color: #1A1836 !important; }

@@ -186,7 +186,7 @@ const TABS_BY_ROLE = {
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"], // бригадир: заявки бригады + своя зарплата (объём и сумма)
   driver: ["calendar", "mysalary"],
-  rep: ["today", "calendar", "clients", "debts", "invoice", "stock"], // торгпред: свои клиенты/заявки/долги + накладная + расписание и остатки
+  rep: ["today", "calendar", "clients", "debts", "reports", "invoice", "stock"], // торгпред: свои клиенты/заявки/долги + СВОЯ аналитика + накладная + расписание и остатки
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
   kgdsenior: ["kgdm"], // старший менеджер Караганды: тот же раздел + история всех
 };
@@ -471,6 +471,8 @@ const ICONS = {
   key: '<circle cx="8" cy="15" r="4"/><path d="M10.9 12.1 20 3M16.5 6.5l2 2M14.5 8.5l1.5 1.5"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
   download: '<path d="M12 3v12M7 11l5 5 5-5M5 20h14"/>',
+  moon: '<path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a6.5 6.5 0 0 0 11 11z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/>',
 };
 function Icon({ name, size = 22, className = "", stroke = 1.8 }) {
   const p = ICONS[name];
@@ -2998,7 +3000,9 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   );
 }
 
-function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [], clients = [], users = [], reload = () => {}, canEdit = true }) {
+function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], payments = [], clients = [], users = [], role = "director", reload = () => {}, canEdit = true }) {
+  const repMode = role === "rep"; // торгпред видит СВОЮ аналитику: считаем только по его заявкам (не foreign)
+  const orders = repMode ? ordersProp.filter(o => !o.foreign) : ordersProp;
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   // 🔍 Свой отчёт: фильтры по бренду, сорту и фасовкам (период — общий сверху)
@@ -3206,23 +3210,57 @@ function ReportsTab({ orders, drivers, stock = [], expenses = [], payments = [],
   const maxT = Math.max(...td.map(d => d.kg), 1);
   const bc2 = ["bg-amber-400", "bg-orange-400", "bg-yellow-400", "bg-amber-600", "bg-orange-300"];
 
-  return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <div className="flex gap-2 flex-wrap">
-          {[["week", "7 дней"], ["month", "Месяц"], ["3month", "3 месяца"], ["all", "Всё время"], ["custom", "Свой период"]].map(([v, l]) => (
-            <button key={v} onClick={() => setPeriod(v)} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${period === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>
-          ))}
+  const periodPicker = (
+    <div className="space-y-2">
+      <div className="flex gap-2 flex-wrap">
+        {[["week", "7 дней"], ["month", "Месяц"], ["3month", "3 месяца"], ["all", "Всё время"], ["custom", "Свой период"]].map(([v, l]) => (
+          <button key={v} onClick={() => setPeriod(v)} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${period === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>
+        ))}
+      </div>
+      {period === "custom" && (
+        <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-100 rounded-xl p-3">
+          <span className="text-sm text-gray-500">с</span>
+          <Inp type="date" value={from} onChange={e => setFrom(e.target.value)} />
+          <span className="text-sm text-gray-500">по</span>
+          <Inp type="date" value={to} onChange={e => setTo(e.target.value)} />
         </div>
-        {period === "custom" && (
-          <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-100 rounded-xl p-3">
-            <span className="text-sm text-gray-500">с</span>
-            <Inp type="date" value={from} onChange={e => setFrom(e.target.value)} />
-            <span className="text-sm text-gray-500">по</span>
-            <Inp type="date" value={to} onChange={e => setTo(e.target.value)} />
+      )}
+    </div>
+  );
+
+  // 🧑‍💼 Торгпред: своя аналитика — оборот/тоннаж/заявки/клиенты за период + текущий долг его клиентов
+  if (repMode) {
+    const repClientsN = new Set(delivered.map(o => o.clientId).filter(Boolean)).size;
+    return (
+      <div className="space-y-5">
+        <h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="chart" size={18} />Моя аналитика</h3>
+        {periodPicker}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Оборот за период</div><div className="text-2xl font-display font-semibold text-emerald-800">{fmt(Math.round(totalRev))} тг</div></div>
+          <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Отгружено</div><div className="text-2xl font-display font-semibold text-gray-800">{fmt(totalKg)} кг</div></div>
+          <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Заявок</div><div className="text-2xl font-display font-semibold text-gray-800">{ordersCount}</div></div>
+          <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Клиентов</div><div className="text-2xl font-display font-semibold text-gray-800">{repClientsN}</div></div>
+        </div>
+        <div className={`rounded-2xl p-4 border ${totalDebt > 0 ? "bg-red-50 border-red-100" : "bg-emerald-50 border-emerald-100"}`}>
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={16} />Долг моих клиентов</div>
+            <div className={`text-xl font-display font-semibold ${totalDebt > 0 ? "text-red-600" : "text-emerald-600"}`}>{fmt(Math.round(totalDebt))} тг</div>
+          </div>
+          <div className="text-xs text-gray-400 mt-1">Оборот, тоннаж, заявки, клиенты — за выбранный период. Долг — текущий (всё отгруженное и неоплаченное минус оплаты).</div>
+        </div>
+        {debtList.length > 0 && (
+          <div className="bg-white border border-gray-100 rounded-2xl p-4">
+            <div className="font-display font-semibold text-gray-800 mb-2 flex items-center gap-1.5"><Icon name="wallet" size={15} />Кто должен</div>
+            <div className="space-y-1">{debtList.slice(0, 30).map(([name, v]) => <div key={name} className="flex items-center justify-between text-sm border-b border-gray-50 py-1"><span className="text-gray-600">{name}</span><b className="text-red-600">{fmt(Math.round(v))} тг</b></div>)}</div>
           </div>
         )}
       </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {periodPicker}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Отгружено</div><div className="text-2xl font-bold text-emerald-800">{fmt(totalKg)} кг</div></div>
         <div className="bg-gradient-to-br from-amber-50 to-orange-100 rounded-2xl p-4"><div className="text-xs text-amber-700 font-medium">Сумма отгрузок</div><div className="text-2xl font-bold text-amber-800">{fmt(totalRev)} тг</div></div>
@@ -6383,6 +6421,8 @@ export default function App() {
   const [fabOpen, setFabOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [dark, setDark] = useState(() => { try { return document.documentElement.classList.contains("dark"); } catch { return false; } });
+  const toggleTheme = () => { const el = document.documentElement; const on = !el.classList.contains("dark"); el.classList.toggle("dark", on); try { localStorage.setItem("darad_theme", on ? "dark" : "light"); } catch {} const m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute("content", on ? "#1B1815" : "#651107"); setDark(on); };
   const [syncing, setSyncing] = useState(false); // ручное обновление: крутим значок и показываем ✓
   const [syncDone, setSyncDone] = useState(false);
   const [updateReady, setUpdateReady] = useState(false); // на сервере вышла новая версия приложения
@@ -6519,6 +6559,7 @@ export default function App() {
             <button onClick={manualRefresh} disabled={syncing} title="Обновить" className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-sm font-medium transition-all active:scale-90 ${syncDone ? "bg-emerald-50 border-emerald-300 text-emerald-600" : syncing ? "bg-amber-50 border-amber-300 text-amber-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-700"}`}>
               <Icon name={syncDone ? "check" : "refresh"} size={16} className={syncing ? "animate-spin" : ""} />
             </button>
+            <button onClick={toggleTheme} className="text-gray-400 hover:text-gray-600 p-1.5 rounded-full" title={dark ? "Светлая тема" : "Тёмная тема"} aria-label="Сменить тему"><Icon name={dark ? "sun" : "moon"} size={19} /></button>
             <button onClick={logout} className="text-gray-400 hover:text-gray-600 text-sm" title="Выйти">Выйти</button>
           </div>
         </div>
@@ -6555,7 +6596,7 @@ export default function App() {
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
             {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} reload={reload} canEdit={isDirector} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} reload={reload} canEdit={isDirector} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={isDirector} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} />}
           </>
         )}
