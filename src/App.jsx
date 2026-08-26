@@ -2241,6 +2241,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const [histTo, setHistTo] = useState(TODAY());
   const [search, setSearch] = useState("");
   const [staleOnly, setStaleOnly] = useState(false);
+  const [groupFilter, setGroupFilter] = useState("all"); // директор: быстрый переход к группе (наши / торгпред)
   const [showRestore, setShowRestore] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
 
@@ -2478,6 +2479,19 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
         {staleCount > 0 && (
           <button onClick={() => setStaleOnly(v => !v)} className={`text-xs font-medium px-3 py-1.5 rounded-full ${staleOnly ? "bg-orange-500 text-white" : "bg-orange-50 text-orange-700"}`}>⏳ Давно не заказывали ({staleCount}){staleOnly ? " ✕" : ""}</button>
         )}
+        {!isRep && repUsers.length > 0 && (() => {
+          const houseN = shown.filter(c => !c.ownerId).length;
+          const orphanN = shown.filter(c => c.ownerId && !repUsers.some(u => u.id === c.ownerId)).length;
+          const tab = (key, label, icon) => <button key={key} onClick={() => setGroupFilter(key)} className={`text-xs font-medium px-3 py-1.5 rounded-full inline-flex items-center gap-1 whitespace-nowrap ${groupFilter === key ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{icon && <Icon name={icon} size={12} />}{label}</button>;
+          return (
+            <div className="flex gap-2 flex-wrap pt-1">
+              {tab("all", "Все")}
+              {tab("", `${houseName} (${houseN})`, "home")}
+              {repUsers.map(u => tab(u.id, `${u.group_name || u.name} (${shown.filter(c => c.ownerId === u.id).length})`, "user"))}
+              {orphanN > 0 && tab("orphan", `Без группы (${orphanN})`)}
+            </div>
+          );
+        })()}
       </div>
       {showAdd && (
         <Modal title={editId ? "Редактировать" : "Новый клиент"} onClose={() => setShowAdd(false)}>
@@ -2602,7 +2616,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
           const groups = [{ key: "", label: houseName, items: shown.filter(c => !c.ownerId) }, ...repUsers.map(u => ({ key: u.id, label: u.group_name || u.name, items: shown.filter(c => c.ownerId === u.id) }))];
           const orphan = shown.filter(c => c.ownerId && !repUsers.some(u => u.id === c.ownerId));
           if (orphan.length) groups.push({ key: "orphan", label: "Без группы", items: orphan });
-          return groups.filter(g => g.items.length).map(g => (
+          return groups.filter(g => g.items.length && (groupFilter === "all" || g.key === groupFilter)).map(g => (
             <div key={g.key} className="space-y-3">
               <div className="flex items-center justify-between pt-1 border-b border-gray-100 pb-1">
                 <h4 className="font-semibold text-gray-700 flex items-center gap-1.5"><Icon name={g.key === "" ? "home" : "user"} size={15} />{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
