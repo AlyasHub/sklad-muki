@@ -5,3 +5,9 @@
 /* Шрифты: тело — Open Sans, заголовки/крупные цифры — Poppins (класс font-display) */
 html, body { font-family: 'Open Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 .font-display { font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif; }
+
+/* Samsung/мобильные: страница не должна ездить влево-вправо — клипаем горизонтальный overflow */
+html, body { overflow-x: hidden; width: 100%; max-width: 100%; }
+#root { overflow-x: hidden; }
+/* Ничто внутри не шире экрана (ловит редкие широкие блоки/строки) */
+img, table, pre, video, iframe { max-width: 100%; }

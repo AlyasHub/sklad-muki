@@ -6190,6 +6190,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
                   {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1 flex items-center gap-1"><Icon name={isPickup ? (isWatch ? "eye" : "bag") : "truck"} size={14} />{isPickup ? (isWatch ? "Контроль: " : "Грузчик: ") : "Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
+                  {(() => { const wh = (clients.find(c => c.id === g.clientId) || {}).work_hours || g.orders[0].work_hours; return wh ? <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-amber-800 bg-amber-100 border border-amber-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Работает: {wh}</div> : null; })()}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
                   {(() => {
                     // Куда, как пройти и маршрут — чтобы понимать направление движения водителя
