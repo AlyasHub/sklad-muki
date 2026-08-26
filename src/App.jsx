@@ -6595,11 +6595,10 @@ export default function App() {
             <img src="/icon-192.png" alt="Darad" className="w-9 h-9 rounded-lg flex-shrink-0" />
             <div className="min-w-0">
               <h1 className="text-xl font-display font-semibold text-gray-900 leading-tight">Darad</h1>
-              <p className="text-xs text-gray-400 flex items-center gap-1 truncate">{user.name} · {ROLES[user.role] || user.role}{lastSync ? <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block ml-0.5 flex-shrink-0"></span>{lastSync}</> : ""}</p>
+              <p className="text-xs text-gray-400 flex items-center gap-1"><span className="truncate">{user.name} · {ROLES[user.role] || user.role}</span>{lastSync && <span className="flex items-center gap-1 flex-shrink-0"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>{lastSync}</span>}</p>
             </div>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap">{newOrders} нов.</div>}
             <button onClick={manualRefresh} disabled={syncing} title="Обновить" className={`flex items-center justify-center w-8 h-8 rounded-full border transition-all active:scale-90 ${syncDone ? "bg-emerald-50 border-emerald-300 text-emerald-600" : syncing ? "bg-amber-50 border-amber-300 text-amber-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-700"}`}>
               <Icon name={syncDone ? "check" : "refresh"} size={16} className={syncing ? "animate-spin" : ""} />
             </button>
