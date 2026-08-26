@@ -3000,9 +3000,63 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   );
 }
 
+// 📊 Детальная аналитика по набору заявок (для торгпреда или выбранного торгпреда):
+// оборот/тоннаж/заявки/клиенты + долг + что чаще берут (топ товаров) + кто больше берёт (топ клиентов, разворачиваются).
+function RepAnalytics({ delivered = [], allMine = [], payments = [] }) {
+  const [openCli, setOpenCli] = useState(null);
+  const rev = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+  const kg = delivered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+  const ordN = new Set(delivered.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
+  const cliN = new Set(delivered.map(o => o.clientId || "nm:" + (o.clientName || "")).filter(Boolean)).size;
+  let debt = 0; allMine.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { debt += o.bags * o.bag_kg * (o.price_per_kg || 0); });
+  (payments || []).forEach(p => { debt -= (p.amount || 0); }); debt = Math.max(0, Math.round(debt));
+  const prod = {}; delivered.forEach(o => { const k = `${o.brand} · ${o.grade} · ${o.bag_kg} кг`; const a = prod[k] = prod[k] || { k, kg: 0, rev: 0 }; a.kg += o.bags * o.bag_kg; a.rev += o.bags * o.bag_kg * (o.price_per_kg || 0); });
+  const topProd = Object.values(prod).sort((a, b) => b.kg - a.kg);
+  const maxProd = topProd.length ? topProd[0].kg : 1;
+  const cli = {}; delivered.forEach(o => { const key = o.clientId || "nm:" + (o.clientName || ""); const a = cli[key] = cli[key] || { key, name: o.clientName || "?", kg: 0, rev: 0, prod: {} }; a.kg += o.bags * o.bag_kg; a.rev += o.bags * o.bag_kg * (o.price_per_kg || 0); const pk = `${o.brand} ${o.grade} ${o.bag_kg}кг`; a.prod[pk] = (a.prod[pk] || 0) + o.bags * o.bag_kg; });
+  const topCli = Object.values(cli).sort((a, b) => b.kg - a.kg);
+  const maxCli = topCli.length ? topCli[0].kg : 1;
+  if (!delivered.length) return <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm text-gray-400">За этот период отгрузок нет.</div>;
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Оборот за период</div><div className="text-2xl font-display font-semibold text-emerald-800">{fmt(Math.round(rev))} тг</div></div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Отгружено</div><div className="text-2xl font-display font-semibold text-gray-800">{fmt(kg)} кг</div></div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Заявок</div><div className="text-2xl font-display font-semibold text-gray-800">{ordN}</div></div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Клиентов</div><div className="text-2xl font-display font-semibold text-gray-800">{cliN}</div></div>
+      </div>
+      <div className={`rounded-2xl p-4 border flex items-center justify-between gap-2 ${debt > 0 ? "bg-red-50 border-red-100" : "bg-emerald-50 border-emerald-100"}`}>
+        <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={16} />Текущий долг <span className="text-xs font-normal text-gray-400">(не зависит от периода)</span></div>
+        <div className={`text-xl font-display font-semibold ${debt > 0 ? "text-red-600" : "text-emerald-600"}`}>{fmt(debt)} тг</div>
+      </div>
+      <div className="bg-white border border-gray-100 rounded-2xl p-4">
+        <div className="font-display font-semibold text-gray-800 mb-3 flex items-center gap-1.5"><Icon name="box" size={16} />Что чаще берут <span className="text-xs font-normal text-gray-400">за период</span></div>
+        <div className="space-y-2">{topProd.slice(0, 10).map(p => (
+          <div key={p.k}>
+            <div className="flex items-center justify-between text-sm mb-0.5"><span className="text-gray-700">{p.k}</span><b className="text-gray-800 whitespace-nowrap">{fmt(p.kg)} кг</b></div>
+            <div className="h-2 rounded-full bg-gray-100 overflow-hidden"><div className="h-full bg-amber-500 rounded-full" style={{ width: `${Math.max(4, Math.round(p.kg / maxProd * 100))}%` }}></div></div>
+          </div>
+        ))}</div>
+      </div>
+      <div className="bg-white border border-gray-100 rounded-2xl p-4">
+        <div className="font-display font-semibold text-gray-800 mb-3 flex items-center gap-1.5"><Icon name="user" size={16} />Кто больше берёт <span className="text-xs font-normal text-gray-400">· нажми, чтобы увидеть что берёт</span></div>
+        <div className="space-y-2">{topCli.slice(0, 20).map(c => (
+          <div key={c.key} className="border-b border-gray-50 pb-2 last:border-0">
+            <button onClick={() => setOpenCli(openCli === c.key ? null : c.key)} className="w-full text-left">
+              <div className="flex items-center justify-between text-sm mb-0.5"><span className="text-gray-700 flex items-center gap-1"><Icon name={openCli === c.key ? "eye" : "user"} size={13} />{c.name}</span><b className="text-gray-800 whitespace-nowrap">{fmt(c.kg)} кг · {fmt(Math.round(c.rev))} тг</b></div>
+              <div className="h-2 rounded-full bg-gray-100 overflow-hidden"><div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.max(4, Math.round(c.kg / maxCli * 100))}%` }}></div></div>
+            </button>
+            {openCli === c.key && <div className="mt-2 pl-1 space-y-1">{Object.entries(c.prod).sort((a, b) => b[1] - a[1]).map(([pk, v]) => <div key={pk} className="flex items-center justify-between text-xs text-gray-500"><span>· {pk}</span><span>{fmt(v)} кг</span></div>)}</div>}
+          </div>
+        ))}</div>
+      </div>
+    </div>
+  );
+}
 function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], payments = [], clients = [], users = [], role = "director", reload = () => {}, canEdit = true }) {
   const repMode = role === "rep"; // торгпред видит СВОЮ аналитику: считаем только по его заявкам (не foreign)
   const orders = repMode ? ordersProp.filter(o => !o.foreign) : ordersProp;
+  const [selRep, setSelRep] = useState(""); // директор: подробная аналитика по выбранному торгпреду
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   // 🔍 Свой отчёт: фильтры по бренду, сорту и фасовкам (период — общий сверху)
@@ -3228,32 +3282,13 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
     </div>
   );
 
-  // 🧑‍💼 Торгпред: своя аналитика — оборот/тоннаж/заявки/клиенты за период + текущий долг его клиентов
+  // 🧑‍💼 Торгпред: своя детальная аналитика — оборот/тоннаж/что берут/кто берёт/долг за период
   if (repMode) {
-    const repClientsN = new Set(delivered.map(o => o.clientId).filter(Boolean)).size;
     return (
       <div className="space-y-5">
         <h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="chart" size={18} />Моя аналитика</h3>
         {periodPicker}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Оборот за период</div><div className="text-2xl font-display font-semibold text-emerald-800">{fmt(Math.round(totalRev))} тг</div></div>
-          <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Отгружено</div><div className="text-2xl font-display font-semibold text-gray-800">{fmt(totalKg)} кг</div></div>
-          <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Заявок</div><div className="text-2xl font-display font-semibold text-gray-800">{ordersCount}</div></div>
-          <div className="bg-white border border-gray-100 rounded-2xl p-4"><div className="text-xs text-gray-500">Клиентов</div><div className="text-2xl font-display font-semibold text-gray-800">{repClientsN}</div></div>
-        </div>
-        <div className={`rounded-2xl p-4 border ${totalDebt > 0 ? "bg-red-50 border-red-100" : "bg-emerald-50 border-emerald-100"}`}>
-          <div className="flex items-center justify-between gap-2">
-            <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={16} />Долг моих клиентов</div>
-            <div className={`text-xl font-display font-semibold ${totalDebt > 0 ? "text-red-600" : "text-emerald-600"}`}>{fmt(Math.round(totalDebt))} тг</div>
-          </div>
-          <div className="text-xs text-gray-400 mt-1">Оборот, тоннаж, заявки, клиенты — за выбранный период. Долг — текущий (всё отгруженное и неоплаченное минус оплаты).</div>
-        </div>
-        {debtList.length > 0 && (
-          <div className="bg-white border border-gray-100 rounded-2xl p-4">
-            <div className="font-display font-semibold text-gray-800 mb-2 flex items-center gap-1.5"><Icon name="wallet" size={15} />Кто должен</div>
-            <div className="space-y-1">{debtList.slice(0, 30).map(([name, v]) => <div key={name} className="flex items-center justify-between text-sm border-b border-gray-50 py-1"><span className="text-gray-600">{name}</span><b className="text-red-600">{fmt(Math.round(v))} тг</b></div>)}</div>
-          </div>
-        )}
+        <RepAnalytics delivered={delivered} allMine={orders} payments={payments} />
       </div>
     );
   }
@@ -3287,12 +3322,12 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
 
       {repStats.length > 0 && (
         <div className="bg-white border border-gray-100 rounded-2xl p-4">
-          <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5 mb-3"><Icon name="user" size={16} />По торгпредам <span className="text-xs font-normal text-gray-400">за период</span></div>
+          <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5 mb-3"><Icon name="user" size={16} />По торгпредам <span className="text-xs font-normal text-gray-400">· нажми на торгпреда для подробностей</span></div>
           <div className="space-y-3">
             {repStats.map(r => (
-              <div key={r.id} className="border border-gray-100 rounded-xl p-3">
+              <button key={r.id} onClick={() => setSelRep(selRep === r.id ? "" : r.id)} className={`w-full text-left border rounded-xl p-3 transition-all ${selRep === r.id ? "border-amber-300 bg-amber-50" : "border-gray-100 hover:bg-gray-50"}`}>
                 <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                  <span className="font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="user" size={14} />{r.name}</span>
+                  <span className="font-semibold text-gray-800 flex items-center gap-1.5"><Icon name={selRep === r.id ? "chart" : "user"} size={14} />{r.name}</span>
                   <span className="text-xs text-gray-400">{r.orders} заявок · {r.clientsN} клиентов</span>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center">
@@ -3300,10 +3335,19 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
                   <div className="bg-gray-50 rounded-lg py-2 px-1"><div className="text-[11px] text-gray-500">Отгружено</div><div className="font-display font-semibold text-gray-800 text-sm">{fmt(r.kg)} кг</div></div>
                   <div className={`rounded-lg py-2 px-1 ${r.debt > 0 ? "bg-red-50" : "bg-gray-50"}`}><div className={`text-[11px] ${r.debt > 0 ? "text-red-600" : "text-gray-500"}`}>Долг</div><div className={`font-display font-semibold text-sm ${r.debt > 0 ? "text-red-700" : "text-gray-800"}`}>{fmt(Math.round(r.debt))} тг</div></div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
           <div className="text-xs text-gray-400 mt-2">Оборот и тоннаж — за выбранный период. Долг — текущий (всё неоплаченное минус оплаты).</div>
+        </div>
+      )}
+      {selRep && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="chart" size={17} />{repStats.find(r => r.id === selRep)?.name || "Торгпред"} — подробно</h4>
+            <button onClick={() => setSelRep("")} className="text-xs text-gray-500 hover:text-gray-700 inline-flex items-center gap-1"><Icon name="close" size={13} />закрыть</button>
+          </div>
+          <RepAnalytics delivered={delivered.filter(o => ownerOf(o) === selRep)} allMine={orders.filter(o => ownerOf(o) === selRep)} payments={(payments || []).filter(p => ownerByClient[p.clientId] === selRep)} />
         </div>
       )}
 
