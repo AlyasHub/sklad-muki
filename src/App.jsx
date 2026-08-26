@@ -473,6 +473,7 @@ const ICONS = {
   download: '<path d="M12 3v12M7 11l5 5 5-5M5 20h14"/>',
   moon: '<path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a6.5 6.5 0 0 0 11 11z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/>',
+  logout: '<path d="M9 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/><path d="M15 16l4-4-4-4M19 12H9"/>',
 };
 function Icon({ name, size = 22, className = "", stroke = 1.8 }) {
   const p = ICONS[name];
@@ -6546,20 +6547,20 @@ export default function App() {
     <div className="min-h-screen bg-gray-50 font-sans">
       <div className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-40 shadow-sm">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <img src="/icon-192.png" alt="Darad" className="w-9 h-9 rounded-lg flex-shrink-0" />
-            <div>
-              <h1 className="text-xl font-display font-semibold text-gray-900">Darad</h1>
-              <p className="text-xs text-gray-400 flex items-center gap-1">{user.name} · {ROLES[user.role] || user.role}{lastSync ? <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block ml-0.5"></span>{lastSync}</> : ""}</p>
+            <div className="min-w-0">
+              <h1 className="text-xl font-display font-semibold text-gray-900 leading-tight">Darad</h1>
+              <p className="text-xs text-gray-400 flex items-center gap-1 truncate">{user.name} · {ROLES[user.role] || user.role}{lastSync ? <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block ml-0.5 flex-shrink-0"></span>{lastSync}</> : ""}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-sm font-semibold px-3 py-1.5 rounded-full">{newOrders} новых</div>}
-            <button onClick={manualRefresh} disabled={syncing} title="Обновить" className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-sm font-medium transition-all active:scale-90 ${syncDone ? "bg-emerald-50 border-emerald-300 text-emerald-600" : syncing ? "bg-amber-50 border-amber-300 text-amber-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-700"}`}>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {isDirector && newOrders > 0 && <div className="bg-amber-500 text-white text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap">{newOrders} нов.</div>}
+            <button onClick={manualRefresh} disabled={syncing} title="Обновить" className={`flex items-center justify-center w-8 h-8 rounded-full border transition-all active:scale-90 ${syncDone ? "bg-emerald-50 border-emerald-300 text-emerald-600" : syncing ? "bg-amber-50 border-amber-300 text-amber-600" : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-700"}`}>
               <Icon name={syncDone ? "check" : "refresh"} size={16} className={syncing ? "animate-spin" : ""} />
             </button>
-            <button onClick={toggleTheme} className="text-gray-400 hover:text-gray-600 p-1.5 rounded-full" title={dark ? "Светлая тема" : "Тёмная тема"} aria-label="Сменить тему"><Icon name={dark ? "sun" : "moon"} size={19} /></button>
-            <button onClick={logout} className="text-gray-400 hover:text-gray-600 text-sm" title="Выйти">Выйти</button>
+            <button onClick={toggleTheme} className="text-gray-400 hover:text-gray-600 w-8 h-8 flex items-center justify-center rounded-full" title={dark ? "Светлая тема" : "Тёмная тема"} aria-label="Сменить тему"><Icon name={dark ? "sun" : "moon"} size={19} /></button>
+            <button onClick={logout} className="text-gray-400 hover:text-red-500 w-8 h-8 flex items-center justify-center rounded-full" title="Выйти" aria-label="Выйти"><Icon name="logout" size={19} /></button>
           </div>
         </div>
       </div>
