@@ -215,7 +215,7 @@ async function listFor(u, table) {
     const allDrivers = await dbList("drivers");
     const brigade = new Set([u.driverId, ...allDrivers.filter(d => d.foremanId === u.driverId).map(d => d.id)]);
     if (table === "drivers") return allDrivers.filter(d => brigade.has(d.id)).map(d => d.id === u.driverId ? d : (({ rate_per_kg, load_rate_per_kg, base_salary, base_included_t, tier1_to_t, tier1_rate, tier2_rate, ...rest }) => rest)(d)); // свою зарплату бригадир видит, у младших — скрыто
-    if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse");
+    if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse" || n.id === "brigadir"); // + заметки-задания бригадиру
     // Заявки бригады: развоз (driverId ∈ бригада) + самовывоз, который грузил кто-то из бригады (loaderId ∈ бригада,
     // у самовывоза driverId пустой). Иначе бригадир не видит свою погрузку самовывоза в «Моя ЗП».
     const myOrders = (await dbList("orders")).filter(o => brigade.has(o.driverId) || (o.pickup && brigade.has(o.loaderId)));
@@ -309,6 +309,8 @@ async function upsertFor(u, table, item) {
     return dbUpsert("orders", merged);
   }
   if (u.role === "brigadir") {
+    // Заметки-задания бригадиру (id="brigadir"): пишут и офис, и сам бригадир (галочки/пункты)
+    if (table === "notes" && item.id === "brigadir") return dbUpsert("notes", { ...item, id: "brigadir" });
     // Бригадир меняет только заявки своей бригады: переназначить водителя ВНУТРИ бригады + отметки доставки/загрузки/фото
     if (table !== "orders") throw new Error("Нет прав на изменение");
     const existing = await dbGet("orders", item.id);
@@ -337,21 +339,20 @@ async function upsertFor(u, table, item) {
     }
     if (table === "orders") {
       const existing = await dbGet("orders", item.id);
-      // Пробник/проба новому проспекту: бесплатный образец без карточки клиента (clientId пустой).
-      // Такую заявку торгпреду разрешаем (привязана к нему). Но считаем её пробником ТОЛЬКО если
-      // и присланная, и существующая (если правим) — без клиента: нельзя «перекрасить» платную
-      // заявку реального клиента в пробник, спрятав долг/продажу от учёта по клиенту.
-      // Пробник проспекту может быть БЕСПЛАТНЫМ или ПЛАТНЫМ (цену задаёт торгпред в форме).
-      const prospectSample = (item.isSample || item.trial) && !item.clientId && (!existing || !existing.clientId);
-      if (!prospectSample) {
+      // Заявки БЕЗ карточки клиента, созданные торгпредом: пробник/проба проспекту (isSample/trial)
+      // ИЛИ разовая реализация (oneOff, покупатель не из базы, за деньги — может быть и в долг).
+      // Разрешаем ТОЛЬКО если и присланная, и существующая (если правим) — без clientId: нельзя
+      // «перекрасить» платную заявку реального клиента в разовую/пробник, спрятав долг/продажу.
+      const ownClientless = !item.clientId && (item.isSample || item.trial || item.oneOff) && (!existing || !existing.clientId);
+      if (!ownClientless) {
         const cli = await dbGet("clients", item.clientId);
         if (!cli || cli.ownerId !== u.uid) throw new Error("Заявку можно создавать только для своих клиентов");
         if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); }
       } else if (existing && existing.created_by !== u.uid) {
-        throw new Error("Это не ваша заявка"); // чужой ИЛИ «ничей» (без автора) пробник править нельзя
+        throw new Error("Это не ваша заявка"); // чужую/ничейную клиентскую-пустую заявку править нельзя
       }
-      // ЗАЩИТА: «перекрасить» платную заявку РЕАЛЬНОГО клиента в пробник (clientId→пусто), спрятав
-      // долг, нельзя — prospectSample требует, чтобы и существующая заявка была без клиента (см. выше).
+      // ЗАЩИТА: «перекрасить» платную заявку РЕАЛЬНОГО клиента в разовую/пробник (clientId→пусто),
+      // спрятав долг, нельзя — ownClientless требует, чтобы и существующая была без клиента (см. выше).
       // Подписываем автора: кто (торгпред) добавил заявку — чтобы админ видел. На новой ставим, у существующей сохраняем.
       const author = existing?.created_by_name
         ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }

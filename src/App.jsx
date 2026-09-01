@@ -531,7 +531,47 @@ function PhotoViewer({ url, onClose }) {
   );
 }
 
-function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false }) {
+// 📋 Задания бригадиру — чек-лист над календарём. Пишут и офис, и бригадир. Пусто → тонкая строчка, не мешает.
+function BrigadirNotes({ notes = [], reload = () => {}, applyLocal = () => {}, canEdit = true }) {
+  const rec = (notes || []).find(n => n.id === "brigadir");
+  const items = Array.isArray(rec && rec.items) ? rec.items : [];
+  const [text, setText] = useState("");
+  const save = async newItems => {
+    const next = { id: "brigadir", items: newItems };
+    applyLocal("notes", ns => [...(ns || []).filter(n => n.id !== "brigadir"), next]);
+    try { await dbUpsert("notes", next); } catch (e) { alert("⚠️ Не сохранилось: " + ((e && e.message) || e)); reload("notes"); }
+  };
+  const add = async () => { const t = text.trim(); if (!t) return; setText(""); await save([...items, { id: uid(), text: t, done: false }]); };
+  const toggle = id => save(items.map(i => i.id === id ? { ...i, done: !i.done } : i));
+  const del = id => save(items.filter(i => i.id !== id));
+  const activeN = items.filter(i => !i.done).length;
+  const addRow = canEdit ? (
+    <div className="flex items-center gap-2">
+      <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") add(); }} placeholder="Задание бригадиру (напр. забрать палеты у Айнаш)…" className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-gray-400" />
+      {text.trim() && <button onClick={add} className="text-amber-600 text-sm font-semibold px-1 whitespace-nowrap">Добавить</button>}
+    </div>
+  ) : null;
+  if (items.length === 0) {
+    if (!canEdit) return null;
+    return <div className="border border-dashed border-gray-200 rounded-xl px-3 py-1.5 flex items-center gap-2 text-gray-400"><Icon name="clipboard" size={14} className="flex-shrink-0" />{addRow}</div>;
+  }
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
+      <div className="flex items-center gap-1.5 mb-2 text-amber-900 font-display font-semibold text-sm"><Icon name="clipboard" size={16} />Задания бригадиру{activeN > 0 && <span className="bg-amber-500 text-white text-xs px-2 py-0.5 rounded-full">{activeN}</span>}</div>
+      <div className="space-y-1">
+        {items.map(i => (
+          <div key={i.id} className="flex items-center gap-2">
+            <button onClick={() => toggle(i.id)} className={`w-5 h-5 rounded-md border flex items-center justify-center flex-shrink-0 ${i.done ? "bg-emerald-500 border-emerald-500 text-white" : "border-amber-300 bg-white"}`}>{i.done && <Icon name="check" size={13} stroke={3} />}</button>
+            <span className={`flex-1 text-sm ${i.done ? "line-through text-gray-400" : "text-gray-800"}`}>{i.text}</span>
+            {canEdit && <button onClick={() => del(i.id)} className="text-gray-300 hover:text-red-500 flex-shrink-0"><Icon name="trash" size={14} /></button>}
+          </div>
+        ))}
+      </div>
+      {canEdit && <div className="mt-2 pt-2 border-t border-amber-200">{addRow}</div>}
+    </div>
+  );
+}
+function CalendarTab({ orders, drivers, clients, stock = [], notes = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
@@ -839,6 +879,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], reload, applyLocal 
 
   return (
     <div className="space-y-5">
+      {(foremanMode || (canEdit && !serverStock && !driverMode)) && <BrigadirNotes notes={notes} reload={reload} applyLocal={applyLocal} canEdit={true} />}
       {stockShortages.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
           <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
@@ -5995,6 +6036,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const [aiResult, setAiResult] = useState(null);
   const [aiDriver, setAiDriver] = useState(""); // водитель (или грузчик при самовывозе) для разобранной заявки
   const [aiPickup, setAiPickup] = useState(false); // самовывоз: клиент забирает сам, выбираем грузчика
+  const [aiPickupWatch, setAiPickupWatch] = useState(false); // самовывоз «только контроль»: клиент грузит сам
   const [aiError, setAiError] = useState("");
   const [saving, setSaving] = useState(false);
   const [showManual, setShowManual] = useState(false);
@@ -6056,7 +6098,12 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
         return { ...p, trial: !!p.trial, matchBy, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       });
       setAiResult(mapped);
-      setAiDriver(""); setAiPickup(false); // водителя/самовывоз выбираем вручную каждый раз
+      // Самовывоз/контроль/грузчик — из разбора (можно поправить вручную ниже)
+      const anyPickup = parsed.some(p => p.pickup);
+      const anyWatch = parsed.some(p => p.pickupWatch);
+      const wName = ((parsed.find(p => p.worker && String(p.worker).trim()) || {}).worker || "").toLowerCase().trim();
+      const wDrv = wName ? drivers.find(d => { const n = (d.name || "").toLowerCase(); return n && (n.includes(wName) || wName.includes(n)); }) : null;
+      setAiPickup(anyPickup); setAiPickupWatch(anyPickup && anyWatch); setAiDriver(anyPickup && wDrv ? wDrv.id : "");
     } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
     setAiLoading(false);
   };
@@ -6072,9 +6119,9 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     setSaving(true);
     try {
       for (const p of aiResult) {
-        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", pickup: aiPickup, driverId: aiPickup ? "" : aiDriver, loaderId: aiPickup ? aiDriver : "", status: "новая" });
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", pickup: aiPickup, pickupWatch: aiPickup && aiPickupWatch, driverId: aiPickup ? "" : aiDriver, loaderId: aiPickup ? aiDriver : "", status: "новая" });
       }
-      setAiResult(null); setAiText(""); setAiDriver(""); setAiPickup(false); await reload("orders");
+      setAiResult(null); setAiText(""); setAiDriver(""); setAiPickup(false); setAiPickupWatch(false); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + (e && e.message ? e.message : e)); }
     setSaving(false);
   };
@@ -6158,12 +6205,13 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             id: orderId, date: form.date, brand: p.brand, grade: p.grade,
             bag_kg: Number(p.bag_kg), bags: Number(p.bags), driverId: form.driverId || "",
             price_per_kg: Number(p.price_per_kg), status: instant ? "отгружена" : "новая",
-            oneOff: true, paid: true, pay_method: form.payMethod, note: form.note || "",
+            oneOff: true, paid: form.payMethod !== "В долг", pay_method: form.payMethod, note: form.note || "",
             clientId: null, clientName: buyer,
             oneOffAddress: form.oneOffAddress || "", gis_link: form.gis_link || "", coords: form.coords || null,
           });
-          // id движения привязан к заявке — отмена вернёт остаток точным откатом, дубля не будет
-          if (instant) await dbUpsert("stock", { id: "mv_" + orderId, date: TODAY(), brand: p.brand, grade: p.grade, weight_kg: -kg, bags: -Number(p.bags), bag_kg: Number(p.bag_kg), note: `Реализация: ${buyer}` });
+          // id движения привязан к заявке — отмена вернёт остаток точным откатом, дубля не будет.
+          // У торгпреда (isRep) движение склада пишет СЕРВЕР (syncOrderStock) — из браузера rep не имеет прав на stock (была ложная ошибка + риск задвоить).
+          if (instant && !isRep) await dbUpsert("stock", { id: "mv_" + orderId, date: TODAY(), brand: p.brand, grade: p.grade, weight_kg: -kg, bags: -Number(p.bags), bag_kg: Number(p.bag_kg), note: `Реализация: ${buyer}` });
         }
         setShowManual(false);
         setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "", driverId: "", oneOffAddress: "", gis_link: "", coords: null }));
@@ -6240,12 +6288,18 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               </div>
             ))}
             <label className="flex items-center gap-2 cursor-pointer bg-sky-50 rounded-lg px-3 py-2">
-              <input type="checkbox" checked={aiPickup} onChange={e => { setAiPickup(e.target.checked); setAiDriver(""); }} className="w-4 h-4 accent-sky-500" />
-              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="bag" size={16} className="text-sky-600 shrink-0" />Самовывоз — клиент забирает сам (выбери грузчика)</span>
+              <input type="checkbox" checked={aiPickup} onChange={e => { setAiPickup(e.target.checked); setAiDriver(""); if (!e.target.checked) setAiPickupWatch(false); }} className="w-4 h-4 accent-sky-500" />
+              <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="bag" size={16} className="text-sky-600 shrink-0" />Самовывоз — клиент забирает сам</span>
             </label>
+            {aiPickup && (
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setAiPickupWatch(false)} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${!aiPickupWatch ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="bag" size={15} />Грузим сами</button>
+                <button type="button" onClick={() => setAiPickupWatch(true)} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${aiPickupWatch ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="eye" size={15} />Только контроль</button>
+              </div>
+            )}
             {(() => { const ok = aiPickup || aiDriver; return (
             <div className={`rounded-xl p-3 border ${ok ? "bg-gray-50 border-gray-100" : "bg-orange-50 border-orange-200"}`}>
-              <div className={`text-sm font-medium mb-1 ${ok ? "text-gray-700" : "text-orange-700"}`}>{aiPickup ? "Кто отгрузит (грузчик)?" : (isRep ? "Кому передать (бригадир)?" : "Кто повезёт?")} {!ok && "— выбери перед подтверждением"}</div>
+              <div className={`text-sm font-medium mb-1 ${ok ? "text-gray-700" : "text-orange-700"}`}>{aiPickup ? (aiPickupWatch ? "Кто проследит (контроль)?" : "Кто отгрузит (грузчик)?") : (isRep ? "Кому передать (бригадир)?" : "Кто повезёт?")} {!ok && "— выбери перед подтверждением"}</div>
               <select value={aiDriver} onChange={e => setAiDriver(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300">
                 <option value="">{aiPickup ? "— определить позже —" : (isRep ? "— выбери бригадира —" : "— выбери водителя —")}</option>
                 {(isRep && !aiPickup ? brigadirs : drivers).map(d => <option key={d.id} value={d.id}>{d.name}{d.salary_type === "brigadir" ? " (бригадир)" : ""}</option>)}
@@ -6254,7 +6308,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             ); })()}
             <div className="flex gap-2">
               <button onClick={confirmAI} disabled={saving || (!aiPickup && !aiDriver)} className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm">{saving ? "Сохраняю..." : (aiPickup || aiDriver) ? "Добавить все" : "Сначала выбери водителя"}</button>
-              <button onClick={() => { setAiResult(null); setAiDriver(""); setAiPickup(false); }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-4 py-2.5 text-sm">Отмена</button>
+              <button onClick={() => { setAiResult(null); setAiDriver(""); setAiPickup(false); setAiPickupWatch(false); }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-4 py-2.5 text-sm">Отмена</button>
             </div>
           </div>
         )}
@@ -6428,6 +6482,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                 <div className="flex gap-2 mt-1">
                   <button onClick={() => setForm({ ...form, payMethod: "Нал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Нал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>Нал</button>
                   <button onClick={() => setForm({ ...form, payMethod: "Безнал" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "Безнал" ? "bg-emerald-500 text-white" : "bg-gray-100 text-gray-600"}`}>Безнал</button>
+                  <button onClick={() => setForm({ ...form, payMethod: "В долг" })} className={`flex-1 py-2 rounded-lg text-sm font-medium ${form.payMethod === "В долг" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-600"}`}>В долг</button>
                 </div>
               </div>
               <Inp label="Заметка" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. позвонить перед приездом" />
@@ -6634,7 +6689,7 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} notes={data.notes} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
