@@ -2774,19 +2774,41 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
 
 // Разбивка зарплаты бригадира по тарифам для объёма бригады kg (кг за месяц).
 // Оклад включает incl тонн; тариф r1 действует incl→t1 тонн; тариф r2 — выше t1. Всё считается по всей бригаде.
-function brigadeSalary(d, kg) {
+// Зарплата бригадира (переделано 2026-09): оклад покрывает первые base_included_t тонн/мес.
+// Сверх этого — оплата ПО ДНЯМ: ставка дня = tier2_rate (8), если развоз бригады за день > day_threshold_kg
+// ИЛИ день выходной (сб/вс); иначе tier1_rate (6). Самовывоз считается отдельно (brigadePickupLoad).
+// dailyKg — массив {date:"YYYY-MM-DD", kg} развоза всей бригады по дням месяца.
+function brigadeSalary(d, dailyKg = []) {
   const base = Number(d.base_salary) || 0;
-  const incl = (Number(d.base_included_t) || 0) * 1000; // кг, включённые в оклад
-  const t1 = (Number(d.tier1_to_t) || 0) * 1000;        // порог второго тарифа, кг
-  const r1 = Number(d.tier1_rate) || 0, r2 = Number(d.tier2_rate) || 0;
-  const tier1kg = Math.max(0, Math.min(kg, t1) - incl);
-  const tier2kg = Math.max(0, kg - t1);
-  const tier1pay = Math.round(tier1kg * r1);
-  const tier2pay = Math.round(tier2kg * r2);
-  const total = Math.round(base + tier1kg * r1 + tier2kg * r2);
-  const toNext = kg < incl ? incl - kg : (kg < t1 ? t1 - kg : 0);
-  const nextLabel = kg < incl ? `до конца оклада (${fmt(incl / 1000)} т)` : (kg < t1 ? `до тарифа ${fmt(r2)} тг/кг (${fmt(t1 / 1000)} т)` : "");
-  return { base, incl, t1, r1, r2, tier1kg, tier1pay, tier2kg, tier2pay, total, toNext, nextLabel };
+  const incl = (Number(d.base_included_t) || 0) * 1000; // кг в оклад
+  const rLow = Number(d.tier1_rate) || 0;               // будни ≤ порога (6)
+  const rHigh = Number(d.tier2_rate) || 0;              // выходной / большой день (8)
+  const dayThreshold = (d.day_threshold_kg === undefined || d.day_threshold_kg === null || d.day_threshold_kg === "") ? 14500 : (Number(d.day_threshold_kg) || 0); // «большой день» от, кг (дефолт 14500, если у старой карточки поля ещё нет)
+  const days = [...dailyKg].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  let cum = 0, totalKg = 0, paidKg = 0, variablePay = 0, paid6Kg = 0, paid6Pay = 0, paid8Kg = 0, paid8Pay = 0;
+  const rows = days.map(dd => {
+    const [Y, M, D] = String(dd.date).split("-").map(Number);
+    const wd = new Date(Y, (M || 1) - 1, D || 1).getDay(); // 0=вс, 6=сб (местное время)
+    const weekend = wd === 0 || wd === 6;
+    const rate = (weekend || dd.kg > dayThreshold) ? rHigh : rLow;
+    const before = cum; cum += dd.kg; totalKg += dd.kg;
+    const payKg = Math.max(0, cum - Math.max(incl, before)); // кг этого дня сверх включённых в оклад
+    const pay = Math.round(payKg * rate);
+    paidKg += payKg; variablePay += pay;
+    if (rate === rHigh) { paid8Kg += payKg; paid8Pay += pay; } else { paid6Kg += payKg; paid6Pay += pay; }
+    return { date: dd.date, kg: dd.kg, weekend, rate, payKg, pay };
+  });
+  const total = Math.round(base + variablePay);
+  const toIncluded = Math.max(0, incl - totalKg);
+  return { base, incl, rLow, rHigh, dayThreshold, rows, totalKg, paidKg, variablePay, total, toIncluded, paid6Kg, paid6Pay, paid8Kg, paid8Pay };
+}
+// Развоз всей бригады по дням за месяц (основа для зарплаты по дням). Самовывоз (pickup) НЕ входит.
+function brigadeDailyKg(d, drivers, orders, ym) {
+  const brigade = new Set([d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)]);
+  const byDate = {};
+  orders.filter(o => o.status === "отгружена" && !o.pickup && brigade.has(o.driverId) && (o.date || "").startsWith(ym))
+    .forEach(o => { byDate[o.date] = (byDate[o.date] || 0) + o.bags * o.bag_kg; });
+  return Object.entries(byDate).map(([date, kg]) => ({ date, kg }));
 }
 
 // 📦 Погрузка самовывоза бригадой за месяц — считается ОТДЕЛЬНО от оклада/тарифов (не входит в объём бригады).
@@ -2809,7 +2831,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const blankDriver = { name: "", salary_type: "kg", rate_per_kg: "", load_rate_per_kg: "", foremanId: "", base_salary: "650000", base_included_t: "60", tier1_to_t: "190", tier1_rate: "6", tier2_rate: "8" };
+  const blankDriver = { name: "", salary_type: "kg", rate_per_kg: "", load_rate_per_kg: "", foremanId: "", base_salary: "650000", base_included_t: "60", day_threshold_kg: "14500", tier1_rate: "6", tier2_rate: "8" };
   const [form, setForm] = useState(blankDriver);
   const [payDriver, setPayDriver] = useState(null);
   const [payAmount, setPayAmount] = useState("");
@@ -2820,12 +2842,12 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
 
   const brigadirs = drivers.filter(d => d.salary_type === "brigadir"); // для выбора старшего у младшего
   const openNew = () => { setEditId(null); setForm(blankDriver); setShowAdd(true); };
-  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, salary_type: d.salary_type || "kg", rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.salary_type === "brigadir" ? (d.load_rate_per_kg || 2.7) : (d.load_rate_per_kg ?? ""), foremanId: d.foremanId || "", base_salary: d.base_salary ?? "650000", base_included_t: d.base_included_t ?? "60", tier1_to_t: d.tier1_to_t ?? "190", tier1_rate: d.tier1_rate ?? "6", tier2_rate: d.tier2_rate ?? "8" }); setShowAdd(true); };
+  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, salary_type: d.salary_type || "kg", rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.salary_type === "brigadir" ? (d.load_rate_per_kg || 2.7) : (d.load_rate_per_kg ?? ""), foremanId: d.foremanId || "", base_salary: d.base_salary ?? "650000", base_included_t: d.base_included_t ?? "60", day_threshold_kg: d.day_threshold_kg ?? "14500", tier1_rate: d.tier1_rate ?? "6", tier2_rate: d.tier2_rate ?? "8" }); setShowAdd(true); };
   const saveDriver = async () => {
     setSaving(true);
     const t = form.salary_type;
     const rec = { id: editId || uid(), name: form.name, salary_type: t };
-    if (t === "brigadir") Object.assign(rec, { base_salary: Number(form.base_salary) || 0, base_included_t: Number(form.base_included_t) || 0, tier1_to_t: Number(form.tier1_to_t) || 0, tier1_rate: Number(form.tier1_rate) || 0, tier2_rate: Number(form.tier2_rate) || 0, rate_per_kg: 0, load_rate_per_kg: form.load_rate_per_kg === "" ? 2.7 : (Number(form.load_rate_per_kg) || 0), foremanId: "" });
+    if (t === "brigadir") Object.assign(rec, { base_salary: Number(form.base_salary) || 0, base_included_t: Number(form.base_included_t) || 0, day_threshold_kg: Number(form.day_threshold_kg) || 0, tier1_rate: Number(form.tier1_rate) || 0, tier2_rate: Number(form.tier2_rate) || 0, rate_per_kg: 0, load_rate_per_kg: form.load_rate_per_kg === "" ? 2.7 : (Number(form.load_rate_per_kg) || 0), foremanId: "" });
     else if (t === "junior") Object.assign(rec, { foremanId: form.foremanId || "", rate_per_kg: 0, load_rate_per_kg: 0 });
     else Object.assign(rec, { rate_per_kg: Number(form.rate_per_kg) || 0, load_rate_per_kg: Number(form.load_rate_per_kg) || 0, foremanId: "" });
     try { await dbUpsert("drivers", rec); setShowAdd(false); setEditId(null); setForm(blankDriver); await reload("drivers"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
@@ -2836,7 +2858,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
     const brigade = new Set([d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)]);
     return orders.filter(o => o.status === "отгружена" && brigade.has(o.driverId) && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
   };
-  const brigadirPay = (d, kg) => brigadeSalary(d, kg).total;
+  const brigadirPay = d => brigadeSalary(d, brigadeDailyKg(d, drivers, orders, salMonth)).total;
   const deleteDriver = async id => {
     const linked = (users || []).filter(u => u.driverId === id);
     if (!confirm(`Удалить рабочего${linked.length ? " и его логин? Он больше не сможет войти и его выкинет из приложения." : "?"}`)) return;
@@ -2858,7 +2880,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   expenses.filter(x => x.driverId).forEach(x => { const m = x.extra ? extraPaid : wagePaid; m[x.driverId] = (m[x.driverId] || 0) + (x.amount || 0); });
   const wagePaidMonth = id => expenses.filter(x => x.driverId === id && !x.extra && (x.date || "").startsWith(salMonth)).reduce((s, x) => s + (x.amount || 0), 0);
   // Заработано: бригадир — оклад+тарифы за выбранный месяц (по объёму всей бригады); младший — платит бригадир (0); обычный — по ставке (всё время)
-  const earnedOf = d => d.salary_type === "brigadir" ? brigadirPay(d, brigadeKgMonth(d, salMonth)) + brigadePickupLoad(d, drivers, orders, salMonth).pay : d.salary_type === "junior" ? 0 : ((earnings[d.id] || 0) + (loadEarn[d.id] || 0));
+  const earnedOf = d => d.salary_type === "brigadir" ? brigadirPay(d) + brigadePickupLoad(d, drivers, orders, salMonth).pay : d.salary_type === "junior" ? 0 : ((earnings[d.id] || 0) + (loadEarn[d.id] || 0));
   const paidOf = d => d.salary_type === "brigadir" ? wagePaidMonth(d.id) : (wagePaid[d.id] || 0);
   const remainingOf = d => Math.max(0, Math.round(earnedOf(d) - paidOf(d)));
 
@@ -2897,11 +2919,11 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           {form.salary_type === "brigadir" && (<>
             <Inp label="Оклад, тг/мес" type="number" value={form.base_salary} onChange={e => setForm({ ...form, base_salary: e.target.value })} />
             <Inp label="В оклад включено, тонн/мес" type="number" value={form.base_included_t} onChange={e => setForm({ ...form, base_included_t: e.target.value })} />
-            <Inp label="Тариф до порога, тг/кг" type="number" value={form.tier1_rate} onChange={e => setForm({ ...form, tier1_rate: e.target.value })} />
-            <Inp label="Порог второго тарифа, тонн/мес" type="number" value={form.tier1_to_t} onChange={e => setForm({ ...form, tier1_to_t: e.target.value })} />
-            <Inp label="Тариф выше порога, тг/кг" type="number" value={form.tier2_rate} onChange={e => setForm({ ...form, tier2_rate: e.target.value })} />
+            <Inp label="Ставка будни, тг/кг" type="number" value={form.tier1_rate} onChange={e => setForm({ ...form, tier1_rate: e.target.value })} placeholder="напр. 6" />
+            <Inp label="Ставка выходной / большой день, тг/кг" type="number" value={form.tier2_rate} onChange={e => setForm({ ...form, tier2_rate: e.target.value })} placeholder="напр. 8" />
+            <Inp label="«Большой день» от, кг/день" type="number" value={form.day_threshold_kg} onChange={e => setForm({ ...form, day_threshold_kg: e.target.value })} placeholder="напр. 14500" />
             <Inp label="Погрузка самовывоза, тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2.7" />
-            <p className="text-xs text-gray-500">Пример: оклад 650000 (вкл. 60 т), 60–190 т по 6 тг/кг, свыше 190 т по 8 тг/кг. Считается по объёму всей бригады за месяц. Погрузка самовывоза (клиент забрал сам) — отдельно, в объём бригады НЕ входит.</p>
+            <p className="text-xs text-gray-500">Оклад 650000 (вкл. 60 т = первые 60 т в месяц). Сверх 60 т — по дням: будни по 6 тг/кг, но если развоз бригады за день &gt;14500 кг или день выходной (сб/вс) — этот день по 8 тг/кг. Погрузка самовывоза — отдельно, в тоннаж не входит.</p>
           </>)}
         </div>
         <div className="flex gap-2 mt-4"><Btn onClick={saveDriver} disabled={saving || (form.salary_type === "junior" && !form.foremanId)}>{saving ? "Сохраняю..." : "Сохранить"}</Btn><Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn></div>
@@ -2939,7 +2961,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           const kgOf = id => orders.filter(o => o.status === "отгружена" && o.driverId === id && (o.date || "").startsWith(salMonth)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
           const perDriver = brigade.map(id => ({ id, name: drivers.find(x => x.id === id)?.name || "?", kg: kgOf(id), me: id === d.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
           const kg = perDriver.reduce((s, x) => s + x.kg, 0);
-          const b = brigadeSalary(d, kg);
+          const b = brigadeSalary(d, brigadeDailyKg(d, drivers, orders, salMonth));
           const sv = brigadePickupLoad(d, drivers, orders, salMonth); // погрузка самовывоза — отдельно
           const grand = b.total + sv.pay;
           const paidM = wagePaidMonth(d.id);
@@ -2952,13 +2974,25 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
                 <div className="text-sm opacity-90 mt-1 border-t border-white/30 pt-1">Развоз бригады: <b>{fmt(kg)} кг</b> ({fmt(Math.round(kg / 100) / 10)} т){sv.kg > 0 ? <> · самовывоз: <b>{fmt(sv.kg)} кг</b></> : ""}</div>
               </div>
               <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
-                <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="truck" size={15} />За развоз (оклад + тарифы)</div>
+                <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="truck" size={15} />За развоз (оклад + по дням)</div>
                 <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
-                <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
-                <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
+                {b.paid6Kg > 0 && <div className="flex justify-between"><span className="text-gray-600">Будни (≤{fmt(b.dayThreshold)} кг/день) · {fmt(b.paid6Kg)} кг × {fmt(b.rLow)}</span><b>+{fmt(b.paid6Pay)} тг</b></div>}
+                {b.paid8Kg > 0 && <div className="flex justify-between"><span className="text-gray-600">Выходные / большие дни · {fmt(b.paid8Kg)} кг × {fmt(b.rHigh)}</span><b>+{fmt(b.paid8Pay)} тг</b></div>}
+                {b.paidKg === 0 && <div className="text-gray-400">Сверх оклада ({fmt(b.incl / 1000)} т) пока нет.</div>}
                 <div className="flex justify-between border-t border-gray-200 pt-1 mt-1"><span className="font-semibold">Итого за развоз</span><b>{fmt(b.total)} тг</b></div>
-                {b.toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё {fmt(b.toNext)} кг {b.nextLabel}</div>}
+                {b.toIncluded > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё {fmt(b.toIncluded)} кг до конца оклада ({fmt(b.incl / 1000)} т) — дальше оплата по дням</div>}
               </div>
+              {b.rows.length > 0 && (
+                <div className="bg-white border border-gray-100 rounded-xl p-3 text-sm">
+                  <div className="font-semibold text-gray-700 mb-1">По дням (развоз бригады)</div>
+                  <div className="space-y-0.5 max-h-52 overflow-y-auto">
+                    {[...b.rows].reverse().map(r => <div key={r.date} className="flex items-center justify-between py-0.5">
+                      <span className="text-gray-600">{r.date.split("-").reverse().join(".")}{r.weekend ? " · вых" : ""}</span>
+                      <span className="flex items-center gap-2"><b className="text-gray-800">{fmt(r.kg)} кг</b><span className={`text-xs px-1.5 py-0.5 rounded ${r.rate === b.rHigh ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>{fmt(r.rate)} тг</span></span>
+                    </div>)}
+                  </div>
+                </div>
+              )}
               <div className="bg-gray-50 rounded-xl p-3 text-sm space-y-1">
                 <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="box" size={15} />Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
                 {sv.kg > 0 ? (<>
@@ -3025,7 +3059,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
                     {isJunior && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full">младший{foreman ? ` · ${foreman.name}` : ""}</span>}
                   </div>
                   {isBrig ? (<>
-                    <div className="text-xs text-gray-500 mt-0.5">Оклад {fmt(d.base_salary)} тг (вкл. {fmt(d.base_included_t)} т) · {fmt(d.base_included_t)}–{fmt(d.tier1_to_t)} т по {fmt(d.tier1_rate)} тг/кг · свыше {fmt(d.tier1_to_t)} т по {fmt(d.tier2_rate)} тг/кг</div>
+                    <div className="text-xs text-gray-500 mt-0.5">Оклад {fmt(d.base_salary)} тг (вкл. {fmt(d.base_included_t)} т). Сверх — по дням: будни {fmt(d.tier1_rate)} тг/кг, выходные и дни &gt;{fmt(d.day_threshold_kg || 14500)} кг — {fmt(d.tier2_rate)} тг/кг</div>
                     <div className="text-sm mt-1">Бригада за {salMonth}: <b>{fmt(monthKg)} кг</b> <span className="text-gray-400">({fmt(monthKg / 1000)} т{juniors.length ? `, ${juniors.length} мл.` : ""})</span></div>
                     <div className="text-sm">Зарплата за месяц: <b>{fmt(earned)} тг</b> · выплачено: <span className="text-emerald-600">{fmt(paidM)} тг</span></div>
                     <div className={`text-sm font-bold ${left > 0 ? "text-red-600" : "text-gray-500"}`}>Осталось за месяц: {fmt(left)} тг</div>
@@ -4529,7 +4563,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
   const kgOf = id => orders.filter(o => o.status === "отгружена" && o.driverId === id && (o.date || "").startsWith(month)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
   const perDriver = brigadeIds.map(id => ({ id, name: drivers.find(d => d.id === id)?.name || "?", kg: kgOf(id), me: id === me.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
   const kg = perDriver.reduce((s, x) => s + x.kg, 0);
-  const b = brigadeSalary(me, kg);
+  const b = brigadeSalary(me, brigadeDailyKg(me, drivers, orders, month));
   const sv = brigadePickupLoad(me, drivers, orders, month); // погрузка самовывоза — отдельно
   const grand = b.total + sv.pay;
 
@@ -4544,13 +4578,22 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
       </div>
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
-        <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="truck" size={15} />За развоз (оклад + тарифы)</div>
+        <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="truck" size={15} />За развоз (оклад + по дням)</div>
         <div className="flex justify-between"><span className="text-gray-600">Оклад (за первые {fmt(b.incl / 1000)} т)</span><b>{fmt(b.base)} тг</b></div>
-        <div className="flex justify-between"><span className="text-gray-600">{fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т: {fmt(b.tier1kg)} кг × {fmt(b.r1)} тг/кг</span><b>+{fmt(b.tier1pay)} тг</b></div>
-        <div className="flex justify-between"><span className="text-gray-600">свыше {fmt(b.t1 / 1000)} т: {fmt(b.tier2kg)} кг × {fmt(b.r2)} тг/кг</span><b>+{fmt(b.tier2pay)} тг</b></div>
+        {b.paid6Kg > 0 && <div className="flex justify-between"><span className="text-gray-600">Будни (≤{fmt(b.dayThreshold)} кг/день) · {fmt(b.paid6Kg)} кг × {fmt(b.rLow)}</span><b>+{fmt(b.paid6Pay)} тг</b></div>}
+        {b.paid8Kg > 0 && <div className="flex justify-between"><span className="text-gray-600">Выходные / большие дни · {fmt(b.paid8Kg)} кг × {fmt(b.rHigh)}</span><b>+{fmt(b.paid8Pay)} тг</b></div>}
+        {b.paidKg === 0 && <div className="text-gray-400">Сверх оклада ({fmt(b.incl / 1000)} т) пока нет.</div>}
         <div className="flex justify-between border-t border-gray-100 pt-1 mt-1"><span className="font-semibold">Итого за развоз</span><b>{fmt(b.total)} тг</b></div>
-        {b.toNext > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё <b>{fmt(b.toNext)} кг</b> {b.nextLabel}</div>}
+        {b.toIncluded > 0 && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1">Ещё <b>{fmt(b.toIncluded)} кг</b> до конца оклада ({fmt(b.incl / 1000)} т)</div>}
       </div>
+      {b.rows.length > 0 && (
+        <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm">
+          <div className="font-semibold text-gray-700 mb-1">По дням</div>
+          <div className="space-y-0.5 max-h-52 overflow-y-auto">
+            {[...b.rows].reverse().map(r => <div key={r.date} className="flex items-center justify-between py-0.5"><span className="text-gray-600">{r.date.split("-").reverse().join(".")}{r.weekend ? " · вых" : ""}</span><span className="flex items-center gap-2"><b className="text-gray-800">{fmt(r.kg)} кг</b><span className={`text-xs px-1.5 py-0.5 rounded ${r.rate === b.rHigh ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>{fmt(r.rate)} тг</span></span></div>)}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm space-y-1">
         <div className="font-semibold text-gray-700 mb-1 flex items-center gap-1.5"><Icon name="box" size={15} />Погрузка самовывоза <span className="font-normal text-gray-400">(клиент забрал сам · {fmt(sv.rate)} тг/кг)</span></div>
@@ -4568,7 +4611,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
         {perDriver.map(x => <div key={x.id} className="flex justify-between py-0.5"><span className={x.me ? "font-medium text-gray-900" : "text-gray-600"}><Icon name={x.me ? "user" : "truck"} size={12} className="inline-block mr-1 align-[-2px]" />{x.name}{x.me ? " (я)" : ""}</span><b>{fmt(x.kg)} кг</b></div>)}
       </div>
 
-      <div className="text-xs text-gray-400 text-center">Оклад {fmt(b.base)} тг (вкл. {fmt(b.incl / 1000)} т) · {fmt(b.incl / 1000)}–{fmt(b.t1 / 1000)} т по {fmt(b.r1)} тг/кг · свыше {fmt(b.t1 / 1000)} т по {fmt(b.r2)} тг/кг. Погрузка самовывоза — отдельно, по {fmt(sv.rate)} тг/кг.</div>
+      <div className="text-xs text-gray-400 text-center">Оклад {fmt(b.base)} тг (вкл. {fmt(b.incl / 1000)} т). Сверх — по дням: будни {fmt(b.rLow)} тг/кг, выходные и дни &gt;{fmt(b.dayThreshold)} кг — {fmt(b.rHigh)} тг/кг. Погрузка самовывоза — отдельно, {fmt(sv.rate)} тг/кг.</div>
     </div>
   );
 }
