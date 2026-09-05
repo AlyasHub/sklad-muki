@@ -184,7 +184,8 @@ async function listFor(u, table) {
     return await dbList(table);
   }
   if (u.role === "accountant") {
-    return ["orders", "clients", "drivers"].includes(table) ? await dbList(table) : [];
+    // + payments (только чтение): нужно для точного долга клиента в календаре/долгах (иначе долг завышен)
+    return ["orders", "clients", "drivers", "payments"].includes(table) ? await dbList(table) : [];
   }
   if (u.role === "driver") {
     // Заявки водителя: где он развозит (driverId) ИЛИ грузит самовывоз (loaderId) — фильтром на сервере БД.
@@ -416,7 +417,7 @@ async function deleteFor(u, table, id) {
     // Торгпред удаляет только своё
     if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); return dbDelete("clients", id); }
     if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!cli || cli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
-    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || cli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); return dbDelete("payments", id); }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || cli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); return dbDelete("payments", id); }
     throw new Error("Нет прав на удаление");
   }
   if (u.role !== "director") throw new Error("Нет прав на удаление");

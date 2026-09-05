@@ -571,12 +571,15 @@ function BrigadirNotes({ notes = [], reload = () => {}, applyLocal = () => {}, c
     </div>
   );
 }
-function CalendarTab({ orders, drivers, clients, stock = [], notes = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false }) {
+function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payments = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
   const [photoView, setPhotoView] = useState(null);
   const [editGroup, setEditGroup] = useState(null);
+  const [histClient, setHistClient] = useState(null); // клиент, чью историю отгрузок и долг смотрим (Feature 4)
+  // Долг клиента = отгружено и не оплачено − ручные оплаты (как во вкладке «Клиенты»). Видят все, кроме водителя/бригадира (showPrices).
+  const clientDebtCal = cid => orders.filter(o => o.clientId === cid && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0) - (payments || []).filter(p => p.clientId === cid).reduce((s, p) => s + (p.amount || 0), 0);
 
   // Отгрузки из Караганды идут напрямую клиенту — в маршруты Астаны не лезут, но в календаре видны отдельным блоком
   const local = orders.filter(o => !o.fromKaraganda);
@@ -1003,6 +1006,10 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], reload,
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500 flex items-center gap-1"><Icon name="building" size={12} />{client.org_name}</div>}
+                  {showPrices && g.clientId && !g.isSample && !isOneOff && (() => {
+                    const debt = Math.round(clientDebtCal(g.clientId));
+                    return <button onClick={() => setHistClient(client || { id: g.clientId, name: g.clientName })} className={`mt-1 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${debt > 0 ? "bg-red-100 text-red-700" : debt < 0 ? "bg-sky-100 text-sky-700" : "bg-gray-100 text-gray-500"}`}><Icon name="wallet" size={12} />{debt > 0 ? `Долг: ${fmt(debt)} тг` : debt < 0 ? `Переплата: ${fmt(-debt)} тг` : "Долга нет"} · история</button>;
+                  })()}
                   <div className="mt-1 space-y-1">
                     {mergedPositions(g.orders).map((m, mi) => (
                       <div key={mi} className="text-gray-600 flex items-center gap-2 flex-wrap">
@@ -1239,6 +1246,44 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], reload,
 
       {photoView && <PhotoViewer url={photoView} onClose={() => setPhotoView(null)} />}
       {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} />}
+      {histClient && showPrices && (() => {
+        const cid = histClient.id;
+        const co = orders.filter(o => o.clientId === cid);
+        const byDate = {};
+        co.forEach(o => { (byDate[o.date] = byDate[o.date] || []).push(o); });
+        const delivered = co.filter(o => o.status === "отгружена");
+        const totalKg = delivered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+        const totalSum = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+        const debt = Math.round(clientDebtCal(cid));
+        const manualReal = (payments || []).filter(p => p.clientId === cid && !p.adjust).reduce((s, p) => s + (p.amount || 0), 0);
+        return (
+          <Modal title={`${histClient.name || "Клиент"} — история и долг`} onClose={() => setHistClient(null)}>
+            <div className="text-sm mb-3 space-y-0.5 bg-gray-50 rounded-xl p-3">
+              <div>Отгружено всего: <b>{fmt(totalKg)} кг</b> · <b>{fmt(totalSum)} тг</b></div>
+              {manualReal > 0 && <div className="text-emerald-600">Внесено оплат: {fmt(manualReal)} тг</div>}
+              <div className={debt > 0 ? "text-red-600 font-bold" : "text-gray-500"}>{debt < 0 ? `Переплата: ${fmt(-debt)} тг` : `Текущий долг: ${fmt(debt)} тг`}</div>
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0])).map(([date, list]) => {
+                const kg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
+                const sum = list.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+                const allPaid = list.every(o => o.paid);
+                const shipped = list.every(o => o.status === "отгружена");
+                return (
+                  <div key={date} className={`border rounded-xl p-3 text-sm ${allPaid && shipped ? "border-emerald-200 bg-emerald-50" : "border-gray-100"}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{date.split("-").reverse().join(".")}</span>
+                      <span className="text-gray-500">{fmt(kg)} кг · {fmt(sum)} тг</span>
+                    </div>
+                    {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} — {o.status}{o.paid ? " · оплачено" : ""}</div>)}
+                  </div>
+                );
+              })}
+              {co.length === 0 && <div className="text-gray-400 text-center py-6">Отгрузок пока нет</div>}
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
@@ -2268,6 +2313,7 @@ function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {} }) 
 
 function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [], role = "director", myUid = "", reload, canEdit = true }) {
   const isRep = role === "rep"; // торгпред видит только своих клиентов (сервер уже отфильтровал)
+  const isDirector = role === "director"; // сверка долга по акту — только директор
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -2277,6 +2323,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const [showPayForm, setShowPayForm] = useState(false); // «клиент закинул сумму» — ручная оплата в счёт долга
   const [payForm, setPayForm] = useState({ amount: "", method: "Наличные", date: TODAY(), note: "" });
   const [savingPay, setSavingPay] = useState(false);
+  const [showReconcile, setShowReconcile] = useState(false); // сверка долга по акту сверки (только директор)
+  const [reconcileVal, setReconcileVal] = useState("");
   const [histPeriod, setHistPeriod] = useState("all");
   const [histFrom, setHistFrom] = useState(TODAY());
   const [histTo, setHistTo] = useState(TODAY());
@@ -2389,6 +2437,23 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     finally { setSavingPay(false); }
   };
   const delPayment = async id => { if (!confirm("Удалить эту оплату? Долг клиента вырастет обратно.")) return; try { await dbDelete("payments", id); await reload("payments"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
+  // Сверка по акту сверки: вбиваем фактический долг из бухгалтерии — система создаёт корректировку
+  // на разницу, чтобы долг в приложении сравнялся с актом. Это НЕ оплата-приход (adjust:true),
+  // поэтому в отчёты «приход от клиентов» она не попадает. Только директор.
+  const saveReconcile = async () => {
+    if (!historyClient || reconcileVal === "") return;
+    const actual = Math.round(Number(reconcileVal) || 0);
+    const cur = Math.round(clientDebt(historyClient)); // текущий долг в приложении
+    const delta = cur - actual; // >0 — уменьшаем долг (клиент меньше должен), <0 — доначисляем
+    if (delta === 0) { setShowReconcile(false); setReconcileVal(""); return; }
+    if (!confirm(`Долг клиента станет ${fmt(actual)} тг (сейчас ${fmt(cur)} тг). Записать корректировку по акту сверки?`)) return;
+    setSavingPay(true);
+    try {
+      await dbUpsert("payments", { id: uid(), clientId: historyClient.id, clientName: historyClient.name, date: TODAY(), amount: delta, method: "Сверка", adjust: true, note: `Корректировка по акту сверки: ${fmt(cur)} → ${fmt(actual)} тг` });
+      setShowReconcile(false); setReconcileVal(""); await reload("payments");
+    } catch (e) { const m = String((e && e.message) || e); alert(/payments|PGRST205/i.test(m) ? "Нужно один раз создать таблицу «payments» в Supabase." : "⚠️ Не сохранилось: " + m); }
+    finally { setSavingPay(false); }
+  };
   // Отметить поставку (все позиции за дату) оплаченной — с указанием способа (нал/безнал)
   const markPaid = async (clientId, date, paid, method = "") => {
     try {
@@ -2688,7 +2753,10 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
         const totalKg = delivered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
         const totalDelivered = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
         const totalPaid = delivered.filter(o => o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
-        const manualPaid = paidManual(historyClient.id); // внесено «в счёт долга» (всего)
+        const manualPaid = paidManual(historyClient.id); // внесено «в счёт долга» (всего, вкл. корректировки — для расчёта долга)
+        const clientPays = (payments || []).filter(p => p.clientId === historyClient.id);
+        const manualReal = clientPays.filter(p => !p.adjust).reduce((s, p) => s + (p.amount || 0), 0); // реальные деньги от клиента
+        const adjustSum = clientPays.filter(p => p.adjust).reduce((s, p) => s + (p.amount || 0), 0); // корректировки по акту сверки
         const debtAll = orders.filter(o => o.clientId === historyClient.id && o.status === "отгружена" && !o.paid).reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0) - manualPaid;
         const periods = [["day", "День"], ["week", "Неделя"], ["month", "Месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
         return (
@@ -2706,9 +2774,23 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <div className="text-sm mb-3 space-y-0.5 bg-gray-50 rounded-xl p-3">
               <div>Отгружено за период: <b>{fmt(totalKg)} кг</b> · <b>{fmt(totalDelivered)} тг</b></div>
               <div className="text-emerald-600">Оплачено за период: {fmt(totalPaid)} тг</div>
-              {manualPaid > 0 && <div className="text-emerald-600">Внесено в счёт долга (всего): {fmt(manualPaid)} тг</div>}
+              {manualReal > 0 && <div className="text-emerald-600">Внесено в счёт долга (всего): {fmt(manualReal)} тг</div>}
+              {adjustSum !== 0 && <div className="text-sky-600">Корректировка по акту сверки: {adjustSum > 0 ? "−" : "+"}{fmt(Math.abs(adjustSum))} тг</div>}
               <div className={debtAll > 0 ? "text-red-600 font-bold" : "text-gray-500"}>{debtAll < 0 ? `Переплата (всего): ${fmt(-debtAll)} тг` : `Текущий долг (всего): ${fmt(debtAll)} тг`}</div>
             </div>
+            {isDirector && (
+              <div className="mb-3">
+                {!showReconcile ? (
+                  <Btn size="sm" variant="secondary" onClick={() => { setShowReconcile(true); setReconcileVal(""); }}><Icon name="receipt" size={15} />Выставить долг по акту сверки</Btn>
+                ) : (
+                  <div className="border-2 border-sky-200 bg-sky-50 rounded-xl p-3 space-y-2">
+                    <div className="text-xs text-gray-600">Долг в приложении сейчас: <b>{fmt(Math.round(clientDebt(historyClient)))} тг</b>. Впиши фактический долг из акта сверки бухгалтера — система создаст корректировку на разницу, чтобы суммы сравнялись. Это не «оплата»: в отчёт по приходу от клиентов не попадёт.</div>
+                    <Inp label="Фактический долг по акту, тг" type="number" value={reconcileVal} onChange={e => setReconcileVal(e.target.value)} />
+                    <div className="flex gap-2"><Btn size="sm" onClick={saveReconcile} disabled={reconcileVal === "" || savingPay}>{savingPay ? "Сохраняю…" : "Выставить долг"}</Btn><Btn size="sm" variant="secondary" onClick={() => { setShowReconcile(false); setReconcileVal(""); }}>Отмена</Btn></div>
+                  </div>
+                )}
+              </div>
+            )}
             {canEdit && (
               <div className="mb-3">
                 {!showPayForm ? (
@@ -2729,8 +2811,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                   <div className="mt-2 space-y-1">
                     {(payments || []).filter(p => p.clientId === historyClient.id).sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(p => (
                       <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
-                        <span className="text-gray-600 inline-flex items-center gap-1"><Icon name="cash" size={13} className="text-emerald-600" />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
-                        <span className="flex items-center gap-2"><b className="text-emerald-600">{fmt(p.amount)} тг</b><button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button></span>
+                        <span className="text-gray-600 inline-flex items-center gap-1"><Icon name={p.adjust ? "receipt" : "cash"} size={13} className={p.adjust ? "text-sky-600" : "text-emerald-600"} />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
+                        <span className="flex items-center gap-2"><b className={p.adjust ? "text-sky-600" : "text-emerald-600"}>{p.adjust ? (p.amount >= 0 ? "−" : "+") + fmt(Math.abs(p.amount)) : fmt(p.amount)} тг</b>{(!p.adjust || isDirector) && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}</span>
                       </div>
                     ))}
                   </div>
@@ -3743,8 +3825,9 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
   );
 }
 
-function TrucksTab({ trucks, reload, canEdit = true }) {
+function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [expMonth, setExpMonth] = useState(TODAY().slice(0, 7)); // месяц для выгрузки в Excel (YYYY-MM)
   const [editId, setEditId] = useState(null);
   const [editItemIdx, setEditItemIdx] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -3842,9 +3925,46 @@ function TrucksTab({ trucks, reload, canEdit = true }) {
   const sorted = [...trucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
   const waLink = n => "https://wa.me/" + String(n || "").replace(/\D/g, "");
 
+  // Выгрузка в Excel (CSV) по выбранному месяцу: фуры на склад + прямые фуры с Караганды клиенту.
+  const itemsText = t => (t.items || []).map(i => `${i.brand} ${i.grade} ${i.bag_kg}кг — ${fmt(itemKg(i))} кг`).join("; ");
+  const monthTrucks = trucks.filter(t => (t.date || "").slice(0, 7) === expMonth).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const monthDirect = (orders || []).filter(o => o.fromKaraganda && (o.date || "").slice(0, 7) === expMonth).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const monthLabel = () => { const [y, m] = expMonth.split("-"); return `${["","янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"][Number(m)]}.${y}`; };
+  const exportExcel = () => {
+    const esc2 = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = [[`Фуры за ${monthLabel()}`], []];
+    // 1) Фуры на склад (приход)
+    rows.push(["ФУРЫ НА СКЛАД (приход)"]);
+    rows.push(["Дата", "Товар", "Кг", "Стоимость фуры, тг", "Фурист", "Машина", "Статус"]);
+    // ИТОГО считаем ТОЛЬКО по принятым на склад (расход/приход появляются лишь при статусе «принята») —
+    // чтобы запланированные/в пути фуры не завышали сумму для бухгалтерии. Строки показываем все, со статусом.
+    let trTotalKg = 0, trTotalPrice = 0;
+    monthTrucks.forEach(t => { const kg = totalKg(t); if (t.status === "принята") { trTotalKg += kg; trTotalPrice += Number(t.price) || 0; } rows.push([t.date, itemsText(t), Math.round(kg), Math.round(Number(t.price) || 0), t.driver_name || "", t.car_number || "", t.status || ""]); });
+    const trAccepted = monthTrucks.filter(t => t.status === "принята").length;
+    rows.push(["ИТОГО (принято на склад)", "", Math.round(trTotalKg), Math.round(trTotalPrice), "", "", `${trAccepted} из ${monthTrucks.length} фур`]);
+    rows.push([]);
+    // 2) Прямые фуры с Караганды клиенту (fromKaraganda). Отменённые не показываем; ИТОГО — только отгруженные.
+    rows.push(["ПРЯМЫЕ ФУРЫ С КАРАГАНДЫ КЛИЕНТУ"]);
+    rows.push(["Дата", "Клиент", "Товар", "Кг", "Стоимость, тг", "Статус"]);
+    let dTotalKg = 0, dTotalSum = 0, dShipped = 0;
+    monthDirect.filter(o => o.status !== "отменена").forEach(o => { const kg = o.bags * o.bag_kg; const sum = kg * (o.price_per_kg || 0); if (o.status === "отгружена") { dTotalKg += kg; dTotalSum += sum; dShipped++; } rows.push([o.date, o.clientName || "", `${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags}`, Math.round(kg), Math.round(sum), o.status || ""]); });
+    rows.push(["ИТОГО (отгружено)", "", "", Math.round(dTotalKg), Math.round(dTotalSum), `${dShipped} позиций`]);
+    downloadFile(`Фуры_${expMonth}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Поставки (фуры)</h3>{canEdit && <Btn onClick={openNew}>+ Запланировать фуру</Btn>}</div>
+      {/* Выгрузка — чтение данных, доступна и директору-просмотрщику (viewer), не только редактору */}
+      {(
+        <div className="bg-white border border-gray-100 rounded-2xl p-3 flex flex-wrap items-end gap-2">
+          <div className="flex-1 min-w-[140px]">
+            <label className="block text-xs text-gray-500 mb-1">Выгрузка в Excel за месяц</label>
+            <input type="month" value={expMonth} onChange={e => setExpMonth(e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+          </div>
+          <Btn size="sm" variant="secondary" onClick={exportExcel} disabled={monthTrucks.length === 0 && monthDirect.length === 0}><Icon name="download" size={15} />Скачать ({monthTrucks.length + monthDirect.length})</Btn>
+        </div>
+      )}
       {showAdd && (
         <Modal title={editId ? "Изменить фуру" : "Новая фура"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
@@ -5637,7 +5757,7 @@ function ReactivateTab({ clients, orders }) {
   );
 }
 
-function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
+function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false }) {
   const [open, setOpen] = useState({});
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
   const [selected, setSelected] = useState({});
@@ -5656,10 +5776,10 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
     d.kg += o.bags * o.bag_kg; d.sum += sum; d.items.push(o);
   });
   // Ручные оплаты «в счёт долга» — сумма и список по каждому клиенту
-  const paidByClient = {}, paysByClient = {};
-  (payments || []).forEach(p => { const k = p.clientId || ("nm:" + (p.clientName || "")); paidByClient[k] = (paidByClient[k] || 0) + (p.amount || 0); (paysByClient[k] = paysByClient[k] || []).push(p); });
-  // net = отгружено-неоплачено − внесённые оплаты (может уйти в переплату)
-  Object.values(byClient).forEach(c => { c.paid = paidByClient[c.key] || 0; c.net = c.total - c.paid; });
+  const paidByClient = {}, paysByClient = {}, realByClient = {}, adjByClient = {};
+  (payments || []).forEach(p => { const k = p.clientId || ("nm:" + (p.clientName || "")); paidByClient[k] = (paidByClient[k] || 0) + (p.amount || 0); if (p.adjust) adjByClient[k] = (adjByClient[k] || 0) + (p.amount || 0); else realByClient[k] = (realByClient[k] || 0) + (p.amount || 0); (paysByClient[k] = paysByClient[k] || []).push(p); });
+  // net = отгружено-неоплачено − внесённые оплаты (и корректировки по актам сверки; может уйти в переплату)
+  Object.values(byClient).forEach(c => { c.paid = paidByClient[c.key] || 0; c.paidReal = realByClient[c.key] || 0; c.adjust = adjByClient[c.key] || 0; c.net = c.total - c.paid; });
   // клиенты, у кого оплат больше, чем незакрытых отгрузок (или оплаты без открытых долгов) — показываем как переплату
   const list = Object.values(byClient).sort((a, b) => b.net - a.net);
   const grand = list.reduce((s, c) => s + Math.max(0, c.net), 0);
@@ -5728,7 +5848,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
                 {reconcile && <span className={`w-5 h-5 flex-shrink-0 rounded-md border-2 flex items-center justify-center text-white text-xs font-bold ${selected[c.key] ? "bg-amber-500 border-amber-500" : "border-gray-300"}`}>{selected[c.key] ? "✓" : ""}</span>}
                 <div>
                   <div className="font-bold text-gray-900">{c.name}{c.org && <span className="text-sm text-gray-500 font-normal"> · {c.org}</span>}</div>
-                  <div className="text-xs text-gray-400">{dates.length} {dates.length === 1 ? "отгрузка не оплачена" : "отгрузок не оплачено"}{c.paid > 0 ? ` · внесено ${fmt(c.paid)} тг` : ""}</div>
+                  <div className="text-xs text-gray-400">{dates.length} {dates.length === 1 ? "отгрузка не оплачена" : "отгрузок не оплачено"}{c.paidReal > 0 ? ` · внесено ${fmt(c.paidReal)} тг` : ""}{c.adjust !== 0 ? ` · акт сверки ${c.adjust > 0 ? "−" : "+"}${fmt(Math.abs(c.adjust))}` : ""}</div>
                 </div>
               </div>
               <div className="text-right">
@@ -5740,10 +5860,11 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
             </button>
             {isOpen && (
               <div className="px-4 pb-4 space-y-2 border-t border-gray-50 pt-3">
-                {c.paid > 0 && (
+                {(c.paidReal !== 0 || c.adjust !== 0) && (
                   <div className="bg-emerald-50 rounded-xl p-3 text-sm">
                     <div className="flex justify-between"><span className="text-gray-600">Отгружено не оплачено</span><b>{fmt(c.total)} тг</b></div>
-                    <div className="flex justify-between text-emerald-700"><span>− внесено оплат</span><b>{fmt(c.paid)} тг</b></div>
+                    {c.paidReal !== 0 && <div className="flex justify-between text-emerald-700"><span>− внесено оплат</span><b>{fmt(c.paidReal)} тг</b></div>}
+                    {c.adjust !== 0 && <div className="flex justify-between text-sky-600"><span>{c.adjust > 0 ? "− корректировка (акт сверки)" : "+ доначислено (акт сверки)"}</span><b>{fmt(Math.abs(c.adjust))} тг</b></div>}
                     <div className="flex justify-between border-t border-emerald-200 mt-1 pt-1"><span className="font-medium">Остаток долга</span><b className={c.net > 0 ? "text-red-600" : "text-emerald-600"}>{c.net > 0 ? fmt(c.net) + " тг" : (c.net < 0 ? "переплата " + fmt(-c.net) : "0 тг")}</b></div>
                   </div>
                 )}
@@ -5752,8 +5873,8 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true }) {
                   <div className="space-y-1">
                     {pays.map(p => (
                       <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
-                        <span className="text-gray-600 inline-flex items-center gap-1"><Icon name="cash" size={13} className="text-emerald-600" />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
-                        <span className="flex items-center gap-2"><b className="text-emerald-600">{fmt(p.amount)} тг</b>{canEdit && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить оплату">✕</button>}</span>
+                        <span className="text-gray-600 inline-flex items-center gap-1"><Icon name={p.adjust ? "receipt" : "cash"} size={13} className={p.adjust ? "text-sky-600" : "text-emerald-600"} />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
+                        <span className="flex items-center gap-2"><b className={p.adjust ? "text-sky-600" : "text-emerald-600"}>{p.adjust ? (p.amount >= 0 ? "−" : "+") + fmt(Math.abs(p.amount)) : fmt(p.amount)} тг</b>{canEdit && (!p.adjust || isDirector) && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить оплату">✕</button>}</span>
                       </div>
                     ))}
                   </div>
@@ -6092,6 +6213,10 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const [ooResolving, setOoResolving] = useState(false);
   const [ooErr, setOoErr] = useState("");
   const updOo = (i, k, v) => setOoPos(ps => ps.map((p, j) => j === i ? { ...p, [k]: v } : p));
+  // Позиции обычной заявки клиенту (несколько сортов за раз — общий клиент/дата/водитель)
+  const manBlank = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
+  const [manPos, setManPos] = useState([{ ...manBlank }]);
+  const updMan = (i, k, v) => setManPos(ps => ps.map((p, j) => j === i ? { ...p, [k]: v } : p));
   const ooResolve = async () => {
     setOoResolving(true); setOoErr("");
     try {
@@ -6266,27 +6391,37 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     }
     const isTrial = form.trial && !form.isSample;
     if (isTrial && !form.clientId) { alert("Выбери клиента для пробы."); return; }
-    setSavingManual(true);
+    const validMan = manPos.filter(p => Number(p.bags) > 0);
+    if (!validMan.length) { alert("Укажи, сколько мешков (хотя бы в одной позиции)."); return; }
     const client = form.isSample ? null : clients.find(c => c.id === form.clientId);
-    // Проба клиенту (trial) — всегда бесплатно. Пробник новой компании (isSample) — по введённой
-    // цене: пусто/0 = бесплатно, иначе платный пробник. Обычная заявка — цена из поля или из базы.
-    const price = isTrial ? 0
-      : form.isSample ? Math.max(0, Number(form.price_per_kg) || 0)
-      : Math.max(0, Number(form.price_per_kg) || (client ? priceFor(client, form.brand, form.grade, Number(form.bag_kg)) : 0));
+    // Обычная заявка (не проба): если по позиции цена не введена и в карточке клиента её тоже нет —
+    // позиция уйдёт бесплатно (0 тг). При нескольких позициях это легко не заметить — предупреждаем.
+    if (!form.isSample && !isTrial) {
+      const zeroCnt = validMan.filter(p => !(Number(p.price_per_kg) || (client ? priceFor(client, p.brand, p.grade, Number(p.bag_kg)) : 0))).length;
+      if (zeroCnt && !confirm(`Для ${zeroCnt} позиц. цена не найдена — записать их по 0 тг (бесплатно)?`)) return;
+    }
+    setSavingManual(true);
     // если у клиента на эту дату уже назначен водитель — наследуем его (чтобы новая позиция не «потерялась» у водителя)
     const inheritedDriver = (!form.isSample && form.clientId) ? (orders.find(o => o.clientId === form.clientId && o.date === form.date && o.driverId)?.driverId || "") : "";
     try {
-      await dbUpsert("orders", {
-        id: uid(), date: form.date, brand: form.brand, grade: form.grade,
-        bag_kg: Number(form.bag_kg), bags: Number(form.bags),
-        driverId: form.pickup ? "" : (form.driverId || inheritedDriver),
-        pickup: !!form.pickup, loaderId: form.pickup ? (form.loaderId || "") : "", pickupWatch: !!form.pickup && !!form.pickupWatch,
-        price_per_kg: Number(price), status: "новая",
-        isSample: form.isSample, trial: isTrial, note: form.note || "",
-        clientId: form.isSample ? null : form.clientId,
-        clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
-      });
-      setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "" })); await reload("orders");
+      for (const p of validMan) {
+        // Проба клиенту (trial) — всегда бесплатно. Пробник новой компании (isSample) — по введённой
+        // цене: пусто/0 = бесплатно, иначе платный пробник. Обычная заявка — цена из поля или из базы.
+        const price = isTrial ? 0
+          : form.isSample ? Math.max(0, Number(p.price_per_kg) || 0)
+          : Math.max(0, Number(p.price_per_kg) || (client ? priceFor(client, p.brand, p.grade, Number(p.bag_kg)) : 0));
+        await dbUpsert("orders", {
+          id: uid(), date: form.date, brand: p.brand, grade: p.grade,
+          bag_kg: Number(p.bag_kg), bags: Number(p.bags),
+          driverId: form.pickup ? "" : (form.driverId || inheritedDriver),
+          pickup: !!form.pickup, loaderId: form.pickup ? (form.loaderId || "") : "", pickupWatch: !!form.pickup && !!form.pickupWatch,
+          price_per_kg: Number(price), status: "новая",
+          isSample: form.isSample, trial: isTrial, note: form.note || "",
+          clientId: form.isSample ? null : form.clientId,
+          clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
+        });
+      }
+      setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "" })); setManPos([{ ...manBlank }]); await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSavingManual(false);
   };
@@ -6531,27 +6666,41 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               <Inp label="Заметка" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. позвонить перед приездом" />
             </div>
           ) : (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-3">
             {form.isSample
-              ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
-              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
-            <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
-            <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
-            <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
-            <Inp label="Мешков" type="number" value={form.bags} onChange={e => setForm({ ...form, bags: e.target.value })} />
-            {!form.trial && <Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" min="0" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={form.price_per_kg || ""} onChange={e => setForm({ ...form, price_per_kg: e.target.value })} />}
-            <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-            {form.pickup
-              ? <div className="col-span-2 space-y-2">
-                  <Sel label={form.pickupWatch ? "Кто проследит (контроль)" : "Грузчик (кто отгрузит)"} value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: false })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${!form.pickupWatch ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="bag" size={15} />Грузим сами</button>
-                    <button type="button" onClick={() => setForm({ ...form, pickupWatch: true })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${form.pickupWatch ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="eye" size={15} />Только контроль</button>
+              ? <Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" />
+              : <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />}
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">{form.trial ? "Что даём на пробу" : "Что везём (по позициям)"}</p>
+              {manPos.map((p, i) => (
+                <div key={i} className="border border-gray-200 rounded-xl p-3 mb-2 relative">
+                  {manPos.length > 1 && <button onClick={() => setManPos(ps => ps.filter((_, j) => j !== i))} className="absolute top-2 right-2 text-red-400 hover:text-red-600 text-lg leading-none" title="Убрать позицию">✕</button>}
+                  <div className="grid grid-cols-2 gap-2">
+                    <Sel label="Бренд" value={p.brand} onChange={e => updMan(i, "brand", e.target.value)} options={BRANDS} />
+                    <Sel label="Сорт" value={p.grade} onChange={e => updMan(i, "grade", e.target.value)} options={GRADES} />
+                    <Sel label="Фасовка" value={p.bag_kg} onChange={e => updMan(i, "bag_kg", e.target.value)} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
+                    <Inp label="Мешков" type="number" value={p.bags} onChange={e => updMan(i, "bags", e.target.value)} />
+                    {!form.trial && <div className="col-span-2"><Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" min="0" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={p.price_per_kg || ""} onChange={e => updMan(i, "price_per_kg", e.target.value)} /></div>}
                   </div>
-                  {form.pickupWatch && <p className="text-xs text-purple-700 bg-purple-50 rounded-lg px-2 py-1">Клиент грузит сам, наш человек только следит, что забрали. Заявку он видит, но оплата за погрузку не начисляется.</p>}
                 </div>
-              : <div className="col-span-2"><Sel label={isRep ? "Бригадир (он распределит)" : "Водитель"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— назначить позже —" }, ...driverPickOptions]} /></div>}
-            <div className="col-span-2"><Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" /></div>
+              ))}
+              <button onClick={() => setManPos(ps => [...ps, { ...manBlank }])} className="w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm font-medium text-gray-500 hover:bg-gray-50">+ ещё сорт / позиция</button>
+              {!form.trial && !form.isSample && <p className="text-xs text-gray-400 mt-1">Пусто в цене — подставим цену из карточки клиента.</p>}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+              {form.pickup
+                ? <div className="col-span-2 space-y-2">
+                    <Sel label={form.pickupWatch ? "Кто проследит (контроль)" : "Грузчик (кто отгрузит)"} value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setForm({ ...form, pickupWatch: false })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${!form.pickupWatch ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="bag" size={15} />Грузим сами</button>
+                      <button type="button" onClick={() => setForm({ ...form, pickupWatch: true })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${form.pickupWatch ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="eye" size={15} />Только контроль</button>
+                    </div>
+                    {form.pickupWatch && <p className="text-xs text-purple-700 bg-purple-50 rounded-lg px-2 py-1">Клиент грузит сам, наш человек только следит, что забрали. Заявку он видит, но оплата за погрузку не начисляется.</p>}
+                  </div>
+                : <div className="col-span-2"><Sel label={isRep ? "Бригадир (он распределит)" : "Водитель"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: isRep ? "— выбери бригадира —" : "— назначить позже —" }, ...driverPickOptions]} /></div>}
+            </div>
+            <Inp label={form.pickup ? "Заметка (видит грузчик)" : "Заметка (видит водитель)"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" />
           </div>
           )}
           <div className="flex gap-2 mt-4">
@@ -6732,15 +6881,15 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} notes={data.notes} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} />}
+            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} notes={data.notes} payments={data.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
             {tab === "revision" && isDev && <RevisionTab stock={data.stock} notes={data.notes} reload={reload} applyLocal={applyLocal} />}
-            {tab === "supply" && <TrucksTab trucks={data.trucks} reload={reload} canEdit={isDirector} />}
+            {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={isDirector} />}
             {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
-            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} payments={data.payments} reload={reload} canEdit={isDirector || isRep} />}
+            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} payments={data.payments} reload={reload} canEdit={isDirector || isRep} isDirector={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={data.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
