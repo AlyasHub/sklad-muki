@@ -5125,6 +5125,15 @@ function amountToWords(amount) {
   return `${words} ${plural(som, ["тенге", "тенге", "тенге"])} ${String(tiyn).padStart(2, "0")} тиын`;
 }
 
+// Наименование позиции в счёте по правилам поставщика:
+// ДАЛА НАН → «Мука <сорт> <фасовка> кг»; ДАРАД → «Мука <сорт>, <фасовка>кг (Darad)».
+// «Отруби» — не мука, поэтому без приставки «Мука». Сорт пишем с маленькой буквы.
+function invLineName(brand, grade, bag_kg) {
+  const g = String(grade || "").trim();
+  const base = /отруб/i.test(g) ? "Отруби" : `Мука ${g.toLowerCase()}`;
+  return /darad|дарад/i.test(String(brand || "")) ? `${base}, ${bag_kg}кг (Darad)` : `${base} ${bag_kg} кг`;
+}
+
 // Строит PDF счёта на оплату и открывает его в новой вкладке (просмотр + печать). rows = [{name, qty(кг), price(за кг), unit}]
 async function buildInvoicePdf({ number, date, buyerName, buyerBin, rows }) {
   // Открываем вкладку сразу по клику (иначе телефон блокирует всплывающее окно), затем покажем в ней PDF — можно смотреть и печатать
@@ -5199,7 +5208,7 @@ async function invoiceFromOrders(group, client) {
   orders.forEach(o => {
     const kg = (Number(o.bags) || 0) * (Number(o.bag_kg) || 0);
     const key = `${o.brand}|${o.grade}|${o.bag_kg}|${o.price_per_kg || 0}`;
-    if (!m[key]) m[key] = { name: `${o.brand} ${o.grade} ${o.bag_kg} кг`, unit: "кг", price: Number(o.price_per_kg) || 0, qty: 0 };
+    if (!m[key]) m[key] = { name: invLineName(o.brand, o.grade, o.bag_kg), unit: "кг", price: Number(o.price_per_kg) || 0, qty: 0 };
     m[key].qty += kg;
   });
   const rows = Object.values(m).filter(r => r.qty > 0);
