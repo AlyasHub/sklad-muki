@@ -1030,6 +1030,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                     {(client?.gis_link || g.orders[0].gis_link) &&<a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pin" size={12} />2ГИС</a>}
                     {!driverMode && !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
                     {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
+                    {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => invoiceFromOrders(g, client)} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="wallet" size={12} />Счет PDF</button>}
                     {!driverMode && canEdit && !g.orders.some(o => o.foreign) && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pencil" size={12} />Изменить</button>}
                     {g.orders[0].created_by_name && <span className="inline-flex items-center gap-1"><Icon name="pencil" size={11} />{g.orders[0].created_by_name}</span>}
                   </div>
@@ -1149,6 +1150,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                     <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-2 flex-wrap">
                       {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
                       {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
+                      {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => invoiceFromOrders(g, client)} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="wallet" size={12} />Счет PDF</button>}
                       <span className="text-orange-600 inline-flex items-center gap-1"><Icon name="store" size={12} />фура из Караганды</span>
                     </div>
                     {canEdit && (
@@ -5082,6 +5084,144 @@ async function softInvoiceFromOrders(group, client) {
     date: orders[0].date || TODAY(),
   });
 }
+
+// 🧾 Счёт на оплату — по 1С-шаблону поставщика (ТОО «BEST MILL»). Из заявки меняются:
+// номер счёта, покупатель и позиции (наименования/кол-во/цена/сумма). Поле «Договор» убрано.
+const INV_SUPPLIER = "Товарищество с ограниченной ответственностью «BEST MILL»";
+const INV_SUPPLIER_BIN = "110440013701";
+const INV_BANK = 'АО "Alatau City Bank"';
+const INV_IIK = "KZ18998HTB0000486384";
+const INV_BIK = "TSESKZKA";
+const INV_KBE = "17";
+const INV_KNP = "710"; // код назначения платежа
+const INV_VAT_RATE = 16; // ставка НДС для строки «в том числе» (как в образце: 16/116 от суммы)
+const INV_WARNING = "Внимание! Оплата данного счета означает согласие с условиями поставки товара. Уведомление об оплате обязательно, в противном случае не гарантируется наличие товара на складе. Товар отпускается по факту прихода денег на р/с Поставщика, самовывозом, при наличии доверенности и документов удостоверяющих личность.";
+
+// Сумма прописью (тенге/тиын) с правильными родами и склонениями
+function amountToWords(amount) {
+  const som = Math.floor(Math.round(amount * 100) / 100);
+  const tiyn = Math.round((amount - som) * 100);
+  const ones = ["", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"];
+  const onesF = ["", "одна", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"];
+  const teens = ["десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать", "пятнадцать", "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать"];
+  const tens = ["", "", "двадцать", "тридцать", "сорок", "пятьдесят", "шестьдесят", "семьдесят", "восемьдесят", "девяносто"];
+  const hund = ["", "сто", "двести", "триста", "четыреста", "пятьсот", "шестьсот", "семьсот", "восемьсот", "девятьсот"];
+  const triad = (n, fem) => {
+    const w = [], h = Math.floor(n / 100), t = Math.floor((n % 100) / 10), o = n % 10;
+    if (h) w.push(hund[h]);
+    if (t === 1) w.push(teens[o]);
+    else { if (t) w.push(tens[t]); if (o) w.push((fem ? onesF : ones)[o]); }
+    return w.join(" ");
+  };
+  const plural = (n, forms) => { const a = n % 10, b = n % 100; return (a === 1 && b !== 11) ? forms[0] : (a >= 2 && a <= 4 && (b < 10 || b >= 20)) ? forms[1] : forms[2]; };
+  const parts = [];
+  const bil = Math.floor(som / 1e9), mil = Math.floor((som % 1e9) / 1e6), tho = Math.floor((som % 1e6) / 1e3), rem = som % 1e3;
+  if (bil) parts.push(triad(bil, false), plural(bil, ["миллиард", "миллиарда", "миллиардов"]));
+  if (mil) parts.push(triad(mil, false), plural(mil, ["миллион", "миллиона", "миллионов"]));
+  if (tho) parts.push(triad(tho, true), plural(tho, ["тысяча", "тысячи", "тысяч"]));
+  if (rem) parts.push(triad(rem, false));
+  let words = parts.filter(Boolean).join(" ") || "ноль";
+  words = words.charAt(0).toUpperCase() + words.slice(1);
+  return `${words} ${plural(som, ["тенге", "тенге", "тенге"])} ${String(tiyn).padStart(2, "0")} тиын`;
+}
+
+// Строит PDF счёта на оплату и открывает его в новой вкладке (просмотр + печать). rows = [{name, qty(кг), price(за кг), unit}]
+async function buildInvoicePdf({ number, date, buyerName, buyerBin, rows }) {
+  // Открываем вкладку сразу по клику (иначе телефон блокирует всплывающее окно), затем покажем в ней PDF — можно смотреть и печатать
+  const win = window.open("", "_blank");
+  let pdfMake;
+  try { pdfMake = await loadPdfMake(); }
+  catch (e) { if (win && !win.closed) win.close(); throw e; }
+  const money = n => (Number(n) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const qtyFmt = n => { const v = Number(n) || 0; return Number.isInteger(v) ? v.toLocaleString("ru-RU") : v.toLocaleString("ru-RU", { maximumFractionDigits: 3 }); };
+  const filled = rows.filter(r => (Number(r.qty) || 0) > 0);
+  const total = filled.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.price) || 0), 0);
+  const vat = INV_VAT_RATE ? total * INV_VAT_RATE / (100 + INV_VAT_RATE) : 0;
+  const d = new Date(date + "T00:00:00");
+  const dateStr = isNaN(d) ? date : `${d.getDate()} ${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()} г.`;
+  const rule = () => ({ canvas: [{ type: "line", x1: 0, y1: 0, x2: 539, y2: 0, lineWidth: 1.4 }], margin: [0, 3, 0, 6] });
+  const bankLayout = { hLineWidth: () => 0.7, vLineWidth: () => 0.7, hLineColor: () => "#000", vLineColor: () => "#000", paddingLeft: () => 5, paddingRight: () => 5, paddingTop: () => 3, paddingBottom: () => 3 };
+  const tblLayout = { hLineWidth: () => 0.6, vLineWidth: () => 0.6, hLineColor: () => "#666", vLineColor: () => "#666", paddingTop: () => 3, paddingBottom: () => 3, paddingLeft: () => 4, paddingRight: () => 4 };
+  const content = [
+    { text: INV_WARNING, fontSize: 7, alignment: "justify", color: "#333", margin: [0, 0, 0, 8] },
+    { text: "Образец платежного поручения", bold: true, fontSize: 9, margin: [0, 0, 0, 3] },
+    { table: { widths: ["*", 118, 92], body: [
+      [
+        { stack: [{ text: "Бенефициар:", bold: true }, { text: INV_SUPPLIER }, { text: "БИН: " + INV_SUPPLIER_BIN }], fontSize: 8 },
+        { stack: [{ text: "ИИК", bold: true, alignment: "center" }, { text: INV_IIK, alignment: "center", margin: [0, 4, 0, 0] }], fontSize: 8 },
+        { stack: [{ text: "Кбе", bold: true, alignment: "center" }, { text: INV_KBE, alignment: "center", margin: [0, 4, 0, 0] }], fontSize: 8 },
+      ],
+      [
+        { stack: [{ text: "Банк бенефициара:", bold: true }, { text: INV_BANK }], fontSize: 8 },
+        { stack: [{ text: "БИК", bold: true, alignment: "center" }, { text: INV_BIK, alignment: "center", margin: [0, 4, 0, 0] }], fontSize: 8 },
+        { stack: [{ text: "Код назначения платежа", bold: true, alignment: "center", fontSize: 7 }, { text: INV_KNP, alignment: "center", margin: [0, 4, 0, 0] }], fontSize: 8 },
+      ],
+    ] }, layout: bankLayout, margin: [0, 0, 0, 14] },
+    { text: `Счет на оплату № ${number} от ${dateStr}`, bold: true, fontSize: 12, margin: [0, 0, 0, 2] },
+    rule(),
+    { columns: [{ width: 72, text: "Поставщик:", bold: true, fontSize: 9 }, { width: "*", text: ` БИН / ИИН ${INV_SUPPLIER_BIN},${INV_SUPPLIER}`, fontSize: 9 }], margin: [0, 0, 0, 3] },
+    { columns: [{ width: 72, text: "Покупатель:", bold: true, fontSize: 9 }, { width: "*", text: buyerBin ? ` БИН / ИИН ${buyerBin},${buyerName}` : ` ${buyerName}`, fontSize: 9 }], margin: [0, 0, 0, 10] },
+    { table: { headerRows: 1, widths: [18, "*", 52, 24, 58, 72], body: [
+      ["№", "Наименование", "Кол-во", "Ед.", "Цена", "Сумма"].map(h => ({ text: h, bold: true, fontSize: 9, alignment: "center", fillColor: "#f0f0f0" })),
+      ...filled.map((r, i) => [
+        { text: i + 1, fontSize: 9, alignment: "center" },
+        { text: r.name, fontSize: 9 },
+        { text: qtyFmt(r.qty), fontSize: 9, alignment: "right" },
+        { text: r.unit || "кг", fontSize: 9, alignment: "center" },
+        { text: money(r.price), fontSize: 9, alignment: "right" },
+        { text: money((Number(r.qty) || 0) * (Number(r.price) || 0)), fontSize: 9, alignment: "right" },
+      ]),
+    ] }, layout: tblLayout },
+    { columns: [{ width: "*", text: "" }, { width: 240, table: { widths: ["*", 96], body: [
+      [{ text: "Итого:", bold: true, fontSize: 10, alignment: "right", border: [false, false, false, false] }, { text: money(total), bold: true, fontSize: 10, alignment: "right", border: [false, false, false, false] }],
+      ...(INV_VAT_RATE ? [[{ text: "В том числе НДС:", bold: true, fontSize: 9, alignment: "right", border: [false, false, false, false] }, { text: money(vat), fontSize: 9, alignment: "right", border: [false, false, false, false] }]] : []),
+    ] }, layout: "noBorders" }], margin: [0, 6, 0, 8] },
+    { text: `Всего наименований ${filled.length}, на сумму ${money(total)} KZT`, bold: true, fontSize: 9.5, margin: [0, 0, 0, 3] },
+    { text: `Всего к оплате: ${amountToWords(total)}`, bold: true, fontSize: 9.5 },
+    rule(),
+    { columns: [{ width: 92, text: "Исполнитель", fontSize: 9, margin: [0, 12, 0, 0] }, { width: 180, text: "______________________", fontSize: 9, margin: [0, 12, 0, 0] }, { width: "auto", text: "/Бухгалтер/", fontSize: 9, margin: [6, 12, 0, 0] }] },
+  ];
+  const dd = { pageSize: "A4", pageMargins: [28, 24, 28, 20], content, defaultStyle: { fontSize: 9 }, info: { title: `Счет ${number}` } };
+  // Показываем PDF в открытой вкладке (там кнопки печати и сохранения), а не молча скачиваем
+  pdfMake.createPdf(dd).getBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    if (win && !win.closed) win.location.href = url; else window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  });
+}
+
+// Счёт на оплату прямо из заявки клиента (позиции берём из самой заявки, кол-во — в кг)
+async function invoiceFromOrders(group, client) {
+  const orders = (group.orders || []).filter(o => !o.trial && !o.isSample); // бесплатные пробы в счёт не идут
+  if (!orders.length) { alert("В этой заявке нечего выставлять — только бесплатные пробы."); return; }
+  // Объединяем одинаковые позиции (тот же бренд/сорт/фасовка/цена за кг); кол-во суммируем в килограммах
+  const m = {};
+  orders.forEach(o => {
+    const kg = (Number(o.bags) || 0) * (Number(o.bag_kg) || 0);
+    const key = `${o.brand}|${o.grade}|${o.bag_kg}|${o.price_per_kg || 0}`;
+    if (!m[key]) m[key] = { name: `${o.brand} ${o.grade} ${o.bag_kg} кг`, unit: "кг", price: Number(o.price_per_kg) || 0, qty: 0 };
+    m[key].qty += kg;
+  });
+  const rows = Object.values(m).filter(r => r.qty > 0);
+  if (!rows.length) { alert("Не удалось собрать позиции для счёта."); return; }
+  // Номер счёта: предлагаем следующий (хранится на этом устройстве), можно исправить под свою нумерацию
+  let last = 0;
+  try { last = parseInt(localStorage.getItem("darad_invoice_no") || "0", 10) || 0; } catch {}
+  const suggest = last ? String(last + 1).padStart(11, "0") : "";
+  const number = (window.prompt("Номер счёта (можно исправить под свою нумерацию):", suggest) || "").trim();
+  if (!number) return; // отменили
+  try { const n = parseInt(number.replace(/\D/g, ""), 10); if (n) localStorage.setItem("darad_invoice_no", String(n)); } catch {}
+  try {
+    await buildInvoicePdf({
+      number,
+      date: orders[0].date || TODAY(),
+      buyerName: (client && (client.org_name || client.name)) || group.clientName || "Клиент",
+      buyerBin: (client && client.bin) || "",
+      rows,
+    });
+  } catch (e) { alert("⚠️ " + (e.message || e) + "\nПроверь интернет и попробуй ещё раз."); }
+}
+
 function SoftInvoiceTab({ clients, orders }) {
   const [clientId, setClientId] = useState("");
   const [buyer, setBuyer] = useState("");
@@ -6575,6 +6715,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                         {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, (isPickup || isOneOff) ? "новая" : "в пути")}>↩ {(isPickup || isOneOff) ? "Отменить" : "Не доставлено"}</Btn>}
                         {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}><Icon name="plus" size={15} />В клиенты</Btn>}
                         {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => softInvoiceFromOrders(g, clients.find(c => c.id === g.clientId))}><Icon name="receipt" size={15} />Накладная</Btn>}
+                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => invoiceFromOrders(g, clients.find(c => c.id === g.clientId))}><Icon name="wallet" size={15} />Счет</Btn>}
                         <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}><Icon name="pencil" size={15} />Изменить</Btn>
                         <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}><Icon name="trash" size={15} /></Btn>
                       </div>
