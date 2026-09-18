@@ -2922,6 +2922,9 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   const [payDate, setPayDate] = useState(TODAY());
   const [payExtra, setPayExtra] = useState(false);
   const [detailDriver, setDetailDriver] = useState(null);
+  const [editPay, setEditPay] = useState(null); // редактируемая выплата (запись из expenses)
+  const [epDate, setEpDate] = useState("");
+  const [epAmount, setEpAmount] = useState("");
   const [salMonth, setSalMonth] = useState(TODAY().slice(0, 7)); // YYYY-MM — месяц для зарплаты бригадира
 
   const brigadirs = drivers.filter(d => d.salary_type === "brigadir"); // для выбора старшего у младшего
@@ -2976,6 +2979,23 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
     const note = payExtra ? `Доплата (доп. работа) — ${payDriver.name}` : (isBrig ? `Зарплата бригадира за ${salMonth} — ${payDriver.name}` : `Зарплата (развоз+отгрузка) — ${payDriver.name}`);
     try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note }); setPayDriver(null); await reload("expenses"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
+
+  // Редактирование уже сделанной выплаты: меняем дату (в какой месяц попадёт) и/или сумму
+  const openEditPay = x => { setEditPay(x); setEpDate(x.date || TODAY()); setEpAmount(String(x.amount ?? "")); };
+  const saveEditPay = async () => {
+    if (!epAmount) return;
+    setSaving(true);
+    try { await dbUpsert("expenses", { ...editPay, date: epDate, amount: Number(epAmount) }); setEditPay(null); await reload("expenses"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    setSaving(false);
+  };
+  const deleteEditPay = async () => {
+    if (!confirm("Удалить эту выплату? Отменить нельзя.")) return;
+    setSaving(true);
+    try { await dbDelete("expenses", editPay.id); setEditPay(null); await reload("expenses"); }
+    catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
     setSaving(false);
   };
 
@@ -3034,7 +3054,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
             <div className="font-semibold text-gray-700 mb-1">Выплаты</div>
             {pays.length === 0 ? <div className="text-gray-400 text-sm">Выплат ещё не было</div> : (
               <div className="space-y-1 max-h-48 overflow-y-auto">
-                {pays.map(x => <div key={x.id} className="flex items-center justify-between text-sm border border-gray-100 rounded-lg px-3 py-2"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}{x.extra ? <span className="text-amber-700"> · доплата</span> : <span className="text-emerald-600"> · зарплата</span>}</span><span className="font-medium">{fmt(x.amount)} тг</span></div>)}
+                {pays.map(x => <div key={x.id} className="flex items-center justify-between text-sm border border-gray-100 rounded-lg px-3 py-2"><span className="text-gray-500">{(x.date || "").split("-").reverse().join(".")}{x.extra ? <span className="text-amber-700"> · доплата</span> : <span className="text-emerald-600"> · зарплата</span>}</span><span className="flex items-center gap-2"><span className="font-medium">{fmt(x.amount)} тг</span>{canEdit && <button onClick={() => openEditPay(x)} className="text-gray-400 hover:text-amber-600" title="Изменить дату/сумму"><Icon name="pencil" size={14} /></button>}</span></div>)}
               </div>
             )}
           </div>
@@ -3122,6 +3142,19 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           </div>
         </Modal>);
       })()}
+      {editPay && (<Modal title="Изменить выплату" onClose={() => setEditPay(null)}>
+        <div className="space-y-3">
+          {editPay.note && <div className="text-sm bg-gray-50 rounded-xl p-3 text-gray-600">{editPay.note}</div>}
+          <Inp label="Дата" type="date" value={epDate} onChange={e => setEpDate(e.target.value)} />
+          <Inp label="Сумма, тг" type="number" value={epAmount} onChange={e => setEpAmount(e.target.value)} />
+          <p className="text-xs text-gray-500">Дата решает, в какой месяц попадёт выплата в учёте. Напр. зарплату за август, выданную 1 сентября, поставь <b>31 августа</b> — тогда учтётся в августе.</p>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <Btn onClick={saveEditPay} disabled={saving || !epAmount}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
+          <Btn variant="danger" onClick={deleteEditPay} disabled={saving}><Icon name="trash" size={16} />Удалить</Btn>
+          <Btn variant="secondary" onClick={() => setEditPay(null)}>Отмена</Btn>
+        </div>
+      </Modal>)}
       <div className="space-y-3">
         {drivers.length === 0 && <div className="text-center py-12 text-gray-400">Рабочих нет.</div>}
         {[...drivers].sort((a, b) => (a.salary_type === "brigadir" ? 0 : a.salary_type === "junior" ? 1 : 2) - (b.salary_type === "brigadir" ? 0 : b.salary_type === "junior" ? 1 : 2)).map(d => {
