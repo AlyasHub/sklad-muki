@@ -178,15 +178,16 @@ async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-const ROLES = { director: "Администратор", viewer: "Директор", accountant: "Бухгалтер", brigadir: "Бригадир", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
+const ROLES = { director: "Администратор", viewer: "Директор", citymanager: "Менеджер города", accountant: "Бухгалтер", brigadir: "Бригадир", driver: "Водитель", rep: "Торговый представитель", kgdsenior: "Старший менеджер КГД", kgdmanager: "Младший менеджер КГД" };
 // Какие вкладки видит каждая роль
 const TABS_BY_ROLE = {
-  director: ["today", "calendar", "stock", "lab", "revision", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "access"],
+  director: ["today", "calendar", "stock", "lab", "revision", "clients", "crm", "reactivate", "reports", "debts", "contracts", "invoice", "supply", "karaganda", "kgdm", "drivers", "expenses", "cashbox", "cities", "access"],
   viewer: ["today", "calendar", "stock", "lab", "clients", "reactivate", "reports", "debts", "karaganda", "supply", "drivers", "expenses", "cashbox"], // директор — только просмотр
+  citymanager: ["today", "calendar", "stock", "supply", "clients", "debts", "reports", "invoice", "drivers", "expenses", "cashbox", "karaganda", "lab", "revision", "crm", "reactivate", "contracts", "access"], // менеджер города: мини-директор по своим городам (поставки фур — в свой город)
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"], // бригадир: заявки бригады + своя зарплата (объём и сумма)
   driver: ["calendar", "mysalary"],
-  rep: ["today", "calendar", "clients", "debts", "reports", "invoice", "stock"], // торгпред: свои клиенты/заявки/долги + СВОЯ аналитика + накладная + расписание и остатки
+  rep: ["today", "calendar", "clients", "debts", "reports", "invoice", "stock", "cashbox"], // торгпред: свои клиенты/заявки/долги + СВОЯ аналитика + накладная + расписание и остатки + СВОЯ касса (если заведена)
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
   kgdsenior: ["kgdm"], // старший менеджер Караганды: тот же раздел + история всех
 };
@@ -194,6 +195,7 @@ const TABS_BY_ROLE = {
 const PRIMARY_NAV = {
   director: ["today", "calendar", "stock", "clients", "reports"],
   viewer: ["today", "calendar", "stock", "clients", "reports"],
+  citymanager: ["today", "calendar", "stock", "clients", "reports"],
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"],
   driver: ["calendar", "mysalary"],
@@ -201,11 +203,28 @@ const PRIMARY_NAV = {
   kgdmanager: ["kgdm"],
   kgdsenior: ["kgdm"],
 };
-const NAV_ICON = { today: "home", calendar: "calendar", stock: "box", lab: "flask", revision: "calculator", clients: "building", crm: "target", reactivate: "bell", reports: "chart", debts: "wallet", contracts: "file", invoice: "receipt", orders: "clipboard", supply: "truck", karaganda: "store", kgdm: "folder", drivers: "cash", mysalary: "wallet", expenses: "expense", cashbox: "coin", access: "settings" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", revision: "Ревизия", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", access: "Доступ" };
+// Разделы, осмысленные для города-мельницы (Караганда): отправки по городам + отчёт/расходы, без клиентов/заявок/WhatsApp.
+const MILL_TABS = ["stock", "supply", "reports", "expenses", "cashbox", "cities", "access"];
+const NAV_ICON = { today: "home", calendar: "calendar", stock: "box", lab: "flask", revision: "calculator", clients: "building", crm: "target", reactivate: "bell", reports: "chart", debts: "wallet", contracts: "file", invoice: "receipt", orders: "clipboard", supply: "truck", karaganda: "store", kgdm: "folder", drivers: "cash", mysalary: "wallet", expenses: "expense", cashbox: "coin", cities: "globe", access: "settings" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", revision: "Ревизия", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", cities: "Города", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт", "Отруби"];
 const WEIGHTS = [5, 10, 25, 35, 50];
+// 🏙 Мультигород: справочник городов хранится в notes id="cities" (data.items=[{id,name,kind,req}]).
+// kind: "mill" — мельница/источник (Караганда), "warehouse" — склад в городе (Астана и др.).
+// Пока справочник не заполнен — показываем два города по умолчанию, чтобы приложение работало сразу.
+const DEFAULT_CITY = "astana";
+const DEFAULT_CITIES = [
+  { id: "astana", name: "Астана", kind: "warehouse" },
+  { id: "karaganda", name: "Караганда", kind: "mill" },
+];
+const CITY_KINDS = { mill: "Мельница", warehouse: "Склад" };
+const citiesOf = notes => { const d = (notes || []).find(n => n.id === "cities"); return d && Array.isArray(d.items) && d.items.length ? d.items : DEFAULT_CITIES; };
+const cityName = (notes, id) => citiesOf(notes).find(c => c.id === id)?.name || (id === DEFAULT_CITY ? "Астана" : (id || "—"));
+const clientCity = c => (c && c.city) || DEFAULT_CITY; // город клиента (пусто = город по умолчанию)
+// Город заявки = её собственный (у разовых) или города её клиента, иначе — по умолчанию.
+const orderCity = (o, clients) => o.city || (clients.find(c => c.id === o.clientId)?.city) || DEFAULT_CITY;
+const stockCity = s => (s && s.city) || DEFAULT_CITY; // склад: движение без города = город по умолчанию (Астана)
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
 const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Ревизия", "Прочее"];
 const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
@@ -227,9 +246,11 @@ const catName = c => (c === "Поддоны/Склад" ? "Склад" : c);
 
 // Адрес склада (точка старта маршрутов). Мутируемый объект — обновляется из настроек при загрузке.
 const WAREHOUSE = { lat: 51.17833, lon: 71.460803, address: "" };
-function applyWarehouse(notes) {
-  const w = (notes || []).find(n => n.id === "warehouse");
+function applyWarehouse(notes, city) {
+  const list = notes || [];
+  const w = (city && list.find(n => n.id === "warehouse_" + city)) || list.find(n => n.id === "warehouse");
   if (w && w.coords && typeof w.coords.lat === "number") { WAREHOUSE.lat = w.coords.lat; WAREHOUSE.lon = w.coords.lon; WAREHOUSE.address = w.address || ""; WAREHOUSE.gis_link = w.gis_link || ""; }
+  else { WAREHOUSE.lat = 51.17833; WAREHOUSE.lon = 71.460803; WAREHOUSE.address = ""; WAREHOUSE.gis_link = ""; }
 }
 
 function parseCoordsFromGisLink(link) {
@@ -460,6 +481,7 @@ const ICONS = {
   user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
   note: '<path d="M5 4h14a1 1 0 0 1 1 1v10l-5 5H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M15 20v-4a1 1 0 0 1 1-1h4"/><path d="M8 9h8M8 13h4"/>',
   pin: '<path d="M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
   camera: '<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.2"/>',
   bag: '<path d="M6 8h12l-1 12H7z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
   trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/>',
@@ -532,13 +554,15 @@ function PhotoViewer({ url, onClose }) {
 }
 
 // 📋 Задания бригадиру — чек-лист над календарём. Пишут и офис, и бригадир. Пусто → тонкая строчка, не мешает.
-function BrigadirNotes({ notes = [], reload = () => {}, applyLocal = () => {}, canEdit = true }) {
-  const rec = (notes || []).find(n => n.id === "brigadir");
+function BrigadirNotes({ notes = [], reload = () => {}, applyLocal = () => {}, canEdit = true, city = "" }) {
+  const multiCity = citiesOf(notes).length > 1;
+  const docId = (multiCity && city) ? "brigadir_" + city : "brigadir"; // в мультигороде — задания бригадиру по каждому городу
+  const rec = (notes || []).find(n => n.id === docId);
   const items = Array.isArray(rec && rec.items) ? rec.items : [];
   const [text, setText] = useState("");
   const save = async newItems => {
-    const next = { id: "brigadir", items: newItems };
-    applyLocal("notes", ns => [...(ns || []).filter(n => n.id !== "brigadir"), next]);
+    const next = { id: docId, items: newItems };
+    applyLocal("notes", ns => [...(ns || []).filter(n => n.id !== docId), next]);
     try { await dbUpsert("notes", next); } catch (e) { alert("⚠️ Не сохранилось: " + ((e && e.message) || e)); reload("notes"); }
   };
   const add = async () => { const t = text.trim(); if (!t) return; setText(""); await save([...items, { id: uid(), text: t, done: false }]); };
@@ -571,7 +595,7 @@ function BrigadirNotes({ notes = [], reload = () => {}, applyLocal = () => {}, c
     </div>
   );
 }
-function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payments = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false }) {
+function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payments = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false, activeCity = DEFAULT_CITY }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
@@ -588,6 +612,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
   const loadRows = visAll.filter(o => o.foreignLoad); // сводная загрузка чужих заявок (у торгпреда) — только тоннаж/число
   const vis = visAll.filter(o => !o.foreignLoad);
   const karagandaVis = driverFilter != null ? [] : orders.filter(o => o.fromKaraganda); // только директор/бухгалтер
+  const cityDrv = drivers.filter(d => (d.city || DEFAULT_CITY) === activeCity); // водители выбранного города — для назначения
 
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
 
@@ -612,18 +637,18 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
   const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
   // serverStock=true (торгпред): движение склада пишет СЕРВЕР при сохранении заявки — у роли rep
   // нет прав на таблицу stock, и попытка записать её из браузера дала бы ложную ошибку.
-  const shipStock = o => serverStock ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+  const shipStock = o => serverStock ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}`, city: orderCity(o, clients) });
   const unshipStock = async o => {
     if (serverStock) return; // откат тоже делает сервер
     if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id); // точный откат
     // заявки, списанные до этого обновления, возвращаем отдельной строкой (как раньше)
-    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}`, city: orderCity(o, clients) });
   };
 
   // Директор подтверждает доставку → списание со склада
   const confirmDelivery = async o => {
     try {
-      await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
+      await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена", city: o.city || orderCity(o, clients) });
       if (o.status !== "отгружена") {
         await shipStock(o);
         await reload("stock");
@@ -637,7 +662,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
   const updateStatus = async (o, status) => {
     if (status === o.status) return;
     try {
-      await dbUpsert("orders", { ...o, status });
+      // при отгрузке фиксируем город на заявке (o.city), чтобы склад и заявка не разъехались по городам
+      await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) });
       if (status === "отгружена" && o.status !== "отгружена") {
         await shipStock(o);
         await reload("stock");
@@ -682,7 +708,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
       const id = uid();
       const prices = [];
       g.orders.forEach(o => { if ((o.price_per_kg || 0) > 0 && !prices.some(p => p.brand === o.brand && p.grade === o.grade && p.bag_kg === Number(o.bag_kg))) prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); });
-      await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices });
+      await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices, city: o0.city || activeCity });
       await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, clientId: id })));
       await reload("clients"); await reload("orders");
       alert(`✓ «${g.clientName}» теперь в базе клиентов. Дополни карточку (телефон, реквизиты) во вкладке «Клиенты».`);
@@ -696,7 +722,9 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
     try {
       await Promise.all(g.orders.map(async o => {
         if (o.status === status) return;
-        await dbUpsert("orders", { ...o, status });
+        // При отгрузке ФИКСИРУЕМ город на самой заявке (o.city), чтобы движение склада и заявка
+        // не «разъехались» по городам, если позже поменять город клиента.
+        await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) });
         if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
         if (status === "отгружена" && o.status !== "отгружена") await shipStock(o);
         else if (status !== "отгружена" && o.status === "отгружена") await unshipStock(o);
@@ -713,7 +741,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
     try {
       await Promise.all(g.orders.map(async o => {
         if (o.confirmed && o.status === "отгружена") return;
-        await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена" });
+        await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена", city: o.city || orderCity(o, clients) });
         if (o.status !== "отгружена" && !o.fromKaraganda) await shipStock(o);
       }));
       reload("stock");
@@ -882,7 +910,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
 
   return (
     <div className="space-y-5">
-      {(foremanMode || (canEdit && !serverStock && !driverMode)) && <BrigadirNotes notes={notes} reload={reload} applyLocal={applyLocal} canEdit={true} />}
+      {(foremanMode || (canEdit && !serverStock && !driverMode)) && <BrigadirNotes notes={notes} reload={reload} applyLocal={applyLocal} canEdit={true} city={activeCity} />}
       {stockShortages.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
           <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
@@ -1024,7 +1052,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
                   {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{client?.address || g.orders[0].address}</div>}
-                  {(client?.work_hours || g.orders[0].work_hours || clientTime(client)) && <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-sky-800 bg-sky-100 border border-sky-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Работает: {client?.work_hours || g.orders[0].work_hours || clientTime(client)}</div>}
+                  {(clientTime(client) || client?.work_hours || g.orders[0].work_hours) && <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-sky-800 bg-sky-100 border border-sky-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Время: {clientTime(client) || client?.work_hours || g.orders[0].work_hours}</div>}
                   {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {(client?.gis_link || g.orders[0].gis_link) &&<a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pin" size={12} />2ГИС</a>}
@@ -1056,7 +1084,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                       {foremanMode && !isPickup && !isOneOff && (
                         <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}>
                           <option value="">Передать водителю…</option>
-                          {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                          {cityDrv.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                         </select>
                       )}
                       {!allShipped && (allLoaded
@@ -1078,7 +1106,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                       {isPickup && (
                         <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].loaderId || ""} onChange={e => assignLoaderGroup(g, e.target.value)}>
                           <option value="">{g.orders[0].pickupWatch ? "Кто следит…" : "Грузчик…"}</option>
-                          {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                          {cityDrv.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                         </select>
                       )}
                       {isPickup && (
@@ -1094,7 +1122,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                     <div className="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-50">
                       <select className="border border-gray-200 rounded-lg px-2 py-1 text-xs" value={g.orders[0].driverId || ""} onChange={e => assignDriverGroup(g, e.target.value)}>
                         <option value="">Водитель…</option>
-                        {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        {cityDrv.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                       </select>
                       {!allShipped && (allLoaded
                         ? <Btn size="sm" variant="secondary" onClick={() => loadGroup(g, false)}>↩ Не загружен</Btn>
@@ -1508,12 +1536,16 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   );
 }
 
-function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canEdit = true }) {
+function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canEdit = true, activeCity = DEFAULT_CITY, curCity = "all", notes = [], multiCity = false, allStock = null, allOrderIds = null, cities = [] }) {
+  const isMill = citiesOf(notes).find(c => c.id === activeCity)?.kind === "mill"; // мельница — безлимитный источник (минус в остатке нормален)
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const blank = { date: TODAY(), brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", note: "", op: "in", reason: WRITEOFF_REASONS[0] };
   const [form, setForm] = useState(blank);
+  const [stagedIn, setStagedIn] = useState([]); // многопозиционный приход: собранные позиции + текущая строка
+  const [millDest, setMillDest] = useState("all"); // фильтр отправок мельницы по городу назначения
+  const addStaged = () => { if (!Number(form.bags)) return; setStagedIn(l => [...l, { brand: form.brand, grade: form.grade, bag_kg: form.bag_kg, bags: form.bags, price_per_kg: form.price_per_kg }]); setForm(f => ({ ...f, bags: "", price_per_kg: "" })); };
   const [audit, setAudit] = useState(null); // сверка по позиции: {brand, grade, bag_kg}
   const [dupCheck, setDupCheck] = useState(false); // отчёт «дубли списаний»
   const [histType, setHistType] = useState("all"); // фильтр истории: all | in | ship | writeoff
@@ -1552,33 +1584,43 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
     });
     const inDups = Object.values(inMap).filter(g2 => g2.length > 1).sort((a, b) => b[0].weight_kg * b.length - a[0].weight_kg * a.length);
     // 👻 Движения-сироты: привязаны по id к заявке/фуре, которых уже нет (остались от удаления до исправления)
-    const orderIds = new Set(orders.map(o => o.id));
+    const orderIds = allOrderIds || new Set(orders.map(o => o.id)); // все заявки (не только городской срез) — иначе ложные «сироты»
     const truckIds = new Set(trucks.map(t => t.id));
     const orphanStock = stock.filter(s => {
       if (typeof s.id !== "string") return false;
       if (s.id.startsWith("mv_")) return !orderIds.has(s.id.slice(3)); // расход удалённой заявки
       if (s.id.startsWith("tin_")) return !truckIds.has(s.id.slice(4).replace(/_\d+$/, "")); // приход удалённой фуры
+      if (s.id.startsWith("tout_")) return !truckIds.has(s.id.slice(5).replace(/_\d+$/, "")); // отправка удалённой поставки
       return false;
     });
     const orphanExp = expenses.filter(x => typeof x.id === "string" && x.id.startsWith("texp_") && !truckIds.has(x.id.slice(5))); // расход за удалённую фуру
     return { groups: out.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)), inDups, orphanStock, orphanExp };
   })();
 
-  const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm(blank); setStagedIn([]); setShowAdd(true); };
   const openEdit = s => {
-    setEditId(s.id);
+    setEditId(s.id); setStagedIn([]);
     setForm({ date: s.date || TODAY(), brand: s.brand, grade: s.grade, bag_kg: s.bag_kg, bags: Math.abs(s.bags), price_per_kg: s.price_per_kg || "", note: s.note || "", op: s.weight_kg < 0 ? "out" : "in", reason: s.reason || WRITEOFF_REASONS[0] });
     setShowAdd(true);
   };
 
   const saveMovement = async () => {
+    // Приход можно вносить несколькими позициями за раз (собранные + текущая строка). Списание/редактирование — одной.
+    const multi = form.op === "in" && !editId;
+    const rows = multi
+      ? [...stagedIn, ...(Number(form.bags) > 0 ? [{ brand: form.brand, grade: form.grade, bag_kg: form.bag_kg, bags: form.bags, price_per_kg: form.price_per_kg }] : [])]
+      : [{ brand: form.brand, grade: form.grade, bag_kg: form.bag_kg, bags: form.bags, price_per_kg: form.price_per_kg }];
+    if (!rows.some(r => Number(r.bags) > 0)) { alert("Укажи мешки хотя бы в одной позиции."); return; }
     setSaving(true);
     const sign = form.op === "out" ? -1 : 1;
-    const bag_kg = Number(form.bag_kg);
-    const bags = Math.abs(Number(form.bags)) * sign;
     try {
-      await dbUpsert("stock", { id: editId || uid(), date: form.date, brand: form.brand, grade: form.grade, bag_kg, bags, weight_kg: bags * bag_kg, price_per_kg: Number(form.price_per_kg) || 0, note: form.note, reason: form.op === "out" ? form.reason : "" });
-      setShowAdd(false); await reload("stock");
+      for (const r of rows) {
+        if (!Number(r.bags)) continue;
+        const bag_kg = Number(r.bag_kg);
+        const bags = Math.abs(Number(r.bags)) * sign;
+        await dbUpsert("stock", { id: editId || uid(), date: form.date, brand: r.brand, grade: r.grade, bag_kg, bags, weight_kg: bags * bag_kg, price_per_kg: Number(r.price_per_kg) || 0, note: form.note, reason: form.op === "out" ? form.reason : "", city: activeCity });
+      }
+      setShowAdd(false); setStagedIn([]); await reload("stock");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
@@ -1614,7 +1656,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
   const todayOut = stock.filter(s => s.date === TODAY() && s.weight_kg < 0).reduce((sum, s) => sum + Math.abs(s.weight_kg), 0);
 
   // Классификация движений для истории и фильтров
-  const isShipmentRow = s => s.weight_kg < 0 && (String(s.id).startsWith("mv_") || /^(Отгрузка|Реализация)/.test(s.note || ""));
+  const isShipmentRow = s => s.weight_kg < 0 && (String(s.id).startsWith("mv_") || String(s.id).startsWith("tout_") || /^(Отгрузка|Реализация|Отправка)/.test(s.note || "")); // tout_ = отправка в другой город (движение, не брак)
   const isReturnRow = s => s.weight_kg > 0 && /^Возврат/.test(s.note || "");
   const isWriteoffRow = s => s.weight_kg < 0 && !isShipmentRow(s); // ручное списание: брак/порча/пересортица/прочее
   const RU_MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"];
@@ -1641,10 +1683,41 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
   });
   shortages.sort((a, b) => b.lack - a.lack);
 
+  // «Все города»: сводка остатков по каждому складу (данные уже загружены — считать дёшево).
+  if (multiCity && curCity === "all") {
+    const perCity = cities.map(c => {
+      const ms = (allStock || []).filter(s => stockCity(s) === c.id);
+      return { ...c, kg: ms.reduce((s, m) => s + (m.weight_kg || 0), 0), bags: ms.reduce((s, m) => s + (m.bags || 0), 0), positions: new Set(ms.filter(m => (m.weight_kg || 0) !== 0).map(m => `${m.brand}|${m.grade}|${m.bag_kg}`)).size };
+    });
+    const grandKg = perCity.reduce((s, c) => s + (c.kind === "mill" ? 0 : c.kg), 0); // сумма по складам (мельницу-источник в сумму не берём)
+    return (
+      <div className="space-y-5">
+        <div><h3 className="font-bold text-gray-800">Остатки по городам</h3><div className="text-xs text-gray-500 mt-0.5">Выбери город в шапке, чтобы вести операции по его складу.</div></div>
+        <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl p-5 text-white shadow-sm">
+          <div className="text-sm font-medium text-amber-100">🌾 Всего на складах (без мельницы)</div>
+          <div className="text-4xl font-black mt-1">{fmt(grandKg)} кг</div>
+          <div className="text-sm text-amber-100 mt-1">≈ {fmt(Math.round(grandKg / 100) / 10)} т · по {perCity.filter(c => c.kind !== "mill").length} складам</div>
+        </div>
+        <div className="space-y-2">
+          {perCity.map(c => (
+            <div key={c.id} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-semibold text-gray-900 flex items-center gap-1.5"><Icon name={c.kind === "mill" ? "store" : "building"} size={15} className="text-amber-600" />{c.name}{c.kind === "mill" && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600">мельница</span>}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{c.positions} видов · {fmt(c.bags)} мешков</div>
+              </div>
+              <div className={`text-right font-bold ${c.kg < 0 ? (c.kind === "mill" ? "text-gray-500" : "text-red-600") : "text-gray-900"}`}>{fmt(c.kg)} кг<div className="text-xs font-normal text-gray-400">≈ {fmt(Math.round(c.kg / 100) / 10)} т</div></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Остатки на складе</h3><div className="flex gap-2">{canEdit && <Btn size="sm" variant="secondary" onClick={() => setDupCheck(true)}>🔎 Дубли</Btn>}{canEdit && <Btn onClick={openNew}>+ Операция</Btn>}</div></div>
-      {canEdit && <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>}
+      <div className="flex items-center justify-between"><div><h3 className="font-bold text-gray-800">{isMill ? "Мельница — отправки" : "Остатки на складе"}</h3>{multiCity && <div className="text-xs font-semibold text-amber-700 flex items-center gap-1 mt-0.5"><Icon name={isMill ? "store" : "building"} size={12} />{isMill ? "Мельница" : "Склад"}: {cityName(notes, activeCity)}</div>}</div><div className="flex gap-2">{canEdit && !isMill && <Btn size="sm" variant="secondary" onClick={() => setDupCheck(true)}>🔎 Дубли</Btn>}{canEdit && <Btn onClick={openNew}>+ Операция</Btn>}</div></div>
+      {!isMill && canEdit && <p className="text-sm text-gray-500">Чтобы внести то, что уже есть на складе — нажми «+ Операция» → «Приход» и укажи текущее число мешков по каждому виду.</p>}
+      {!isMill && (
       <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl p-5 text-white shadow-sm">
         <div className="text-sm font-medium text-amber-100">🌾 Всего муки на складе</div>
         <div className="text-4xl font-black mt-1">{fmt(totalKg)} кг</div>
@@ -1655,7 +1728,55 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
           return <div className="text-sm text-amber-100 mt-1 flex items-center gap-1.5"><Icon name="clipboard" size={14} />В заявках (бронь): <b className="text-white">{fmt(reservedKg)} кг</b> · свободно: <b className="text-white">{fmt(totalKg - reservedKg)} кг</b></div>;
         })()}
       </div>
-      {negatives.length > 0 && (
+      )}
+      {isMill && (() => {
+        // Мельница: не «остаток», а ОТПРАВКИ по городам назначения. Данные — из движений-минусов (tout_/«Отправка»).
+        const out = stock.filter(s => s.weight_kg < 0);
+        const dkey = s => s.toCity || ((s.note || "").replace(/^Отправка\s*→\s*/, "").trim() || "прочее");
+        const dname = k => cities.find(c => c.id === k)?.name || k;
+        const byDest = {};
+        out.forEach(s => { const k = dkey(s); const g = byDest[k] = byDest[k] || { key: k, kg: 0, bags: 0, n: 0 }; g.kg += -s.weight_kg; g.bags += -s.bags; g.n++; });
+        const dests = Object.values(byDest).sort((a, b) => b.kg - a.kg);
+        const totalOut = out.reduce((s, m) => s + -m.weight_kg, 0);
+        const shown = (millDest === "all" ? out : out.filter(s => dkey(s) === millDest)).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const byDate = {};
+        shown.forEach(s => { (byDate[s.date] = byDate[s.date] || []).push(s); });
+        return (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-2xl p-5 text-white shadow-sm">
+              <div className="text-sm font-medium text-orange-100 flex items-center gap-1.5"><Icon name="store" size={15} />Мельница {cityName(notes, activeCity)} — отправлено</div>
+              <div className="text-4xl font-black mt-1">{fmt(totalOut)} кг</div>
+              <div className="text-sm text-orange-100 mt-1">≈ {fmt(Math.round(totalOut / 100) / 10)} т · по {dests.length} городам · мука безлимитная (остаток не ведём)</div>
+            </div>
+            {dests.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap">
+                <button onClick={() => setMillDest("all")} className={`text-xs font-medium px-3 py-1.5 rounded-full ${millDest === "all" ? "bg-amber-500 text-white" : "bg-white text-gray-600 border border-gray-200"}`}>Все · {fmt(totalOut)} кг</button>
+                {dests.map(d => <button key={d.key} onClick={() => setMillDest(d.key)} className={`text-xs font-medium px-3 py-1.5 rounded-full inline-flex items-center gap-1 ${millDest === d.key ? "bg-amber-500 text-white" : "bg-white text-gray-600 border border-gray-200"}`}><Icon name="building" size={11} />{dname(d.key)} · {fmt(d.kg)} кг</button>)}
+              </div>
+            )}
+            {out.length === 0 ? <div className="text-center py-10 text-gray-400">Отправок с мельницы пока нет. Оформи поставку в «Поставках» (источник — эта мельница) и нажми «Принять».</div> : (
+              <div className="space-y-2">
+                {Object.keys(byDate).sort().reverse().map(date => {
+                  const list = byDate[date];
+                  const dayKg = list.reduce((s, m) => s + -m.weight_kg, 0);
+                  return (
+                    <div key={date} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-3">
+                      <div className="flex items-center justify-between mb-1"><span className="font-semibold text-gray-800">{date.split("-").reverse().join(".")}</span><span className="text-sm font-bold text-sky-600">→ {fmt(dayKg)} кг</span></div>
+                      {list.map(s => (
+                        <div key={s.id} className="flex items-center justify-between text-sm py-0.5">
+                          <span className="text-gray-600 min-w-0 truncate">→ <b className="text-gray-800">{dname(dkey(s))}</b> · {s.brand} {s.grade} {s.bag_kg}кг{s.transport === "вагон" ? " · вагон" : ""}</span>
+                          <span className="text-sky-600 font-medium whitespace-nowrap ml-2">{fmt(-s.weight_kg)} кг</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+      {!isMill && negatives.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
           <div className="font-bold text-red-700 mb-1">⛔ Остаток ушёл в минус — приход не внесён</div>
           <div className="space-y-1">
@@ -1664,7 +1785,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
           <div className="text-xs text-red-600 mt-2">Минус значит: отгрузки по этой позиции записаны, а приход — нет. Внеси приход («+ Операция» → Приход) или прими фуру в «Поставках» — остаток выправится.</div>
         </div>
       )}
-      {shortages.length > 0 && (
+      {!isMill && shortages.length > 0 && (
         <div className="bg-red-100 border border-red-300 rounded-2xl p-4">
           <div className="font-bold text-red-700 mb-1">⚠️ Не хватает муки под заявки</div>
           <div className="space-y-1">
@@ -1692,14 +1813,32 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
               : <Sel label="Причина" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} options={WRITEOFF_REASONS} />}
             <div className="col-span-2"><Inp label="Примечание" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={editId ? "" : (form.op === "out" ? "напр. подмок при разгрузке" : "напр. остаток на сегодня")} /></div>
           </div>
+          {form.op === "in" && !editId && (
+            <div className="mt-3">
+              <button onClick={addStaged} disabled={!Number(form.bags)} className="w-full border-2 border-dashed border-emerald-200 text-emerald-700 rounded-xl py-2.5 text-sm font-medium hover:bg-emerald-50 disabled:opacity-40">+ Ещё позицию в этот приход</button>
+              {stagedIn.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <div className="text-xs font-semibold text-gray-400">В приходе ({stagedIn.length + (Number(form.bags) > 0 ? 1 : 0)} поз.):</div>
+                  {stagedIn.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between bg-emerald-50 rounded-lg px-3 py-2 text-sm">
+                      <span className="min-w-0 truncate">{p.brand} · {p.grade} · {p.bag_kg}кг</span>
+                      <span className="flex items-center gap-2 flex-shrink-0"><b>{fmt(Number(p.bags))} меш.</b><button onClick={() => setStagedIn(l => l.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600">✕</button></span>
+                    </div>
+                  ))}
+                  <div className="text-xs text-gray-500">Текущую строку выше добавлять кнопкой не нужно — она тоже сохранится.</div>
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex gap-2 mt-4">
-            <Btn onClick={saveMovement} disabled={saving || !form.bags}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
+            <Btn onClick={saveMovement} disabled={saving || (!Number(form.bags) && stagedIn.length === 0)}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
             <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
           </div>
         </Modal>
       )}
       <div className="space-y-4">
         {(() => {
+          if (isMill) return null; // у мельницы вместо остатков — вид «отправки по городам» выше
           const items = Object.values(balances);
           if (items.length === 0) return <div className="text-center py-12 text-gray-400">Склад пуст.</div>;
           const brandNames = [...new Set(items.map(b => b.brand))].sort((a, b) => (a || "").localeCompare(b || "", "ru"));
@@ -1960,8 +2099,9 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
                         {day.rows.map(s => {
                           const ship = isShipmentRow(s);
                           const wo = isWriteoffRow(s);
-                          const label = s.weight_kg > 0 ? (isReturnRow(s) ? "↩ Возврат" : "▲ Приход") : ship ? "Отгрузка" : (s.reason || "Списание");
-                          const color = s.weight_kg > 0 ? "text-emerald-600" : wo ? "text-red-600" : "text-red-500";
+                          const isTransferOut = String(s.id).startsWith("tout_") || /^Отправка/.test(s.note || ""); // перемещение в другой город
+                          const label = s.weight_kg > 0 ? (isReturnRow(s) ? "↩ Возврат" : "▲ Приход") : isTransferOut ? "→ Отправка" : ship ? "Отгрузка" : (s.reason || "Списание");
+                          const color = s.weight_kg > 0 ? "text-emerald-600" : isTransferOut ? "text-sky-600" : wo ? "text-red-600" : "text-red-500";
                           return (
                             <div key={s.id} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-3 py-2 text-sm">
                               <div className="min-w-0">
@@ -2155,8 +2295,9 @@ function LabTab({ lab = [], reload, canEdit = true }) {
 // 🧮 Ревизия склада — только у Администратора (Альяса). Записываешь, сколько мешков РЕАЛЬНО
 // стоит на складе; приложение сравнивает с учётным остатком (таблица stock) и показывает
 // недостачу/излишек по каждой позиции. Данные храним в notes id="revision" (без новой таблицы).
-function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {} }) {
-  const rev = notes.find(n => n.id === "revision") || { id: "revision", date: TODAY(), items: {} };
+function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {}, activeCity = DEFAULT_CITY, multiCity = false }) {
+  const docId = multiCity ? "revision_" + activeCity : "revision"; // в мультигороде — ревизия отдельно по каждому городу-складу
+  const rev = notes.find(n => n.id === docId) || { id: docId, date: TODAY(), items: {} };
   const items = rev.items || {};
   const [form, setForm] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "" });
 
@@ -2170,8 +2311,8 @@ function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {} }) 
   // Сохранение ревизии — оптимистично: экран меняется сразу, запись идёт в фоне. Иначе удаление
   // по крестику «подвисало» в ожидании ответа сервера.
   const saveDoc = (newItems, extra = {}) => {
-    const doc = { ...rev, id: "revision", items: newItems, date: rev.date || TODAY(), updatedAt: new Date().toISOString(), ...extra };
-    applyLocal("notes", ns => [...ns.filter(n => n.id !== "revision"), doc]);
+    const doc = { ...rev, id: docId, items: newItems, date: rev.date || TODAY(), updatedAt: new Date().toISOString(), ...extra };
+    applyLocal("notes", ns => [...ns.filter(n => n.id !== docId), doc]);
     dbUpsert("notes", doc).catch(e => { alert("⚠️ Не сохранилось: " + ((e && e.message) || e) + "\nПроверь интернет."); reload("notes"); });
   };
   const addPos = () => {
@@ -2211,6 +2352,7 @@ function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {} }) 
           bags: r.diff, weight_kg: r.diff * r.bag_kg,
           reason: r.diff < 0 ? "Ревизия" : "", // reason осмыслен только у списаний
           note: `Ревизия ${d.split("-").reverse().join(".")}: было ${r.app}, по факту ${r.actual} меш.`,
+          city: activeCity,
         });
       }
       alert("✓ Готово — остатки в приложении теперь совпадают с тем, что реально на складе.");
@@ -2313,9 +2455,10 @@ function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {} }) 
   );
 }
 
-function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [], role = "director", myUid = "", reload, canEdit = true }) {
+function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [], role = "director", myUid = "", reload, canEdit = true, cities = [], activeCity = DEFAULT_CITY }) {
   const isRep = role === "rep"; // торгпред видит только своих клиентов (сервер уже отфильтровал)
   const isDirector = role === "director"; // сверка долга по акту — только директор
+  const isCityMgr = role === "citymanager"; // менеджер города — его клиенты в его городе (сервер проставит)
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -2401,7 +2544,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
         id = uid();
         // если это были разовые продажи с доставкой — подтянем адрес и точку 2ГИС из заявки
         const withAddr = g.orders.find(o => o.oneOffAddress || o.gis_link || o.coords) || {};
-        await dbUpsert("clients", { id, name: g.name, org_name: "", contact_name: "", address: withAddr.oneOffAddress || "", contact: "", gis_link: withAddr.gis_link || "", coords: withAddr.coords || null, default_brand: freqOf(g.orders, "brand"), default_bag_kg: freqOf(g.orders, "bag_kg", true), prices: pricesFromOrders(g.orders) });
+        await dbUpsert("clients", { id, name: g.name, org_name: "", contact_name: "", address: withAddr.oneOffAddress || "", contact: "", gis_link: withAddr.gis_link || "", coords: withAddr.coords || null, default_brand: freqOf(g.orders, "brand"), default_bag_kg: freqOf(g.orders, "bag_kg", true), prices: pricesFromOrders(g.orders), city: g.orders.find(o => o.city)?.city || DEFAULT_CITY });
       }
       await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, clientId: id })));
       await reload("clients"); await reload("orders");
@@ -2431,6 +2574,10 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   // Клиент закинул произвольную сумму в счёт общего долга — записываем в payments
   const savePayment = async () => {
     if (!historyClient || !payForm.amount || Number(payForm.amount) <= 0) return;
+    // Защита от лишних нулей: если оплата заметно больше долга — переспрашиваем
+    const debtNow = Math.round(clientDebt(historyClient));
+    const over = Number(payForm.amount) - debtNow;
+    if (over > 500000 && !confirm(`Оплата ${fmt(Number(payForm.amount))} ₸ больше долга клиента (${fmt(debtNow)} ₸) на ${fmt(over)} ₸.\nТочно столько? Проверь, не лишние ли нули.`)) return;
     setSavingPay(true);
     try {
       await dbUpsert("payments", { id: uid(), clientId: historyClient.id, clientName: historyClient.name, date: payForm.date, amount: Number(payForm.amount), method: payForm.method, note: payForm.note.trim() });
@@ -2464,8 +2611,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "" }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "" }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -2478,8 +2625,10 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     setResolving(false);
   };
   const addPrice = () => {
+    if (pf.price_per_kg === "" || Number(pf.price_per_kg) <= 0) return; // пустую цену не добавляем
     const p = { ...pf, bag_kg: Number(pf.bag_kg), price_per_kg: Number(pf.price_per_kg) };
-    setForm({ ...form, prices: [...form.prices.filter(x => !(x.brand === p.brand && x.grade === p.grade && x.bag_kg === p.bag_kg)), p] });
+    // функциональное обновление — чтобы несколько цен подряд не перетирали друг друга (добавляем к АКТУАЛЬНОму списку)
+    setForm(f => ({ ...f, prices: [...(f.prices || []).filter(x => !(x.brand === p.brand && x.grade === p.grade && Number(x.bag_kg) === p.bag_kg)), p] }));
     setPf({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, price_per_kg: "" });
   };
   const saveClient = async () => {
@@ -2504,6 +2653,9 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const deleteClient = async id => {
     const c = clients.find(x => x.id === id);
     if (!confirm(`Удалить клиента «${c?.name || "?"}»? Карточка с ценами и реквизитами удалится (история заявок останется).`)) return;
+    // Не теряем долг: если у клиента есть неоплаченные отгрузки — предупреждаем, что долг «повиснет»
+    const debtNow = c ? Math.round(clientDebt(c)) : 0;
+    if (debtNow > 0 && !confirm(`⚠️ У «${c?.name}» есть неоплаченный долг ${fmt(debtNow)} ₸.\nЕсли удалить карточку — долг «повиснет» и его не будет видно ни в одной карточке. Всё равно удалить?`)) return;
     await dbDelete("clients", id); await reload("clients");
   };
   // Персональная заказ-ссылка: клиент открывает её и сам отправляет заявку — она падает к нам со статусом «новая»
@@ -2611,6 +2763,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               <button onClick={handleParseClient} disabled={parsingClient || !clientText.trim()} className="mt-2 w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2 text-sm">{parsingClient ? "Разбираю..." : "✨ Разобрать и заполнить"}</button>
             </div>
             <Inp label="Название заведения" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Мамыр" />
+            {!isRep && !isCityMgr && cities.length > 1 && <Sel label="Город" value={form.city || DEFAULT_CITY} onChange={e => setForm({ ...form, city: e.target.value })} options={cities.map(c => ({ value: c.id, label: c.name }))} />}
             {!isRep && repUsers.length > 0 && <Sel label="Группа клиента" value={form.ownerId || ""} onChange={e => setForm({ ...form, ownerId: e.target.value })} options={[{ value: "", label: houseName }, ...repUsers.map(u => ({ value: u.id, label: u.group_name || u.name }))]} />}
             <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
@@ -2640,23 +2793,15 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               <Sel label="Фасовка по умолчанию" value={form.default_bag_kg} onChange={e => setForm({ ...form, default_bag_kg: Number(e.target.value) })} options={[{ value: "", label: "— не указана —" }, ...WEIGHTS.map(w => ({ value: w, label: w + " кг" }))]} />
               <Sel label="Бренд по умолчанию" value={form.default_brand} onChange={e => setForm({ ...form, default_brand: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...BRANDS.map(b => ({ value: b, label: b }))]} />
             </div>
-            <Sel label="Время доставки (общее)" value={form.delivery_time} onChange={e => setForm({ ...form, delivery_time: e.target.value })} options={[{ value: "", label: "— не указано —" }, ...DELIVERY_TIMES.map(t => ({ value: t, label: t }))]} />
             <div>
-              <label className="text-sm font-medium text-gray-700">Или точное время (с — по)</label>
+              <label className="text-sm font-medium text-gray-700">Время доставки (с — до)</label>
               <div className="flex items-center gap-2 mt-1">
-                <input type="time" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" value={form.delivery_from} onChange={e => setForm({ ...form, delivery_from: e.target.value })} />
+                <input type="time" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" value={form.delivery_from} onChange={e => setForm({ ...form, delivery_from: e.target.value, delivery_time: "" })} />
                 <span className="text-gray-500">—</span>
-                <input type="time" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" value={form.delivery_to} onChange={e => setForm({ ...form, delivery_to: e.target.value })} />
+                <input type="time" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" value={form.delivery_to} onChange={e => setForm({ ...form, delivery_to: e.target.value, delivery_time: "" })} />
+                <button type="button" onClick={() => setForm({ ...form, delivery_time: form.delivery_time === "24/7" ? "" : "24/7", delivery_from: "", delivery_to: "" })} className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${form.delivery_time === "24/7" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>24/7</button>
               </div>
-              <p className="text-xs text-gray-400 mt-1">Если заполнишь — будет показываться как «08:00–10:00» вместо общего.</p>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-gray-700">Время работы клиента</label>
-              <div className="flex items-center gap-2 mt-1">
-                <input type="text" value={form.work_hours || ""} onChange={e => setForm({ ...form, work_hours: e.target.value })} placeholder="напр. 9:00–18:00" className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
-                <button type="button" onClick={() => setForm({ ...form, work_hours: form.work_hours === "24/7" ? "" : "24/7" })} className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${form.work_hours === "24/7" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>24/7</button>
-              </div>
-              <p className="text-xs text-gray-400 mt-1">Когда клиент открыт. Нажми «24/7», если круглосуточно.</p>
+              <p className="text-xs text-gray-400 mt-1">Укажи интервал «с — до» или нажми «24/7» (круглосуточно).</p>
             </div>
             <div>
               <Inp label="Ссылка 2ГИС на адрес" value={form.gis_link} onChange={e => setForm({ ...form, gis_link: e.target.value, coords: null })} placeholder="https://2gis.kz/astana/geo/..." />
@@ -2700,7 +2845,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="font-bold text-gray-900">{c.name}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
+                  <div className="font-bold text-gray-900">{c.name}{cities.length > 1 && <span className="ml-2 text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full align-middle">{cityName(notes, clientCity(c))}</span>}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
                   {c.org_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="building" size={13} />{c.org_name}</div>}
                   {c.contact_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="user" size={13} />{c.contact_name}</div>}
                   {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
@@ -2911,11 +3056,13 @@ function brigadePickupLoad(d, drivers, orders, ym) {
   return { rate, per, kg, pay: Math.round(kg * rate), watchKg };
 }
 
-function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdit = true }) {
+function DriversTab({ drivers: allDrivers, orders, expenses = [], users = [], reload, canEdit = true, cities = [], activeCity = DEFAULT_CITY, multiCity = false, notes = [] }) {
+  const drivers = allDrivers; // расчёты (бригада, заработок) — по всем; список на экране фильтруем по городу ниже
+  const cityDrivers = multiCity ? allDrivers.filter(d => (d.city || DEFAULT_CITY) === activeCity) : allDrivers;
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const blankDriver = { name: "", salary_type: "kg", rate_per_kg: "", load_rate_per_kg: "", foremanId: "", base_salary: "650000", base_included_t: "60", day_threshold_kg: "14500", tier1_rate: "6", tier2_rate: "8" };
+  const blankDriver = { name: "", salary_type: "kg", rate_per_kg: "", load_rate_per_kg: "", foremanId: "", base_salary: "650000", base_included_t: "60", day_threshold_kg: "14500", tier1_rate: "6", tier2_rate: "8", city: activeCity };
   const [form, setForm] = useState(blankDriver);
   const [payDriver, setPayDriver] = useState(null);
   const [payAmount, setPayAmount] = useState("");
@@ -2927,13 +3074,13 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
   const [epAmount, setEpAmount] = useState("");
   const [salMonth, setSalMonth] = useState(TODAY().slice(0, 7)); // YYYY-MM — месяц для зарплаты бригадира
 
-  const brigadirs = drivers.filter(d => d.salary_type === "brigadir"); // для выбора старшего у младшего
+  const brigadirs = drivers.filter(d => d.salary_type === "brigadir" && (!multiCity || (d.city || DEFAULT_CITY) === activeCity)); // старший для младшего — своего города
   const openNew = () => { setEditId(null); setForm(blankDriver); setShowAdd(true); };
-  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, salary_type: d.salary_type || "kg", rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.salary_type === "brigadir" ? (d.load_rate_per_kg || 2.7) : (d.load_rate_per_kg ?? ""), foremanId: d.foremanId || "", base_salary: d.base_salary ?? "650000", base_included_t: d.base_included_t ?? "60", day_threshold_kg: d.day_threshold_kg ?? "14500", tier1_rate: d.tier1_rate ?? "6", tier2_rate: d.tier2_rate ?? "8" }); setShowAdd(true); };
+  const openEdit = d => { setEditId(d.id); setForm({ name: d.name, salary_type: d.salary_type || "kg", rate_per_kg: d.rate_per_kg ?? "", load_rate_per_kg: d.salary_type === "brigadir" ? (d.load_rate_per_kg || 2.7) : (d.load_rate_per_kg ?? ""), foremanId: d.foremanId || "", base_salary: d.base_salary ?? "650000", base_included_t: d.base_included_t ?? "60", day_threshold_kg: d.day_threshold_kg ?? "14500", tier1_rate: d.tier1_rate ?? "6", tier2_rate: d.tier2_rate ?? "8", city: d.city || DEFAULT_CITY }); setShowAdd(true); };
   const saveDriver = async () => {
     setSaving(true);
     const t = form.salary_type;
-    const rec = { id: editId || uid(), name: form.name, salary_type: t };
+    const rec = { id: editId || uid(), name: form.name, salary_type: t, city: form.city || activeCity };
     if (t === "brigadir") Object.assign(rec, { base_salary: Number(form.base_salary) || 0, base_included_t: Number(form.base_included_t) || 0, day_threshold_kg: Number(form.day_threshold_kg) || 0, tier1_rate: Number(form.tier1_rate) || 0, tier2_rate: Number(form.tier2_rate) || 0, rate_per_kg: 0, load_rate_per_kg: form.load_rate_per_kg === "" ? 2.7 : (Number(form.load_rate_per_kg) || 0), foremanId: "" });
     else if (t === "junior") Object.assign(rec, { foremanId: form.foremanId || "", rate_per_kg: 0, load_rate_per_kg: 0 });
     else Object.assign(rec, { rate_per_kg: Number(form.rate_per_kg) || 0, load_rate_per_kg: Number(form.load_rate_per_kg) || 0, foremanId: "" });
@@ -2977,7 +3124,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
     setSaving(true);
     const isBrig = payDriver.salary_type === "brigadir";
     const note = payExtra ? `Доплата (доп. работа) — ${payDriver.name}` : (isBrig ? `Зарплата бригадира за ${salMonth} — ${payDriver.name}` : `Зарплата (развоз+отгрузка) — ${payDriver.name}`);
-    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note }); setPayDriver(null); await reload("expenses"); }
+    try { await dbUpsert("expenses", { id: uid(), date: payDate, category: "Водители", driverId: payDriver.id, amount: Number(payAmount), extra: payExtra, note, city: payDriver.city || DEFAULT_CITY }); setPayDriver(null); await reload("expenses"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
@@ -3001,7 +3148,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Зарплата</h3>{canEdit && <Btn onClick={openNew}>+ Рабочий</Btn>}</div>
+      <div className="flex items-center justify-between"><div><h3 className="font-bold text-gray-800">Зарплата</h3>{multiCity && <div className="text-xs font-semibold text-amber-700 flex items-center gap-1 mt-0.5"><Icon name="building" size={12} />Город: {cityName(notes, activeCity)}</div>}</div>{canEdit && <Btn onClick={openNew}>+ Рабочий</Btn>}</div>
       <div className="flex items-center gap-2 text-sm">
         <span className="text-gray-500">Месяц зарплаты бригадира:</span>
         <input type="month" value={salMonth} onChange={e => setSalMonth(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" />
@@ -3009,7 +3156,9 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
       {showAdd && (<Modal title={editId ? "Изменить рабочего" : "Новый рабочий"} onClose={() => setShowAdd(false)}>
         <div className="space-y-3">
           <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+          {multiCity && <Sel label="Город (где работает)" value={form.city || DEFAULT_CITY} onChange={e => setForm({ ...form, city: e.target.value })} options={cities.filter(c => c.kind !== "mill").map(c => ({ value: c.id, label: c.name }))} />}
           <Sel label="Тип оплаты" value={form.salary_type} onChange={e => setForm({ ...form, salary_type: e.target.value })} options={[{ value: "kg", label: "Обычный — ставка за кг" }, { value: "brigadir", label: "Бригадир — оклад + тарифы" }, { value: "junior", label: "Младший водитель (платит бригадир)" }]} />
+          {multiCity && form.salary_type === "brigadir" && <p className="text-xs text-gray-500">Оклад и тарифы у каждого бригадира свои — впиши актуальные для этого города (для нового города можно заполнить позже, когда будут известны расценки).</p>}
           {form.salary_type === "kg" && (<>
             <Inp label="Ставка за развоз (водитель), тг/кг" type="number" value={form.rate_per_kg} onChange={e => setForm({ ...form, rate_per_kg: e.target.value })} placeholder="напр. 3" />
             <Inp label="Ставка за отгрузку (грузчик), тг/кг" type="number" value={form.load_rate_per_kg} onChange={e => setForm({ ...form, load_rate_per_kg: e.target.value })} placeholder="напр. 2" />
@@ -3147,7 +3296,7 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
           {editPay.note && <div className="text-sm bg-gray-50 rounded-xl p-3 text-gray-600">{editPay.note}</div>}
           <Inp label="Дата" type="date" value={epDate} onChange={e => setEpDate(e.target.value)} />
           <Inp label="Сумма, тг" type="number" value={epAmount} onChange={e => setEpAmount(e.target.value)} />
-          <p className="text-xs text-gray-500">Дата решает, в какой месяц попадёт выплата в учёте. Напр. зарплату за август, выданную 1 сентября, поставь <b>31 августа</b> — тогда учтётся в августе.</p>
+          <p className="text-xs text-gray-500">Дата решает, в какой месяц попадёт выплата в отчётах. Напр. зарплату за август, выданную 1 сентября, поставь <b>31 августа</b> — тогда учтётся в августе.</p>
         </div>
         <div className="flex gap-2 mt-4">
           <Btn onClick={saveEditPay} disabled={saving || !epAmount}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
@@ -3156,8 +3305,8 @@ function DriversTab({ drivers, orders, expenses = [], users = [], reload, canEdi
         </div>
       </Modal>)}
       <div className="space-y-3">
-        {drivers.length === 0 && <div className="text-center py-12 text-gray-400">Рабочих нет.</div>}
-        {[...drivers].sort((a, b) => (a.salary_type === "brigadir" ? 0 : a.salary_type === "junior" ? 1 : 2) - (b.salary_type === "brigadir" ? 0 : b.salary_type === "junior" ? 1 : 2)).map(d => {
+        {cityDrivers.length === 0 && <div className="text-center py-12 text-gray-400">{multiCity ? `В городе ${cityName(notes, activeCity)} рабочих нет.` : "Рабочих нет."}</div>}
+        {[...cityDrivers].sort((a, b) => (a.salary_type === "brigadir" ? 0 : a.salary_type === "junior" ? 1 : 2) - (b.salary_type === "brigadir" ? 0 : b.salary_type === "junior" ? 1 : 2)).map(d => {
           const isBrig = d.salary_type === "brigadir";
           const isJunior = d.salary_type === "junior";
           const foreman = isJunior ? drivers.find(x => x.id === d.foremanId) : null;
@@ -3258,10 +3407,18 @@ function RepAnalytics({ delivered = [], allMine = [], payments = [] }) {
     </div>
   );
 }
-function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], payments = [], clients = [], users = [], role = "director", reload = () => {}, canEdit = true }) {
+function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expensesProp = [], payments: paymentsProp = [], clients = [], users = [], role = "director", reload = () => {}, canEdit = true, cities = [], notes = [] }) {
   const repMode = role === "rep"; // торгпред видит СВОЮ аналитику: считаем только по его заявкам (не foreign)
-  const orders = repMode ? ordersProp.filter(o => !o.foreign) : ordersProp;
+  const [selCities, setSelCities] = useState([]); // выбранные города отчёта ([] = все города)
+  const multiCityR = cities.length > 1 && !repMode; // селектор городов — только владельцу при нескольких городах
+  const cityOk = cid => selCities.length === 0 || selCities.includes(cid);
+  // Отчёт считается по выбранным городам: заявки (город фиксирован на заявке/клиенте), оплаты (город клиента), расходы (город расхода).
+  const orders = (repMode ? ordersProp.filter(o => !o.foreign) : ordersProp).filter(o => !multiCityR || cityOk(orderCity(o, clients)));
+  const payments = (paymentsProp || []).filter(p => { if (!multiCityR) return true; const cl = clients.find(c => c.id === p.clientId); return cityOk(cl ? clientCity(cl) : DEFAULT_CITY); });
+  const expenses = (expensesProp || []).filter(x => !multiCityR || cityOk(x.city || DEFAULT_CITY));
+  const toggleCity = id => setSelCities(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const [selRep, setSelRep] = useState(""); // директор: подробная аналитика по выбранному торгпреду
+  const [openCity, setOpenCity] = useState(""); // раскрытый город в сводке «По городам» (показать что чаще берут)
   const [period, setPeriod] = useState("month");
   const [view, setView] = useState("product");
   // 🔍 Свой отчёт: фильтры по бренду, сорту и фасовкам (период — общий сверху)
@@ -3351,6 +3508,15 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
   orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const owner = ownerOf(o); if (!owner) return; const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) repEnsure(owner).debt += sum; });
   (payments || []).forEach(p => { const owner = ownerByClient[p.clientId]; if (owner && repAgg[owner]) repAgg[owner].debt -= (p.amount || 0); });
   const repStats = repsList.map(r => { const a = repAgg[r.id] || { kg: 0, rev: 0, ordSet: new Set(), cliSet: new Set(), debt: 0 }; return { id: r.id, name: r.group_name || r.name, kg: a.kg, rev: a.rev, orders: a.ordSet.size, clientsN: a.cliSet.size, debt: Math.max(0, a.debt) }; }).sort((a, b) => b.rev - a.rev);
+  // 🏙 По городам (сводно, все города — независимо от выбора в фильтре): оборот/тоннаж/заявки/долг/расходы/прибыль за период.
+  const cityAgg = {};
+  const cEnsure = id => (cityAgg[id] = cityAgg[id] || { kg: 0, rev: 0, ordSet: new Set(), debt: 0, exp: 0, deliv: 0, prod: {} });
+  cities.forEach(c => cEnsure(c.id));
+  (ordersProp || []).filter(filterFn).filter(o => o.status === "отгружена").forEach(o => { const a = cEnsure(orderCity(o, clients)); const kg = o.bags * o.bag_kg; a.kg += kg; a.rev += kg * (o.price_per_kg || 0); a.ordSet.add((o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date); const pk = `${o.brand} ${o.grade} ${o.bag_kg}кг`; a.prod[pk] = (a.prod[pk] || 0) + kg; });
+  (ordersProp || []).filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) cEnsure(orderCity(o, clients)).debt += sum; });
+  (paymentsProp || []).forEach(p => { const cl = clients.find(c => c.id === p.clientId); cEnsure(cl ? clientCity(cl) : DEFAULT_CITY).debt -= (p.amount || 0); });
+  (expensesProp || []).filter(filterFn).forEach(x => { const a = cEnsure(x.city || DEFAULT_CITY); a.exp += (x.amount || 0); if (/фура|поставк|перемещ|доставк/i.test(x.category || "")) a.deliv += (x.amount || 0); });
+  const cityStats = cities.map(c => { const a = cityAgg[c.id]; return { ...c, kg: a.kg, rev: a.rev, orders: a.ordSet.size, debt: Math.max(0, Math.round(a.debt)), exp: Math.round(a.exp), deliv: Math.round(a.deliv), delivPerKg: a.kg ? a.deliv / a.kg : 0, profit: Math.round(a.rev - a.exp), topProd: Object.entries(a.prod).sort((x, y) => y[1] - x[1]).slice(0, 5) }; }).sort((a, b) => (a.kind === "mill" ? 1 : 0) - (b.kind === "mill" ? 1 : 0) || b.rev - a.rev);
   // Расходы за период
   const expInPeriod = expenses.filter(filterFn);
   const expByCat = {};
@@ -3484,6 +3650,13 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
           <Inp type="date" value={to} onChange={e => setTo(e.target.value)} />
         </div>
       )}
+      {multiCityR && (
+        <div className="flex gap-1.5 flex-wrap items-center">
+          <span className="text-xs font-semibold text-amber-800 flex items-center gap-1 mr-1"><Icon name="globe" size={13} />Города:</span>
+          <button onClick={() => setSelCities([])} className={`text-xs font-medium px-3 py-1.5 rounded-full ${selCities.length === 0 ? "bg-amber-500 text-white" : "bg-white text-gray-600 border border-gray-200"}`}>Все</button>
+          {cities.map(c => <button key={c.id} onClick={() => toggleCity(c.id)} className={`text-xs font-medium px-3 py-1.5 rounded-full inline-flex items-center gap-1 ${selCities.includes(c.id) ? "bg-amber-500 text-white" : "bg-white text-gray-600 border border-gray-200"}`}><Icon name={c.kind === "mill" ? "store" : "building"} size={11} />{c.name}</button>)}
+        </div>
+      )}
     </div>
   );
 
@@ -3525,6 +3698,44 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
         </div>
       )}
 
+      {multiCityR && (
+        <div className="bg-white border border-gray-100 rounded-2xl p-4">
+          <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5 mb-3"><Icon name="globe" size={16} />По городам <span className="text-xs font-normal text-gray-400">· за период · нажми город — что чаще берут</span></div>
+          <div className="space-y-2">
+            {cityStats.map(c => {
+              const maxP = c.topProd.length ? c.topProd[0][1] : 1;
+              return (
+              <div key={c.id} className={`border rounded-xl ${openCity === c.id ? "border-amber-300 bg-amber-50" : "border-gray-100"}`}>
+                <button onClick={() => setOpenCity(openCity === c.id ? "" : c.id)} className="w-full text-left p-3">
+                  <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                    <span className="font-semibold text-gray-800 flex items-center gap-1.5"><Icon name={c.kind === "mill" ? "store" : "building"} size={14} className="text-amber-600" />{c.name}{c.kind === "mill" && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600">мельница</span>}</span>
+                    <span className="text-xs text-gray-400">{c.orders} заявок · {fmt(c.kg)} кг</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5 text-center">
+                    <div className="bg-emerald-50 rounded-lg py-1.5 px-1"><div className="text-[10px] text-emerald-700">Оборот</div><div className="font-display font-semibold text-emerald-800 text-xs">{fmt(Math.round(c.rev))}</div></div>
+                    <div className="bg-rose-50 rounded-lg py-1.5 px-1"><div className="text-[10px] text-rose-600">Расходы</div><div className="font-display font-semibold text-rose-700 text-xs">{fmt(c.exp)}</div></div>
+                    <div className={`rounded-lg py-1.5 px-1 ${c.profit >= 0 ? "bg-sky-50" : "bg-red-50"}`}><div className={`text-[10px] ${c.profit >= 0 ? "text-sky-600" : "text-red-600"}`}>Прибыль</div><div className={`font-display font-semibold text-xs ${c.profit >= 0 ? "text-sky-700" : "text-red-700"}`}>{fmt(c.profit)}</div></div>
+                    <div className={`rounded-lg py-1.5 px-1 ${c.debt > 0 ? "bg-red-50" : "bg-gray-50"}`}><div className={`text-[10px] ${c.debt > 0 ? "text-red-600" : "text-gray-500"}`}>Долг</div><div className={`font-display font-semibold text-xs ${c.debt > 0 ? "text-red-700" : "text-gray-800"}`}>{fmt(c.debt)}</div></div>
+                  </div>
+                </button>
+                {openCity === c.id && (
+                  <div className="px-3 pb-3">
+                    {c.kind !== "mill" && c.deliv > 0 && <div className="text-xs bg-sky-50 border border-sky-100 rounded-lg px-2 py-1.5 mb-2 flex items-center gap-1.5 text-sky-800"><Icon name="truck" size={13} />Доставка сюда за период: <b>{fmt(c.deliv)} тг</b>{c.delivPerKg ? <span className="text-sky-600">· ≈ {fmt(Math.round(c.delivPerKg))} тг/кг</span> : null} <span className="text-sky-400">(уже в расходах/прибыли)</span></div>}
+                    <div className="text-xs font-semibold text-gray-500 mb-1.5">Что чаще берут в «{c.name}» за период:</div>
+                    {c.topProd.length === 0 ? <div className="text-xs text-gray-400">Отгрузок за период нет.</div> : c.topProd.map(([pk, kg]) => (
+                      <div key={pk} className="mb-1.5">
+                        <div className="flex items-center justify-between text-xs mb-0.5"><span className="text-gray-700">{pk}</span><b className="text-gray-800 whitespace-nowrap">{fmt(kg)} кг</b></div>
+                        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden"><div className="h-full bg-amber-500 rounded-full" style={{ width: `${Math.max(4, Math.round(kg / maxP * 100))}%` }}></div></div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );})}
+          </div>
+          <div className="text-xs text-gray-400 mt-2">Оборот/расходы/прибыль — за период. Долг — текущий. Мельница: оборот 0 (она не продаёт клиентам, а отгружает на склады).</div>
+        </div>
+      )}
       {repStats.length > 0 && (
         <div className="bg-white border border-gray-100 rounded-2xl p-4">
           <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5 mb-3"><Icon name="user" size={16} />По торгпредам <span className="text-xs font-normal text-gray-400">· нажми на торгпреда для подробностей</span></div>
@@ -3757,7 +3968,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
               </div>
             ))}
           </div>
-          {totalRev > 0 && <div className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">Сумма отгрузок {fmt(totalRev)} − расходы {fmt(expTotal)} = <b className={totalRev - expTotal >= 0 ? "text-emerald-600" : "text-red-600"}>{fmt(totalRev - expTotal)} тг</b></div>}
+          {(totalRev > 0 || expTotal > 0) && <div className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">Сумма отгрузок {fmt(totalRev)} − расходы {fmt(expTotal)} = <b className={totalRev - expTotal >= 0 ? "text-emerald-600" : "text-red-600"}>{fmt(totalRev - expTotal)} тг</b></div>}
         </div>
       )}
 
@@ -3860,13 +4071,15 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses = [], pa
   );
 }
 
-function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
+function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], notes = [], multiCity = false, activeCity = DEFAULT_CITY, toCities = null, fromCities = null }) {
   const [showAdd, setShowAdd] = useState(false);
   const [expMonth, setExpMonth] = useState(TODAY().slice(0, 7)); // месяц для выгрузки в Excel (YYYY-MM)
   const [editId, setEditId] = useState(null);
   const [editItemIdx, setEditItemIdx] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [f, setF] = useState({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" });
+  const millCity = cities.find(c => c.kind === "mill")?.id || ""; // источник по умолчанию — мельница (Караганда)
+  const acceptedEdit = !!editId && trucks.find(t => t.id === editId)?.status === "принята"; // принятую поставку по маршруту менять нельзя (движения уже записаны)
+  const [f, setF] = useState({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "", city: activeCity, fromCity: "", transport: "фура" });
   const [items, setItems] = useState([]);
   const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" });
   const [aiText, setAiText] = useState("");
@@ -3899,7 +4112,7 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
   };
 
   const itemKg = i => (i.kg != null && i.kg !== "") ? Number(i.kg) : Number(i.tonnes || 0) * 1000; // старые записи были в тоннах
-  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setEditItemIdx(null); setAiText(""); setAiErr(""); };
+  const reset = () => { setF({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "", city: activeCity, fromCity: millCity, transport: "фура" }); setItems([]); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setEditItemIdx(null); setAiText(""); setAiErr(""); };
   const saveItem = () => {
     if (!it.kg) return;
     const ni = { brand: it.brand, grade: it.grade, bag_kg: Number(it.bag_kg), kg: Number(it.kg) };
@@ -3910,7 +4123,7 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
   const editItem = i => { const p = items[i]; setIt({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, kg: itemKg(p) }); setEditItemIdx(i); };
   const removeItem = i => { setItems(items.filter((_, j) => j !== i)); if (editItemIdx === i) setEditItemIdx(null); };
   const openNew = () => { setEditId(null); reset(); setShowAdd(true); };
-  const openEdit = t => { setEditId(t.id); setEditItemIdx(null); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
+  const openEdit = t => { setEditId(t.id); setEditItemIdx(null); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "", city: t.city || DEFAULT_CITY, fromCity: t.fromCity ?? millCity, transport: t.transport || "фура" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
 
   const saveTruck = async () => {
     if (items.length === 0) return;
@@ -3929,13 +4142,22 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
     setSaving(true);
     try {
       if (status === "принята" && t.status !== "принята") {
+        const toC = t.city || DEFAULT_CITY, from = t.fromCity || "";
         // id прихода привязан к фуре и позиции — двойное нажатие «Принять» перезапишет те же строки, а не задвоит их
-        for (let i = 0; i < t.items.length; i++) { const item = t.items[i]; const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: `tin_${t.id}_${i}`, date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (фура от ${t.date})` }); }
-        if (t.price) await dbUpsert("expenses", { id: "texp_" + t.id, date: TODAY(), category: "Фура/Поставка", amount: Number(t.price), note: `Фура от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}` });
+        for (let i = 0; i < t.items.length; i++) { const item = t.items[i]; const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: `tin_${t.id}_${i}`, date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (${t.transport === "вагон" ? "вагон" : "фура"} от ${t.date}${from ? ", из " + cityName(notes, from) : ""}${t.car_number ? ", " + t.car_number : ""})`, city: toC }); }
+        // Списание в городе-источнике (видно движение). Мельница безлимитна — минус там нормален (в StockTab не считается ошибкой).
+        if (from && from !== toC) { for (let i = 0; i < t.items.length; i++) { const item = t.items[i]; const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: `tout_${t.id}_${i}`, date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags: -bags, weight_kg: -weight_kg, price_per_kg: 0, note: `Отправка → ${cityName(notes, toC)}`, city: from, toCity: toC, transport: t.transport || "фура" }); } }
+        if (t.price) await dbUpsert("expenses", { id: "texp_" + t.id, date: TODAY(), category: "Фура/Поставка", amount: Number(t.price), note: `${t.transport === "вагон" ? "Вагон" : "Фура"} от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}`, city: toC });
         await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
         await reload("stock"); await reload("expenses");
       } else {
+        // Снимаем «принята» — убираем приход/списание/расход, чтобы остатки не врали
+        if (t.status === "принята") {
+          for (let i = 0; i < (t.items || []).length; i++) { try { await dbDelete("stock", `tin_${t.id}_${i}`); } catch {} try { await dbDelete("stock", `tout_${t.id}_${i}`); } catch {} }
+          try { await dbDelete("expenses", `texp_${t.id}`); } catch {}
+        }
         await dbUpsert("trucks", { ...t, status });
+        if (t.status === "принята") { await reload("stock"); await reload("expenses"); }
       }
       await reload("trucks");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
@@ -3944,9 +4166,14 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
   const deleteTruck = async id => {
     const t = trucks.find(x => x.id === id);
     const accepted = t && t.status === "принята";
-    if (!confirm(`Удалить фуру?${accepted ? "\nФура была принята на склад — её приход спишется со склада, а расход за фуру уберётся." : ""}`)) return;
-    try { await dbDelete("trucks", id); await reload("trucks"); if (accepted) { reload("stock"); reload("expenses"); } }
-    catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
+    if (!confirm(`Удалить ${t?.transport === "вагон" ? "вагон" : "фуру"}?${accepted ? "\nБыла принята на склад — приход и списание у источника уберутся, расход за поставку тоже." : ""}`)) return;
+    try {
+      if (accepted) { // убираем приход в целевом городе + списание у источника + расход
+        for (let i = 0; i < (t.items || []).length; i++) { try { await dbDelete("stock", `tin_${t.id}_${i}`); } catch {} try { await dbDelete("stock", `tout_${t.id}_${i}`); } catch {} }
+        try { await dbDelete("expenses", `texp_${t.id}`); } catch {}
+      }
+      await dbDelete("trucks", id); await reload("trucks"); if (accepted) { reload("stock"); reload("expenses"); }
+    } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
   };
 
   // Быстрая смена даты прихода прямо в списке
@@ -4001,7 +4228,7 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
         </div>
       )}
       {showAdd && (
-        <Modal title={editId ? "Изменить фуру" : "Новая фура"} onClose={() => setShowAdd(false)}>
+        <Modal title={`${editId ? "Изменить" : "Новая"} ${f.transport === "вагон" ? "вагон" : "поставка"}`} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
             {!editId && (
               <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
@@ -4012,7 +4239,25 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
                 <div className="text-xs text-gray-400 mt-1">Заполнит позиции и данные фуриста ниже — проверь и поправь перед сохранением.</div>
               </div>
             )}
+            {multiCity && (
+              <div>
+                <label className="text-sm font-medium text-gray-700">Транспорт</label>
+                <div className="flex gap-2 mt-1">
+                  <button type="button" onClick={() => setF({ ...f, transport: "фура" })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${f.transport !== "вагон" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="truck" size={15} />Фура</button>
+                  <button type="button" onClick={() => setF({ ...f, transport: "вагон" })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${f.transport === "вагон" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="box" size={15} />Вагон</button>
+                </div>
+              </div>
+            )}
             <Inp label="Дата прихода" type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
+            {multiCity && (
+              <div className="grid grid-cols-2 gap-2">
+                <Sel label="Откуда (источник)" value={f.fromCity || ""} onChange={e => setF({ ...f, fromCity: e.target.value })} disabled={acceptedEdit} options={[{ value: "", label: "— не указывать —" }, ...(fromCities || cities).filter(c => c.id !== f.city).map(c => ({ value: c.id, label: c.name + (c.kind === "mill" ? " (мельница)" : "") }))]} />
+                <Sel label="Куда (склад города)" value={f.city || DEFAULT_CITY} onChange={e => setF({ ...f, city: e.target.value })} disabled={acceptedEdit} options={(toCities || cities.filter(c => c.kind !== "mill")).map(c => ({ value: c.id, label: c.name }))} />
+              </div>
+            )}
+            {multiCity && acceptedEdit && <p className="text-xs text-gray-400 -mt-1">Маршрут уже принят — менять «откуда/куда» нельзя (движения склада записаны). Удали и создай заново, если нужно исправить.</p>}
+            {multiCity && f.fromCity && f.fromCity !== f.city && (cities.find(c => c.id === f.fromCity)?.kind !== "mill") && <p className="text-xs text-sky-700 bg-sky-50 rounded-lg px-2 py-1">При «Принять» мука спишется со склада <b>{cityName(notes, f.fromCity)}</b> и придёт на склад <b>{cityName(notes, f.city)}</b>.</p>}
+            {multiCity && f.fromCity && (cities.find(c => c.id === f.fromCity)?.kind === "mill") && <p className="text-xs text-orange-700 bg-orange-50 rounded-lg px-2 py-1">Источник — мельница (безлимитная): у неё запишется отправка «в минус», на складе <b>{cityName(notes, f.city)}</b> — приход.</p>}
             <div className="grid grid-cols-2 gap-2">
               <Inp label="Фурист (имя)" value={f.driver_name} onChange={e => setF({ ...f, driver_name: e.target.value })} />
               <Inp label="Номер машины" value={f.car_number} onChange={e => setF({ ...f, car_number: e.target.value })} placeholder="123 ABC 01" />
@@ -4044,7 +4289,7 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
         {sorted.map(t => (
           <div key={t.id} className={`rounded-2xl p-4 border ${t.status === "принята" ? "bg-white border-gray-100 shadow-sm" : "bg-amber-50 border-amber-200"}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className="font-display font-semibold text-gray-900 flex items-center gap-1.5"><Icon name="truck" size={16} />Фура на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalKg(t))} кг{t.price ? ` · ${fmt(t.price)} тг` : ""}</span></div>
+              <div className="font-display font-semibold text-gray-900 flex items-center gap-1.5 flex-wrap"><Icon name={t.transport === "вагон" ? "box" : "truck"} size={16} />{t.transport === "вагон" ? "Вагон" : "Фура"} на {t.date} <span className="text-sm font-normal text-gray-500">· {fmt(totalKg(t))} кг{t.price ? ` · ${fmt(t.price)} тг` : ""}</span>{multiCity && <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="building" size={11} />{t.fromCity ? `${cityName(notes, t.fromCity)} → ${cityName(notes, t.city || DEFAULT_CITY)}` : cityName(notes, t.city || DEFAULT_CITY)}</span>}</div>
               <Badge color={t.status === "принята" ? "green" : t.status === "в пути" ? "yellow" : "blue"}>{t.status}</Badge>
             </div>
             <div className="space-y-1 text-sm text-gray-600">
@@ -4085,14 +4330,17 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true }) {
   );
 }
 
-// Настройка адреса склада (точка старта маршрутов). Хранится в notes id="warehouse".
-function WarehouseSettings({ notes = [], reload }) {
-  const w = notes.find(n => n.id === "warehouse");
+// Настройка адреса склада (точка старта маршрутов) по городу. Хранится в notes id="warehouse_<город>" (или "warehouse").
+function WarehouseSettings({ notes = [], reload, city = "", multiCity = false, cityLabel = "" }) {
+  const docId = (multiCity && city) ? "warehouse_" + city : "warehouse";
+  const w = notes.find(n => n.id === docId);
   const [link, setLink] = useState(w?.gis_link || "");
   const [addr, setAddr] = useState(w?.address || "");
   const [coords, setCoords] = useState(w?.coords || null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [open, setOpen] = useState(false); // свёрнуто по умолчанию — чтобы не мешало и не листать
+  useEffect(() => { const w2 = notes.find(n => n.id === docId); setLink(w2?.gis_link || ""); setAddr(w2?.address || ""); setCoords(w2?.coords || null); setMsg(""); }, [docId]); // сменили город — подставили его склад
   const resolve = async () => {
     setBusy(true); setMsg("");
     try {
@@ -4105,7 +4353,7 @@ function WarehouseSettings({ notes = [], reload }) {
     if (!coords) { setMsg("Сначала определи точку по ссылке 2ГИС"); return; }
     setBusy(true); setMsg("");
     try {
-      await dbUpsert("notes", { id: "warehouse", coords, address: addr.trim(), gis_link: link.trim(), at: new Date().toISOString() });
+      await dbUpsert("notes", { id: docId, coords, address: addr.trim(), gis_link: link.trim(), at: new Date().toISOString() });
       WAREHOUSE.lat = coords.lat; WAREHOUSE.lon = coords.lon; WAREHOUSE.address = addr.trim();
       await reload("notes"); setMsg("✓ адрес склада сохранён — маршруты теперь строятся отсюда");
     } catch (e) {
@@ -4115,32 +4363,50 @@ function WarehouseSettings({ notes = [], reload }) {
     setBusy(false);
   };
   return (
-    <div className="bg-white border border-gray-100 rounded-xl p-4">
-      <div className="font-display font-semibold text-gray-800 mb-1 flex items-center gap-1.5"><Icon name="box" size={16} />Адрес склада (старт маршрутов)</div>
-      <div className="text-xs text-gray-400 mb-3">Отсюда строится маршрут доставки. Вставь ссылку 2ГИС на склад и определи точку.{coords ? "" : " Сейчас — адрес по умолчанию."}</div>
-      <div className="space-y-2">
-        <Inp label="Название/адрес склада" value={addr} onChange={e => setAddr(e.target.value)} placeholder="напр. Астана, ул. …" />
-        <Inp label="Ссылка 2ГИС на склад" value={link} onChange={e => { setLink(e.target.value); setCoords(null); }} placeholder="https://2gis.kz/astana/geo/..." />
-        <div className="flex items-center gap-2 flex-wrap">
-          <Btn size="sm" variant="secondary" onClick={resolve} disabled={busy || !link.trim()}><Icon name="pin" size={15} />Определить точку</Btn>
-          <Btn size="sm" onClick={save} disabled={busy || !coords}>Сохранить</Btn>
-          {coords && <span className="text-xs text-emerald-600">точка: {coords.lat.toFixed(5)}, {coords.lon.toFixed(5)}</span>}
+    <div className="bg-white border border-gray-100 rounded-xl p-3">
+      <button type="button" onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between text-left">
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="box" size={16} />Адрес склада{multiCity && cityLabel ? " — " + cityLabel : ""} <span className="text-xs font-normal text-gray-400">(старт маршрутов)</span></span>
+        <Icon name="chevron" size={16} className={`text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="mt-3 space-y-2">
+          <div className="text-xs text-gray-400">Отсюда строится маршрут доставки. Вставь ссылку 2ГИС на склад и определи точку.{coords ? "" : " Сейчас — адрес по умолчанию."}</div>
+          <Inp label="Название/адрес склада" value={addr} onChange={e => setAddr(e.target.value)} placeholder="напр. Астана, ул. …" />
+          <Inp label="Ссылка 2ГИС на склад" value={link} onChange={e => { setLink(e.target.value); setCoords(null); }} placeholder="https://2gis.kz/astana/geo/..." />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Btn size="sm" variant="secondary" onClick={resolve} disabled={busy || !link.trim()}><Icon name="pin" size={15} />Определить точку</Btn>
+            <Btn size="sm" onClick={save} disabled={busy || !coords}>Сохранить</Btn>
+            {coords && <span className="text-xs text-emerald-600">точка: {coords.lat.toFixed(5)}, {coords.lon.toFixed(5)}</span>}
+          </div>
+          {msg && <div className={`text-xs ${msg.startsWith("✓") ? "text-emerald-600" : "text-red-500"}`}>{msg}</div>}
         </div>
-        {msg && <div className={`text-xs ${msg.startsWith("✓") ? "text-emerald-600" : "text-red-500"}`}>{msg}</div>}
-      </div>
+      )}
     </div>
   );
 }
 
-function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser }) {
+function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser, activeCity = DEFAULT_CITY }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
-  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "", dev: false });
+  const cities = citiesOf(notes);
+  const multiCity = cities.length > 1;
+  // Менеджер города в «Доступе» — только свои подчинённые (бригадир/водитель/торгпред) и только свои города.
+  const isManager = currentUser.role === "citymanager";
+  const meRec = users.find(u => u.id === currentUser.id) || {};
+  const myCities = (meRec.cities && meRec.cities.length) ? meRec.cities : (meRec.city ? [meRec.city] : []);
+  const roleOptions = isManager ? [["brigadir", ROLES.brigadir], ["driver", ROLES.driver], ["rep", ROLES.rep]] : Object.entries(ROLES);
+  const cityChoices = cities.filter(c => c.kind !== "mill" && (!isManager || myCities.includes(c.id)));
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "", foremanId: "", group_name: "", dev: false, cities: [] });
+  // Карточки водителей/бригадиров (для зарплаты): бригадир создаётся сразу, водители привязываются к нему.
+  const usedByOthers = new Set(users.filter(u => u.id !== editId && u.driverId).map(u => u.driverId));
+  const brigadirCards = drivers.filter(d => d.salary_type === "brigadir");
+  const freeBrigadirCards = brigadirCards.filter(d => !usedByOthers.has(d.id));
+  const freeDriverCards = drivers.filter(d => (d.salary_type === "kg" || d.salary_type === "junior") && !usedByOthers.has(d.id) && (!form.foremanId || d.foremanId === form.foremanId));
 
-  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: "accountant", driverId: "", group_name: "", dev: false }); setErr(""); setShowAdd(true); };
-  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "", group_name: u.group_name || "", dev: !!u.dev }); setErr(""); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: isManager ? "rep" : "accountant", driverId: "", foremanId: "", group_name: "", dev: false, cities: [] }); setErr(""); setShowAdd(true); };
+  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "", foremanId: (drivers.find(d => d.id === u.driverId)?.foremanId) || "", group_name: u.group_name || "", dev: !!u.dev, cities: (u.cities && u.cities.length) ? u.cities : (u.city ? [u.city] : []) }); setErr(""); setShowAdd(true); };
 
   const saveUser = async () => {
     setErr("");
@@ -4148,24 +4414,38 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
     if (!editId && !form.password) { setErr("Задай пароль"); return; }
     const uname = form.username.trim().toLowerCase();
     if (users.some(u => u.id !== editId && (u.username || "").toLowerCase() === uname)) { setErr("Такой логин уже есть"); return; }
+    if (multiCity && (form.role === "rep" || form.role === "citymanager") && !(form.cities || []).length) { setErr("Выбери хотя бы один город"); return; }
     setSaving(true);
     try {
       const existing = users.find(u => u.id === editId);
       // Пароль меняем только если ввели новый; пустое поле при редактировании = оставить старый
       const passhash = form.password ? await sha256(form.password) : existing?.passhash;
+      // Карточка водителя/бригадира (для зарплаты): привязываем выбранную или создаём новую прямо тут.
+      let driverId = (form.role === "driver" || form.role === "brigadir") ? form.driverId : "";
+      if ((form.role === "brigadir" || form.role === "driver") && !driverId) {
+        driverId = uid();
+        const card = form.role === "brigadir"
+          ? { id: driverId, name: form.name.trim(), salary_type: "brigadir", city: activeCity }
+          : (form.foremanId
+            ? { id: driverId, name: form.name.trim(), salary_type: "junior", foremanId: form.foremanId, city: (drivers.find(d => d.id === form.foremanId)?.city) || activeCity }
+            : { id: driverId, name: form.name.trim(), salary_type: "kg", city: activeCity });
+        await dbUpsert("drivers", card);
+      }
       await dbUpsert("users", {
         id: editId || uid(),
         name: form.name.trim(),
         username: form.username.trim(),
         passhash,
         role: form.role,
-        driverId: (form.role === "driver" || form.role === "brigadir") ? form.driverId : "",
+        driverId,
         group_name: form.role === "rep" ? form.group_name.trim() : "",
-        dev: form.role === "director" ? !!form.dev : false, // 🔧 разработчик (видит «Ревизию», метка «р»)
+        cities: (form.role === "rep" || form.role === "citymanager") ? (form.cities || []) : [], // города доступа (галочки)
+        city: (form.role === "rep" || form.role === "citymanager") ? ((form.cities && form.cities[0]) || DEFAULT_CITY) : "", // первичный город (для обратной совместимости)
+        dev: false, // разработчик назначается только по имени (Альяс) — флагом не задаётся
         last_seen: existing?.last_seen, // не терять отметку «был в сети» при редактировании
       });
-      setShowAdd(false); await reload("users");
-    } catch (e) { setErr("Ошибка: " + e.message); }
+      setShowAdd(false); await reload("users"); await reload("drivers");
+    } catch (e) { setErr("Ошибка: " + ((e && e.message) || e)); }
     setSaving(false);
   };
   const deleteUser = async (id) => {
@@ -4185,20 +4465,30 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
             <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Асхат" />
             <Inp label="Логин" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="ashat" />
             <Inp label={editId ? "Новый пароль (пусто = не менять)" : "Пароль"} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder={editId ? "оставь пустым чтобы не менять" : ""} />
-            <Sel label="Роль" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} options={Object.entries(ROLES).map(([v, l]) => ({ value: v, label: l }))} />
-            {form.role === "director" && (
-              <label className="flex items-center gap-2 text-sm text-gray-700 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 cursor-pointer">
-                <input type="checkbox" checked={!!form.dev} onChange={e => setForm({ ...form, dev: e.target.checked })} className="w-4 h-4 accent-violet-500" />
-                <span>🔧 Разработчик <span className="text-gray-400">— видит раздел «Ревизия» (метка «р»)</span></span>
-              </label>
-            )}
-            {(form.role === "driver" || form.role === "brigadir") && (
-              <Sel label={form.role === "brigadir" ? "Привязать к бригадиру (его карточка водителя)" : "Привязать к водителю"} value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "— выбери водителя —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
-            )}
-            {(form.role === "driver" || form.role === "brigadir") && drivers.length === 0 && <p className="text-xs text-amber-600">Сначала добавь водителя во вкладке «Зарплата».</p>}
-            {form.role === "brigadir" && <p className="text-xs text-gray-500">Бригадир видит все заявки своей бригады и может переназначить водителя с себя на младшего. Младшие водители привязываются к нему во вкладке «Зарплата».</p>}
+            <Sel label="Роль" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} options={roleOptions.map(([v, l]) => ({ value: v, label: l }))} />
+            {form.role === "brigadir" && (<>
+              <Sel label="Карточка бригадира (для зарплаты)" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "➕ Создать нового бригадира" }, ...freeBrigadirCards.map(d => ({ value: d.id, label: d.name }))]} />
+              <p className="text-xs text-gray-500">Бригадир создаётся сразу здесь. Ставки зарплаты задашь позже во вкладке «Зарплата». Потом к нему привяжешь водителей.</p>
+            </>)}
+            {form.role === "driver" && (<>
+              <Sel label="Бригадир (кому подчиняется)" value={form.foremanId} onChange={e => setForm({ ...form, foremanId: e.target.value, driverId: "" })} options={[{ value: "", label: "— самостоятельный (без бригадира) —" }, ...brigadirCards.map(d => ({ value: d.id, label: d.name }))]} />
+              <Sel label="Карточка водителя (для зарплаты)" value={form.driverId} onChange={e => setForm({ ...form, driverId: e.target.value })} options={[{ value: "", label: "➕ Создать нового водителя" }, ...freeDriverCards.map(d => ({ value: d.id, label: d.name }))]} />
+              {brigadirCards.length === 0 && <p className="text-xs text-amber-600">Сначала создай бригадира — потом привяжешь к нему водителей. Или оставь «самостоятельный».</p>}
+            </>)}
             {form.role === "rep" && <Inp label="Название группы клиентов" value={form.group_name} onChange={e => setForm({ ...form, group_name: e.target.value })} placeholder={`напр. Клиенты ${form.name || "торгпреда"}`} />}
-            {form.role === "rep" && <p className="text-xs text-gray-500">Торгпред заводит СВОИХ клиентов (наших не видит), создаёт им заявки для нашего водителя и ведёт их долги. Склад общий.</p>}
+            {multiCity && (form.role === "rep" || form.role === "citymanager") && (
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">Города{form.role === "citymanager" ? " (можно несколько)" : ""}</label>
+                <div className="flex flex-wrap gap-2">
+                  {cityChoices.map(c => {
+                    const on = (form.cities || []).includes(c.id);
+                    return <button type="button" key={c.id} onClick={() => setForm(f => ({ ...f, cities: on ? (f.cities || []).filter(x => x !== c.id) : [...(f.cities || []), c.id] }))} className={`px-3 py-1.5 rounded-full text-sm font-medium border transition ${on ? "bg-amber-500 text-white border-amber-500" : "bg-white text-gray-600 border-gray-200"}`}>{on ? "✓ " : ""}{c.name}</button>;
+                  })}
+                </div>
+              </div>
+            )}
+            {form.role === "rep" && <p className="text-xs text-gray-500">Торгпред заводит СВОИХ клиентов (наших не видит), создаёт им заявки для нашего водителя и ведёт их долги. Склад общий. Его клиенты автоматически привязываются к его городу.</p>}
+            {form.role === "citymanager" && <p className="text-xs text-gray-500">Менеджер города видит и ведёт ТОЛЬКО свой город (клиенты, заявки, склад, водители, отчёты этого города). Как мини-директор по одному городу.</p>}
             {err && <p className="text-red-500 text-sm">{err}</p>}
           </div>
           <div className="flex gap-2 mt-4">
@@ -4213,7 +4503,7 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
           return (
             <div key={u.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
               <div>
-                <div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span>{u.dev && <span className="ml-1 align-middle text-[10px] font-bold text-white bg-violet-500 rounded px-1 py-0.5" title="Разработчик — видит «Ревизию»">р</span>}</div>
+                <div className="font-medium text-gray-900">{u.name} <span className="text-xs text-gray-400">@{u.username}</span>{/^\s*(альяс|alyas)/i.test(u.name || "") && <span className="ml-1 align-middle text-[10px] font-bold text-white bg-violet-500 rounded px-1 py-0.5" title="Владелец сайта (разработчик)">р</span>}</div>
                 <div className="text-sm text-gray-500">{ROLES[u.role] || u.role}{linkedDriver ? ` · ${linkedDriver.name}` : ""}{u.id === currentUser.id ? " · это вы" : ""}</div>
                 {(() => {
                   if (!u.last_seen) return <div className="text-xs text-gray-400 mt-0.5">⚪ ещё не заходил(а)</div>;
@@ -4224,7 +4514,7 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
                 })()}
               </div>
               <div className="flex gap-1">
-                <Btn size="sm" variant="secondary" onClick={() => openEdit(u)}><Icon name="pencil" size={15} /></Btn>
+                {!(isManager && u.id === currentUser.id) && <Btn size="sm" variant="secondary" onClick={() => openEdit(u)}><Icon name="pencil" size={15} /></Btn>}
                 {u.id !== currentUser.id && <Btn size="sm" variant="danger" onClick={() => deleteUser(u.id)}><Icon name="trash" size={15} /></Btn>}
               </div>
             </div>
@@ -4232,9 +4522,8 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
         })}
       </div>
 
-      <WarehouseSettings notes={notes} reload={reload} />
-      <BackupLog />
-      <LoginLog logins={logins} />
+      {!isManager && <BackupLog />}
+      {!isManager && <LoginLog logins={logins} />}
     </div>
   );
 }
@@ -4392,6 +4681,7 @@ function LoginScreen({ onLogin }) {
   const [name, setName] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPw, setShowPw] = useState(false);
 
   // Узнаём у сервера, нужен ли первый пользователь
   useEffect(() => {
@@ -4431,8 +4721,11 @@ function LoginScreen({ onLogin }) {
         </div>
         <div className="space-y-3">
           {bootstrap && <Inp label="Имя" value={name} onChange={e => setName(e.target.value)} placeholder="Алияс" />}
-          <Inp label="Логин" value={username} onChange={e => setUsername(e.target.value)} />
-          <Inp label="Пароль" type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} />
+          <Inp label="Логин" value={username} onChange={e => setUsername(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="username" inputMode="text" />
+          <div>
+            <Inp label="Пароль" type={showPw ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="current-password" />
+            <label className="flex items-center gap-1.5 mt-1.5 text-xs text-gray-500 cursor-pointer select-none"><input type="checkbox" checked={showPw} onChange={e => setShowPw(e.target.checked)} className="w-4 h-4 accent-amber-500" />Показать пароль</label>
+          </div>
           {err && <p className="text-red-500 text-sm">{err}</p>}
           <div className="pt-1"><Btn onClick={submit} disabled={busy} size="lg">{busy ? "..." : bootstrap ? "Создать и войти" : "Войти"}</Btn></div>
         </div>
@@ -4443,7 +4736,7 @@ function LoginScreen({ onLogin }) {
 
 // 💵 Касса (подотчётные деньги): тебе дали сумму — ты тратишь, всегда виден остаток.
 // Полностью отдельно от расходов компании и отчётов склада.
-function CashboxTab({ cashbox = [], reload, canEdit = true }) {
+function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = {}, isOwner = false, fullOwner = false, canEdit = true, reload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [dir, setDir] = useState("out"); // in — приход (дали), out — трата
   const [editItem, setEditItem] = useState(null); // редактируемая запись (null = новая)
@@ -4452,6 +4745,30 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
   const [period, setPeriod] = useState("month");
   const [from, setFrom] = useState(TODAY());
   const [to, setTo] = useState(TODAY());
+  const [showCreate, setShowCreate] = useState(false); // окно «создать кассу» (владелец)
+  const [newKassaUid, setNewKassaUid] = useState("");
+  // 💳 Кассы: у каждого человека своя. Владелец видит все (город · имя · роль) и переключается;
+  // остальные — только свою. Старые записи без владельца показываем в кассе директора.
+  const legacyOwnerId = (users.find(u => u.role === "director") || {}).id || me.id;
+  const ownerIdOf = x => x.userId || legacyOwnerId;
+  const uCity = uid => { const u = users.find(x => x.id === uid); return (u && u.city) || ""; };
+  const kassaLabel = k => `${k.city ? cityName(notes, k.city) + " · " : ""}${k.name || "?"} · ${ROLES[k.role] || k.role || ""}`;
+  const kassaList = (isOwner
+    ? users.filter(u => u.hasKassa || u.role === "director")
+    : ((myRecord && myRecord.id) ? [myRecord] : [{ id: me.id, name: me.name, role: me.role, city: (myRecord && myRecord.city) || "" }]))
+    .slice().sort((a, b) => kassaLabel(a).localeCompare(kassaLabel(b)));
+  const [selUid, setSelUid] = useState(me.id);
+  const selKassa = kassaList.find(u => u.id === selUid) || kassaList[0] || { id: me.id, name: me.name, role: me.role, city: "" };
+  const selId = selKassa.id;
+  const mine = cashbox.filter(x => ownerIdOf(x) === selId);
+  const canEditSel = canEdit && (fullOwner || selId === me.id); // менеджер правит ТОЛЬКО свою кассу; кассы подчинённых — только смотрит. Директор — любую.
+  const createKassa = async () => {
+    const u = users.find(x => x.id === newKassaUid); if (!u) return;
+    setSaving(true);
+    try { await dbUpsert("users", { ...u, hasKassa: true }); await reload("users"); setShowCreate(false); setSelUid(u.id); setNewKassaUid(""); }
+    catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+    setSaving(false);
+  };
 
   const openNew = d => { setEditItem(null); setDir(d); setForm({ date: TODAY(), amount: "", note: "" }); setShowAdd(true); };
   const openEdit = x => { setEditItem(x); setDir(x.dir === "in" ? "in" : "out"); setForm({ date: x.date || TODAY(), amount: String(x.amount ?? ""), note: x.note || "" }); setShowAdd(true); };
@@ -4460,8 +4777,8 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
     setSaving(true);
     try {
       const rec = editItem
-        ? { ...editItem, dir, date: form.date, amount: Number(form.amount), note: form.note.trim() }
-        : { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim() };
+        ? { ...editItem, dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), userId: ownerIdOf(editItem), city: uCity(ownerIdOf(editItem)) }
+        : { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), userId: selId, city: uCity(selId) };
       await dbUpsert("cashbox", rec);
       setShowAdd(false); setEditItem(null); await reload("cashbox");
     } catch (e) {
@@ -4471,9 +4788,9 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
   };
   const del = async id => { if (!confirm("Удалить эту запись из кассы?")) return; try { await dbDelete("cashbox", id); setShowAdd(false); await reload("cashbox"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); } };
 
-  // Остаток — всегда по всей истории (это накопительный баланс кассы)
-  const totalIn = cashbox.filter(x => x.dir === "in").reduce((s, x) => s + (x.amount || 0), 0);
-  const totalOut = cashbox.filter(x => x.dir !== "in").reduce((s, x) => s + (x.amount || 0), 0);
+  // Остаток выбранной кассы — по всей её истории (накопительный баланс)
+  const totalIn = mine.filter(x => x.dir === "in").reduce((s, x) => s + (x.amount || 0), 0);
+  const totalOut = mine.filter(x => x.dir !== "in").reduce((s, x) => s + (x.amount || 0), 0);
   const balance = totalIn - totalOut;
 
   // Фильтр по датам — влияет на список и на суммы «за период»
@@ -4487,25 +4804,30 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
     if (period === "custom") return (x.date || "") >= from && (x.date || "") <= to;
     return true;
   };
-  const list = cashbox.filter(inPeriod).sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.id).localeCompare(String(a.id)));
+  const list = mine.filter(inPeriod).sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.id).localeCompare(String(a.id)));
   const perIn = list.filter(x => x.dir === "in").reduce((s, x) => s + (x.amount || 0), 0);
   const perOut = list.filter(x => x.dir !== "in").reduce((s, x) => s + (x.amount || 0), 0);
   const periods = [["week", "Неделя"], ["month", "Месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="coin" size={18} />Касса</h3></div>
+      <div className="flex items-center justify-between"><h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="coin" size={18} />Касса</h3>{isOwner && canEdit && <button onClick={() => setShowCreate(true)} className="text-sm text-amber-700 font-medium inline-flex items-center gap-1"><Icon name="plus" size={14} />Создать кассу</button>}</div>
+      {/* Переключатель касс: владелец выбирает чью кассу смотреть; остальным — их касса */}
+      {isOwner
+        ? <Sel label="Чья касса" value={selId} onChange={e => setSelUid(e.target.value)} options={kassaList.map(k => ({ value: k.id, label: kassaLabel(k) }))} />
+        : <div className="text-sm text-gray-500">Касса: <b className="text-gray-800">{kassaLabel(selKassa)}</b></div>}
       <div className={`rounded-2xl p-5 text-white shadow-sm bg-gradient-to-br ${balance < 0 ? "from-red-500 to-red-600" : "from-emerald-500 to-emerald-600"}`}>
         <div className="text-sm font-medium opacity-90">Остаток в кассе</div>
         <div className="text-4xl font-black mt-1">{fmt(balance)} тг</div>
         <div className="text-sm opacity-90 mt-1.5 border-t border-white/30 pt-1.5">Всего получено: <b>{fmt(totalIn)}</b> · потрачено: <b>{fmt(totalOut)}</b></div>
       </div>
-      {canEdit && (
+      {canEditSel && (
         <div className="flex gap-2">
           <Btn onClick={() => openNew("in")} size="lg">+ Приход</Btn>
           <button onClick={() => openNew("out")} className="flex-1 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium px-6 py-3 text-base active:scale-95 transition-all">− Трата</button>
         </div>
       )}
+      {isOwner && !canEditSel && selId !== me.id && <div className="text-xs text-gray-400 bg-gray-50 rounded-lg px-3 py-2">Чужую кассу можно только смотреть. Записи ведёт её владелец.</div>}
 
       {/* Фильтр по датам */}
       <div className="flex flex-wrap gap-2">
@@ -4542,15 +4864,34 @@ function CashboxTab({ cashbox = [], reload, canEdit = true }) {
           </div>
         </Modal>
       )}
+      {isOwner && kassaList.length > 1 && (
+        <div className="bg-white border border-gray-100 rounded-2xl p-3 text-sm">
+          <div className="font-semibold text-gray-700 mb-1">Сколько у кого на руках</div>
+          {kassaList.map(k => {
+            const bal = cashbox.filter(x => ownerIdOf(x) === k.id).reduce((s, x) => s + (x.dir === "in" ? 1 : -1) * (x.amount || 0), 0);
+            return <button key={k.id} onClick={() => setSelUid(k.id)} className={`w-full flex items-center justify-between py-1.5 px-2 rounded-lg ${k.id === selId ? "bg-amber-50" : "hover:bg-gray-50"}`}><span className="text-gray-600 text-left">{kassaLabel(k)}</span><b className={bal < 0 ? "text-red-600" : "text-gray-800"}>{fmt(bal)} тг</b></button>;
+          })}
+        </div>
+      )}
+      {showCreate && (
+        <Modal title="Создать кассу" onClose={() => setShowCreate(false)}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-500">Выбери, у кого будет касса. Она появится у этого человека, и он сможет вести приходы/расходы. У одного человека — одна касса.</p>
+            <Sel label="Кому" value={newKassaUid} onChange={e => setNewKassaUid(e.target.value)} options={[{ value: "", label: "— выбери работника —" }, ...users.filter(u => !u.hasKassa && (u.role === "rep" || u.role === "citymanager")).map(u => ({ value: u.id, label: kassaLabel(u) }))]} />
+            {users.filter(u => !u.hasKassa && (u.role === "rep" || u.role === "citymanager")).length === 0 && <p className="text-xs text-amber-600">Нет работников без кассы. Кассы заводятся торгпредам и менеджерам городов.</p>}
+          </div>
+          <div className="flex gap-2 mt-4"><Btn onClick={createKassa} disabled={!newKassaUid || saving}>{saving ? "Создаю…" : "Создать"}</Btn><Btn variant="secondary" onClick={() => setShowCreate(false)}>Отмена</Btn></div>
+        </Modal>
+      )}
       <div className="space-y-2">
-        {list.length === 0 && <div className="text-center py-12 text-gray-400">{cashbox.length ? "За этот период записей нет." : "Пока пусто. Нажми «+ Приход», когда дадут денег."}</div>}
+        {list.length === 0 && <div className="text-center py-12 text-gray-400">{mine.length ? "За этот период записей нет." : "Пока пусто. Нажми «+ Приход», когда дадут денег."}</div>}
         {list.map(x => {
           const isIn = x.dir === "in";
           return (
-            <button key={x.id} onClick={() => canEdit && openEdit(x)} disabled={!canEdit} className="w-full text-left bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm active:scale-[0.99] transition-transform">
+            <button key={x.id} onClick={() => canEditSel && openEdit(x)} disabled={!canEditSel} className="w-full text-left bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm active:scale-[0.99] transition-transform">
               <div className="min-w-0">
                 <div className="font-medium text-gray-900">{isIn ? "▲ Приход" : "▼ Трата"}{x.note ? ` — ${x.note}` : ""}</div>
-                <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ${x.created_by_name}` : ""}{canEdit ? " · нажми чтобы изменить" : ""}</div>
+                <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ${x.created_by_name}` : ""}{canEditSel ? " · нажми чтобы изменить" : ""}</div>
               </div>
               <span className={`font-bold flex-shrink-0 ${isIn ? "text-emerald-600" : "text-red-500"}`}>{isIn ? "+" : "−"}{fmt(x.amount)} тг</span>
             </button>
@@ -4867,21 +5208,21 @@ function CrmTab({ crm = [], clients = [], reload }) {
   );
 }
 
-function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
+function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities = [], activeCity = DEFAULT_CITY, multiCity = false, notes = [] }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const blank = { date: TODAY(), category: EXPENSE_CATS[0], amount: "", note: "" };
+  const blank = { date: TODAY(), category: EXPENSE_CATS[0], amount: "", note: "", city: activeCity };
   const [form, setForm] = useState(blank);
   // Открыть форму расхода по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) { setEditId(null); setForm(blank); setShowAdd(true); } }, [openSignal]);
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
-  const openEdit = x => { setEditId(x.id); setForm({ date: x.date, category: catName(x.category), amount: x.amount, note: x.note || "" }); setShowAdd(true); };
+  const openEdit = x => { setEditId(x.id); setForm({ date: x.date, category: catName(x.category), amount: x.amount, note: x.note || "", city: x.city || DEFAULT_CITY }); setShowAdd(true); };
   const save = async () => {
     if (!form.amount) return;
     setSaving(true);
-    try { await dbUpsert("expenses", { id: editId || uid(), date: form.date, category: form.category, amount: Number(form.amount), note: form.note }); setShowAdd(false); await reload("expenses"); }
+    try { await dbUpsert("expenses", { id: editId || uid(), date: form.date, category: form.category, amount: Number(form.amount), note: form.note, city: form.city || activeCity }); setShowAdd(false); await reload("expenses"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
@@ -4899,6 +5240,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
         <Modal title={editId ? "Изменить расход" : "Новый расход"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
             <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
+            {multiCity && <Sel label="Город (к какому складу относится)" value={form.city || DEFAULT_CITY} onChange={e => setForm({ ...form, city: e.target.value })} options={cities.map(c => ({ value: c.id, label: c.name }))} />}
             <Sel label="Категория" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} options={EXPENSE_CATS} />
             <Inp label="Сумма, тг" type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
             <Inp label="Примечание" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. оплата фуры, водитель Эрик, поддоны" />
@@ -4914,7 +5256,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true }) {
         {sorted.map(x => (
           <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
             <div>
-              <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг</div>
+              <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг{multiCity && <span className="ml-2 text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full align-middle">{cityName(notes, x.city || DEFAULT_CITY)}</span>}</div>
               <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ${x.created_by_name}` : ""}</div>
             </div>
             {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}><Icon name="trash" size={15} /></Btn></div>}
@@ -5167,7 +5509,7 @@ function invLineName(brand, grade, bag_kg) {
   return /darad|дарад/i.test(String(brand || "")) ? `${base}, ${bag_kg}кг (Darad)` : `${base} ${bag_kg} кг`;
 }
 
-// Строит PDF счёта на оплату и открывает его в новой вкладке (просмотр + печать). rows = [{name, qty(кг), price(за кг), unit}]
+// Строит PDF счёта на оплату. rows = [{name, qty(кг), price(за кг), unit}]
 async function buildInvoicePdf({ number, date, buyerName, buyerBin, rows }) {
   // Открываем вкладку сразу по клику (иначе телефон блокирует всплывающее окно), затем покажем в ней PDF — можно смотреть и печатать
   const win = window.open("", "_blank");
@@ -5975,6 +6317,10 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
   const openPay = c => { setPayClient(c); setPayForm({ amount: "", method: "Наличные", date: TODAY(), note: "" }); };
   const savePay = async () => {
     if (!payForm.amount || Number(payForm.amount) <= 0) return;
+    // Защита от лишних нулей: оплата заметно больше долга — переспрашиваем
+    const debtNow = Math.round(payClient.net || 0);
+    const over = Number(payForm.amount) - debtNow;
+    if (over > 500000 && !confirm(`Оплата ${fmt(Number(payForm.amount))} ₸ больше долга клиента (${fmt(debtNow)} ₸) на ${fmt(over)} ₸.\nТочно столько? Проверь, не лишние ли нули.`)) return;
     setSavingPay(true);
     try {
       await dbUpsert("payments", { id: uid(), clientId: payClient.clientId || "", clientName: payClient.name, date: payForm.date, amount: Number(payForm.amount), method: payForm.method, note: payForm.note.trim() });
@@ -6306,8 +6652,10 @@ function EditGroupModal({ group, clients, reload, onClose }) {
 
 // 📝 ОБЩИЙ блокнот на главной: заметки в базе — видят и правят все администраторы.
 // Пишешь ты — видит коллега, и наоборот. Автоподхват чужих правок, пока сам не печатаешь.
-function NotesBlock({ notes = [], me = "", canEdit = true, reload = () => {} }) {
-  const shared = notes.find(n => n.id === "shared") || null;
+function NotesBlock({ notes = [], me = "", canEdit = true, reload = () => {}, city = "" }) {
+  const multiCity = citiesOf(notes).length > 1;
+  const docId = (multiCity && city) ? "shared_" + city : "shared"; // в мультигороде — общие заметки по каждому городу
+  const shared = notes.find(n => n.id === docId) || null;
   const serverText = shared ? (shared.text || "") : "";
   const [text, setText] = useState(serverText);
   const [open, setOpen] = useState(!!serverText.trim());
@@ -6330,7 +6678,7 @@ function NotesBlock({ notes = [], me = "", canEdit = true, reload = () => {} }) 
   }, []); // один раз при монтировании
 
   const saveNow = async (v) => {
-    try { await dbUpsert("notes", { id: "shared", text: v, at: new Date().toISOString(), by: me }); reload("notes"); setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1200); }
+    try { await dbUpsert("notes", { id: docId, text: v, at: new Date().toISOString(), by: me }); reload("notes"); setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1200); }
     catch (e) {
       const msg = String((e && e.message) || e);
       if (/notes/i.test(msg) || /PGRST205/.test(msg)) alert("Чтобы заметки были общими для всех, нужно один раз создать таблицу «notes» в Supabase. Скажи — пришлю инструкцию.");
@@ -6371,12 +6719,13 @@ function NotesBlock({ notes = [], me = "", canEdit = true, reload = () => {} }) 
   );
 }
 
-function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = "", reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0, role = "director" }) {
+function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = "", reload, applyLocal = () => {}, driverFilter = null, canEdit = true, openSignal = 0, role = "director", activeCity = DEFAULT_CITY }) {
   const isRep = role === "rep";
-  const brigadirs = drivers.filter(d => d.salary_type === "brigadir"); // торгпред кидает заявки на бригадира
+  const cityDrv = drivers.filter(d => (d.city || DEFAULT_CITY) === activeCity); // водители города заявки (пусто=Астана)
+  const brigadirs = cityDrv.filter(d => d.salary_type === "brigadir"); // торгпред кидает заявки на бригадира
   const soleBrigadir = brigadirs.length === 1 ? brigadirs[0].id : ""; // если бригадир один — ставим по умолчанию
-  // Торгпред назначает только бригадиру (он дальше распределяет младшим); остальные — любого водителя
-  const driverPickOptions = (isRep ? brigadirs : drivers).map(d => ({ value: d.id, label: d.name + (d.salary_type === "brigadir" ? " (бригадир)" : "") }));
+  // Торгпред назначает только бригадиру (он дальше распределяет младшим); остальные — любого водителя своего города
+  const driverPickOptions = (isRep ? brigadirs : cityDrv).map(d => ({ value: d.id, label: d.name + (d.salary_type === "brigadir" ? " (бригадир)" : "") }));
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
@@ -6466,6 +6815,9 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     const ambiguous = aiResult.find(p => (p.matchOptions || []).length > 1 && !p.clientId);
     if (ambiguous) { alert(`Выбери, какой именно клиент «${ambiguous.clientFound}» — их несколько с таким названием.`); return; }
     if (!aiPickup && !aiDriver) { alert("Сначала выбери водителя — кто повезёт эту заявку."); return; } // при самовывозе грузчика можно определить позже
+    // Дубль: такая же заявка (клиент+дата+товар+мешки) уже есть — предупреждаем
+    const dupAI = aiResult.find(p => p.clientId && orders.some(x => x.status !== "отменена" && x.clientId === p.clientId && x.date === p.date && x.brand === p.brand && x.grade === p.grade && String(x.bag_kg) === String(p.bag_kg) && Number(x.bags) === Number(p.bags)));
+    if (dupAI && !confirm(`Похоже, у «${dupAI.clientFound}» уже есть такая заявка: ${dupAI.brand} ${dupAI.grade} ${dupAI.bag_kg}кг × ${dupAI.bags} на ${String(dupAI.date).split("-").reverse().join(".")}.\nВсё равно добавить? (проверь, не дубль ли)`)) return;
     setSaving(true);
     try {
       for (const p of aiResult) {
@@ -6482,11 +6834,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
   // У торгпреда (isRep) движение склада пишет СЕРВЕР при сохранении заявки: прав на таблицу
   // stock у роли rep нет, запись из браузера дала бы ложную ошибку «Нет прав на изменение».
-  const shipStock = o => isRep ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}` });
+  const shipStock = o => isRep ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}`, city: orderCity(o, clients) });
   const unshipStock = async o => {
     if (isRep) return; // откат тоже делает сервер
     if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id);
-    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}` });
+    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}`, city: orderCity(o, clients) });
   };
   const setGroupStatus = async (g, status) => {
     if (busyRef.current.has(g.key)) return; // пока первое нажатие сохраняется, второе игнорируем
@@ -6496,7 +6848,9 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     try {
       await Promise.all(g.orders.map(async o => {
         if (o.status === status) return;
-        await dbUpsert("orders", { ...o, status });
+        // При отгрузке ФИКСИРУЕМ город на самой заявке (o.city), чтобы движение склада и заявка
+        // не «разъехались» по городам, если позже поменять город клиента.
+        await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) });
         if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
         if (status === "отгружена" && o.status !== "отгружена") await shipStock(o);
         else if (status !== "отгружена" && o.status === "отгружена") await unshipStock(o);
@@ -6529,7 +6883,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
       const id = uid();
       const prices = [];
       g.orders.forEach(o => { if ((o.price_per_kg || 0) > 0 && !prices.some(p => p.brand === o.brand && p.grade === o.grade && p.bag_kg === Number(o.bag_kg))) prices.push({ brand: o.brand, grade: o.grade, bag_kg: Number(o.bag_kg), price_per_kg: Number(o.price_per_kg) }); });
-      await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices });
+      await dbUpsert("clients", { id, name: g.clientName || "Клиент", org_name: "", contact_name: "", address: o0.oneOffAddress || "", contact: "", gis_link: o0.gis_link || "", coords: o0.coords || null, default_bag_kg: Number(o0.bag_kg) || "", default_brand: o0.brand || "", prices, city: o0.city || activeCity });
       await Promise.all(g.orders.map(o => dbUpsert("orders", { ...o, clientId: id })));
       await reload("clients"); await reload("orders");
       alert(`✓ «${g.clientName}» теперь в базе клиентов. Дополни карточку (телефон, реквизиты) во вкладке «Клиенты».`);
@@ -6556,12 +6910,12 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
             bag_kg: Number(p.bag_kg), bags: Number(p.bags), driverId: form.driverId || "",
             price_per_kg: Number(p.price_per_kg), status: instant ? "отгружена" : "новая",
             oneOff: true, paid: form.payMethod !== "В долг", pay_method: form.payMethod, note: form.note || "",
-            clientId: null, clientName: buyer,
+            clientId: null, clientName: buyer, city: activeCity,
             oneOffAddress: form.oneOffAddress || "", gis_link: form.gis_link || "", coords: form.coords || null,
           });
           // id движения привязан к заявке — отмена вернёт остаток точным откатом, дубля не будет.
           // У торгпреда (isRep) движение склада пишет СЕРВЕР (syncOrderStock) — из браузера rep не имеет прав на stock (была ложная ошибка + риск задвоить).
-          if (instant && !isRep) await dbUpsert("stock", { id: "mv_" + orderId, date: TODAY(), brand: p.brand, grade: p.grade, weight_kg: -kg, bags: -Number(p.bags), bag_kg: Number(p.bag_kg), note: `Реализация: ${buyer}` });
+          if (instant && !isRep) await dbUpsert("stock", { id: "mv_" + orderId, date: TODAY(), brand: p.brand, grade: p.grade, weight_kg: -kg, bags: -Number(p.bags), bag_kg: Number(p.bag_kg), note: `Реализация: ${buyer}`, city: activeCity });
         }
         setShowManual(false);
         setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "", oneOffName: "", driverId: "", oneOffAddress: "", gis_link: "", coords: null }));
@@ -6582,6 +6936,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
       const zeroCnt = validMan.filter(p => !(Number(p.price_per_kg) || (client ? priceFor(client, p.brand, p.grade, Number(p.bag_kg)) : 0))).length;
       if (zeroCnt && !confirm(`Для ${zeroCnt} позиц. цена не найдена — записать их по 0 тг (бесплатно)?`)) return;
     }
+    // Предупреждение о возможном дубле: точно такая же заявка (клиент+дата+товар+мешки) уже есть
+    if (!form.isSample && form.clientId) {
+      const dup = validMan.find(p => orders.some(x => x.status !== "отменена" && x.clientId === form.clientId && x.date === form.date && x.brand === p.brand && x.grade === p.grade && String(x.bag_kg) === String(p.bag_kg) && Number(x.bags) === Number(p.bags)));
+      if (dup && !confirm(`Похоже, такая заявка уже есть: ${dup.brand} ${dup.grade} ${dup.bag_kg}кг × ${dup.bags} на ${form.date.split("-").reverse().join(".")}.\nВсё равно добавить? (проверь, не дубль ли)`)) return;
+    }
     setSavingManual(true);
     // если у клиента на эту дату уже назначен водитель — наследуем его (чтобы новая позиция не «потерялась» у водителя)
     const inheritedDriver = (!form.isSample && form.clientId) ? (orders.find(o => o.clientId === form.clientId && o.date === form.date && o.driverId)?.driverId || "") : "";
@@ -6601,6 +6960,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           isSample: form.isSample, trial: isTrial, note: form.note || "",
           clientId: form.isSample ? null : form.clientId,
           clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
+          city: form.isSample ? activeCity : (client?.city || activeCity),
         });
       }
       setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "" })); setManPos([{ ...manBlank }]); await reload("orders");
@@ -6615,7 +6975,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
         <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4"><div className="text-sm text-gray-500">На завтра</div><div className="text-3xl font-display font-semibold text-gray-900">{groupCount(tomorrowList)}</div></div>
       </div>
 
-      <NotesBlock notes={notes} me={me} canEdit={canEdit} reload={reload} />
+      <NotesBlock notes={notes} me={me} canEdit={canEdit} reload={reload} city={activeCity} />
 
       {canEdit && (
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
@@ -6731,7 +7091,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
                   {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1 flex items-center gap-1"><Icon name={isPickup ? (isWatch ? "eye" : "bag") : "truck"} size={14} />{isPickup ? (isWatch ? "Контроль: " : "Грузчик: ") : "Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
-                  {(() => { const cl = clients.find(c => c.id === g.clientId); const wh = cl?.work_hours || g.orders[0].work_hours || clientTime(cl); return wh ? <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-sky-800 bg-sky-100 border border-sky-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Работает: {wh}</div> : null; })()}
+                  {(() => { const cl = clients.find(c => c.id === g.clientId); const wh = clientTime(cl) || cl?.work_hours || g.orders[0].work_hours; return wh ? <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-sky-800 bg-sky-100 border border-sky-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Время: {wh}</div> : null; })()}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
                   {(() => {
                     // Куда, как пройти и маршрут — чтобы понимать направление движения водителя
@@ -6874,7 +7234,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               <Inp label={form.pickup ? "Дата" : "Дата доставки"} type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
               {form.pickup
                 ? <div className="col-span-2 space-y-2">
-                    <Sel label={form.pickupWatch ? "Кто проследит (контроль)" : "Грузчик (кто отгрузит)"} value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...drivers.map(d => ({ value: d.id, label: d.name }))]} />
+                    <Sel label={form.pickupWatch ? "Кто проследит (контроль)" : "Грузчик (кто отгрузит)"} value={form.loaderId} onChange={e => setForm({ ...form, loaderId: e.target.value })} options={[{ value: "", label: "— определить позже —" }, ...cityDrv.map(d => ({ value: d.id, label: d.name }))]} />
                     <div className="flex gap-2">
                       <button type="button" onClick={() => setForm({ ...form, pickupWatch: false })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${!form.pickupWatch ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="bag" size={15} />Грузим сами</button>
                       <button type="button" onClick={() => setForm({ ...form, pickupWatch: true })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${form.pickupWatch ? "bg-purple-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="eye" size={15} />Только контроль</button>
@@ -6897,8 +7257,146 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   );
 }
 
+// 🏙 Справочник городов (мультигород). Хранится в notes id="cities". Директор добавляет города,
+// помечает тип (мельница/склад) и может вписать реквизиты города для накладных (Этап 3).
+function CitiesTab({ notes = [], reload, canEdit = true }) {
+  const list = citiesOf(notes);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const blank = { name: "", kind: "warehouse", org_name: "", bin: "", address: "", bank: "", iik: "", bik: "" };
+  const [f, setF] = useState(blank);
+  const openNew = () => { setEditId(null); setF(blank); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setF({ ...blank, ...c }); setShowAdd(true); };
+  const persist = async items => { await dbUpsert("notes", { id: "cities", items }); await reload("notes"); };
+  const save = async () => {
+    const name = f.name.trim();
+    if (!name) { alert("Введи название города"); return; }
+    setSaving(true);
+    try {
+      const id = editId || uid();
+      const item = { id, name, kind: f.kind, org_name: (f.org_name || "").trim(), bin: (f.bin || "").trim(), address: (f.address || "").trim(), bank: (f.bank || "").trim(), iik: (f.iik || "").trim(), bik: (f.bik || "").trim() };
+      const items = editId ? list.map(c => c.id === editId ? item : c) : [...list, item];
+      await persist(items);
+      setShowAdd(false); setEditId(null); setF(blank);
+    } catch (e) { alert("⚠️ Не сохранилось: " + ((e && e.message) || e)); }
+    setSaving(false);
+  };
+  const del = async c => {
+    if (list.length <= 1) { alert("Должен остаться хотя бы один город."); return; }
+    if (!confirm(`Удалить город «${c.name}»? Клиенты и заявки этого города никуда не денутся, но город пропадёт из списка выбора.`)) return;
+    try { await persist(list.filter(x => x.id !== c.id)); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+  };
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="globe" size={18} />Города</h3>
+        {canEdit && <Btn size="sm" onClick={openNew}>+ Город</Btn>}
+      </div>
+      <p className="text-sm text-gray-500 bg-gray-50 border border-gray-100 rounded-xl p-3">Здесь ты ведёшь города, в которых работает Darad. <b>Мельница</b> — откуда идёт мука (Караганда). <b>Склад</b> — город со своим складом, клиентами и развозом (Астана и другие). В шапке можно переключаться между городами или смотреть все сразу.</p>
+      <div className="space-y-2">
+        {list.map(c => (
+          <div key={c.id} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-semibold text-gray-900 flex items-center gap-2 flex-wrap">
+                  <Icon name={c.kind === "mill" ? "store" : "building"} size={16} className="text-amber-600" />{c.name}
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${c.kind === "mill" ? "bg-orange-100 text-orange-700" : "bg-sky-100 text-sky-700"}`}>{CITY_KINDS[c.kind] || c.kind}</span>
+                </div>
+                {(c.org_name || c.bin) && <div className="text-xs text-gray-500 mt-0.5">{c.org_name}{c.org_name && c.bin ? " · " : ""}{c.bin ? `БИН ${c.bin}` : ""}</div>}
+                {c.address && <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-1"><Icon name="pin" size={12} />{c.address}</div>}
+              </div>
+              {canEdit && (
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button onClick={() => openEdit(c)} className="text-gray-400 hover:text-amber-600 w-8 h-8 flex items-center justify-center" title="Изменить"><Icon name="pencil" size={16} /></button>
+                  <button onClick={() => del(c)} className="text-gray-400 hover:text-red-500 w-8 h-8 flex items-center justify-center" title="Удалить"><Icon name="trash" size={16} /></button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {showAdd && (
+        <Modal title={editId ? "Изменить город" : "Новый город"} onClose={() => setShowAdd(false)}>
+          <div className="space-y-3">
+            <Inp label="Название города" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="напр. Алматы" />
+            <div>
+              <label className="text-sm font-medium text-gray-700">Тип</label>
+              <div className="flex gap-2 mt-1">
+                <button type="button" onClick={() => setF({ ...f, kind: "warehouse" })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${f.kind === "warehouse" ? "bg-sky-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="building" size={15} />Склад в городе</button>
+                <button type="button" onClick={() => setF({ ...f, kind: "mill" })} className={`flex-1 py-2 rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 ${f.kind === "mill" ? "bg-orange-500 text-white" : "bg-gray-100 text-gray-600"}`}><Icon name="store" size={15} />Мельница (источник)</button>
+              </div>
+            </div>
+            <div className="pt-2 border-t border-gray-100">
+              <p className="text-xs font-semibold text-gray-400 mb-2">Реквизиты города (для накладных — можно позже)</p>
+              <div className="space-y-2">
+                <Inp label="Организация (ТОО/ИП)" value={f.org_name} onChange={e => setF({ ...f, org_name: e.target.value })} />
+                <div className="grid grid-cols-2 gap-2">
+                  <Inp label="БИН/ИИН" value={f.bin} onChange={e => setF({ ...f, bin: e.target.value })} />
+                  <Inp label="БИК" value={f.bik} onChange={e => setF({ ...f, bik: e.target.value })} />
+                </div>
+                <Inp label="Адрес склада" value={f.address} onChange={e => setF({ ...f, address: e.target.value })} />
+                <Inp label="Банк" value={f.bank} onChange={e => setF({ ...f, bank: e.target.value })} />
+                <Inp label="ИИК (счёт)" value={f.iik} onChange={e => setF({ ...f, iik: e.target.value })} />
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <Btn onClick={save} disabled={saving || !f.name.trim()}>{saving ? "Сохраняю…" : (editId ? "Сохранить" : "Добавить город")}</Btn>
+            <Btn variant="secondary" onClick={() => setShowAdd(false)}>Отмена</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Переключатель города в шапке: текущий город по центру + шеврон; тап — аккуратный выпадающий список.
+function CityMenu({ cities, city, notes, onPick }) {
+  const [open, setOpen] = useState(false);
+  const cur = cities.find(c => c.id === city);
+  const label = city === "all" ? "Все города" : (cur?.name || cityName(notes, city));
+  const triggerIcon = city === "all" ? "globe" : (cur?.kind === "mill" ? "store" : "building");
+  const row = (active, key, name, ic, onClick, badge) => (
+    <button key={key} onClick={onClick} role="option" aria-selected={active}
+      className={`w-full flex items-center gap-2.5 px-3 py-3 rounded-xl text-sm font-medium transition ${active ? "bg-amber-50 text-amber-800" : "text-gray-700 hover:bg-gray-50 active:bg-gray-100"}`}>
+      <Icon name={ic} size={17} className={active ? "text-amber-600" : "text-gray-400"} />
+      <span className="flex-1 text-left truncate">{name}</span>
+      {badge}
+      {active && <Icon name="check" size={16} className="text-amber-600 flex-shrink-0" />}
+    </button>
+  );
+  return (
+    <div className="relative flex justify-center">
+      <button onClick={() => setOpen(o => !o)} aria-haspopup="listbox" aria-expanded={open} aria-label="Выбрать город"
+        className="inline-flex items-center gap-2 pl-4 pr-3 py-2 min-h-[40px] rounded-full bg-white border border-amber-200 shadow-sm text-sm font-semibold text-gray-800 active:scale-95 transition">
+        <Icon name={triggerIcon} size={16} className="text-amber-600" />
+        <span className="max-w-[55vw] truncate">{label}</span>
+        <Icon name="chevron" size={16} className={`text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50">
+            <div role="listbox" className="animate-pop w-64 max-w-[88vw] bg-white rounded-2xl shadow-xl ring-1 ring-black/5 border border-gray-100 p-1.5">
+              {row(city === "all", "all", "Все города", "globe", () => { onPick("all"); setOpen(false); })}
+              <div className="my-1 h-px bg-gray-100" />
+              {cities.map(c => row(city === c.id, c.id, c.name, c.kind === "mill" ? "store" : "building",
+                () => { onPick(c.id); setOpen(false); },
+                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${c.kind === "mill" ? "bg-orange-100 text-orange-600" : "bg-sky-100 text-sky-600"}`}>{CITY_KINDS[c.kind] || ""}</span>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("today");
+  const [city, setCity] = useState(() => { try { return localStorage.getItem("darad_city") || "all"; } catch { return "all"; } }); // выбранный город владельца ("all" = все города)
+  const pickCity = v => { setCity(v); try { localStorage.setItem("darad_city", v); } catch {} };
   const [user, setUser] = useState(null);
   const [data, setData] = useState({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [], crm: [], lab: [] });
   const [loading, setLoading] = useState(true);
@@ -7003,6 +7501,16 @@ export default function App() {
     if (!allowed.includes(tab)) setTab(allowed[0] || "calendar");
   }, [user]);
 
+  // 🏭 Мельница (Караганда): у неё нет клиентов/заявок/WhatsApp — это склад-источник.
+  // Если владелец выбрал город-мельницу, а открыт клиентский раздел — переносим на «Склад» (отправки по городам).
+  useEffect(() => {
+    if (!user || (user.role !== "director" && user.role !== "viewer")) return;
+    if (city === "all") return;
+    const cur = citiesOf(data.notes).find(c => c.id === city);
+    if (!cur || cur.kind !== "mill") return;
+    if (!MILL_TABS.includes(tab)) setTab("stock");
+  }, [city, tab, data.notes, user]);
+
   // Ручное обновление с видимой реакцией: значок крутится, по завершении — зелёная галочка
   const manualRefresh = async () => {
     if (syncing) return;
@@ -7019,13 +7527,45 @@ export default function App() {
 
   const isDirector = user.role === "director";
   const isRep = user.role === "rep"; // торговый представитель: правит только своих клиентов/заявки/оплаты
+  const isCityMgr = user.role === "citymanager"; // менеджер города: правит только свой город (сервер фильтрует)
+  const canCity = isDirector || isCityMgr; // право редактировать в разделах города
   // 🧮 «Ревизия» — только у разработчика (Альяса): по имени входа ИЛИ по галочке «Разработчик» (метка «р») на аккаунте.
   const myRecord = (data.users || []).find(u => u.id === user.id) || {};
-  const isDev = isDirector && (/^\s*(альяс|alyas)/i.test(user.name || "") || myRecord.dev === true);
-  const allowedTabs = (TABS_BY_ROLE[user.role] || []).filter(id => id !== "revision" || isDev);
+  const isDev = isDirector && /^\s*(альяс|alyas)/i.test(user.name || ""); // «Ревизия» и метка разработчика — только у владельца (Альяс), зашито по имени; галочкой не назначается
+  // Касса торгпреду/менеджеру показывается только если владелец её завёл (hasKassa). Директору/просмотру — всегда.
+  const canSeeKassa = isDirector || user.role === "viewer" || !!myRecord.hasKassa;
+  const allowedTabs = (TABS_BY_ROLE[user.role] || []).filter(id => (id !== "revision" || isDev || isCityMgr) && (id !== "cashbox" || canSeeKassa));
+  // 🏙 Мультигород: владелец переключает все города; менеджер — только свои (галочки в карточке).
+  const cityList = citiesOf(data.notes);
+  const myCities = (myRecord.cities && myRecord.cities.length) ? myRecord.cities : (myRecord.city ? [myRecord.city] : []);
+  const availableCities = (isDirector || user.role === "viewer") ? cityList : (isCityMgr ? cityList.filter(c => myCities.includes(c.id)) : []);
+  const showCityBar = availableCities.length > 1;
+  const curCity = showCityBar ? city : (isCityMgr ? (myCities[0] || DEFAULT_CITY) : "all"); // менеджер с 1 городом — его; торгпред/остальные — без фильтра
+  // Город роли: торгпред/менеджер — их город (выбранный или первый), водитель/бригадир — из карточки; остальные — по умолчанию.
+  const roleCity = (isRep || isCityMgr) ? (curCity !== "all" ? curCity : (myCities[0] || DEFAULT_CITY))
+    : (user.role === "driver" || user.role === "brigadir") ? ((data.drivers || []).find(d => d.id === user.driverId)?.city || DEFAULT_CITY)
+    : DEFAULT_CITY;
+  const activeCity = curCity === "all" ? roleCity : curCity; // конкретный город для новых записей и назначения
+  applyWarehouse(data.notes, activeCity); // точку старта маршрута берём из склада текущего города
+  // Данные, отфильтрованные по выбранному городу. "all" — всё как есть. Фильтруем клиентов,
+  // заявки (город берём у клиента) и оплаты (по городу клиента); склад/фуры/персонал — общие (этапы 2–3).
+  const view = curCity === "all" ? data : {
+    ...data,
+    clients: data.clients.filter(c => clientCity(c) === curCity),
+    orders: data.orders.filter(o => orderCity(o, data.clients) === curCity),
+    payments: data.payments.filter(p => { const cl = data.clients.find(c => c.id === p.clientId); return cl ? clientCity(cl) === curCity : curCity === DEFAULT_CITY; }),
+  };
+  const multiCity = cityList.length > 1;
+  // Склад — по конкретному городу-складу (activeCity): при «Все города» показываем склад города по умолчанию.
+  const stockView = multiCity ? data.stock.filter(s => stockCity(s) === activeCity) : data.stock;
+  const stockOrdersView = multiCity ? data.orders.filter(o => orderCity(o, data.clients) === activeCity) : data.orders;
+  const allOrderIdSet = new Set(data.orders.map(o => o.id)); // все id заявок — для проверки «сирот» на складе (не по городскому срезу)
+  // 🏭 Мельница (Караганда): показываем только разделы про отправки/склад, без клиентов/заявок.
+  const isMillCity = curCity !== "all" && (cityList.find(c => c.id === activeCity)?.kind === "mill");
+  const navTabs = isMillCity ? allowedTabs.filter(id => MILL_TABS.includes(id)) : allowedTabs;
   // Нижняя панель: основные разделы для роли (что есть в доступе), остальное — под «Ещё»
-  const primaryNav = (PRIMARY_NAV[user.role] || []).filter(id => allowedTabs.includes(id));
-  const moreNav = allowedTabs.filter(id => !primaryNav.includes(id));
+  const primaryNav = (PRIMARY_NAV[user.role] || []).filter(id => navTabs.includes(id));
+  const moreNav = navTabs.filter(id => !primaryNav.includes(id));
   // Считаем новые ЗАЯВКИ (по клиенту+дате), а не отдельные позиции
   const newOrders = new Set(data.orders.filter(o => o.status === "новая").map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
 
@@ -7049,6 +7589,13 @@ export default function App() {
           </div>
         </div>
       </div>
+      {showCityBar && (
+        <div className="bg-amber-50 border-b border-amber-100 px-4 py-2">
+          <div className="max-w-2xl mx-auto">
+            <CityMenu cities={availableCities} city={city} notes={data.notes} onPick={pickCity} />
+          </div>
+        </div>
+      )}
       {updateReady && (
         <button onClick={() => window.location.reload()} className="w-full bg-amber-500 text-white text-sm font-bold px-4 py-2.5 text-center">
           ✨ Вышло обновление приложения — нажми здесь, чтобы обновиться
@@ -7063,31 +7610,33 @@ export default function App() {
       <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
         {allowedTabs.includes(tab) && (
           <>
-            {tab === "today" && <TodayTab orders={data.orders} clients={data.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep} openSignal={openOrderSignal} />}
-            {tab === "calendar" && <CalendarTab orders={data.orders} drivers={data.drivers} clients={data.clients} stock={data.stock} notes={data.notes} payments={data.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} />}
+            {tab === "today" && <TodayTab orders={view.orders} clients={view.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep || isCityMgr} openSignal={openOrderSignal} activeCity={activeCity} />}
+            {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={data.stock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
-            {tab === "stock" && <StockTab stock={data.stock} orders={data.orders} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={isDirector} />}
-            {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector} />}
-            {tab === "revision" && isDev && <RevisionTab stock={data.stock} notes={data.notes} reload={reload} applyLocal={applyLocal} />}
-            {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={isDirector} />}
-            {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector} />}
+            {tab === "stock" && <div className="space-y-4">{canCity && <WarehouseSettings notes={data.notes} reload={reload} city={activeCity} multiCity={multiCity} cityLabel={cityName(data.notes, activeCity)} />}<StockTab stock={stockView} orders={stockOrdersView} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={canCity} activeCity={activeCity} curCity={curCity} notes={data.notes} multiCity={multiCity} allStock={data.stock} allOrderIds={allOrderIdSet} cities={cityList} /></div>}
+            {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} />}
+            {tab === "revision" && (isDev || isCityMgr) && <RevisionTab stock={stockView} notes={data.notes} reload={reload} applyLocal={applyLocal} activeCity={activeCity} multiCity={multiCity} />}
+            {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
+            {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector || isCityMgr} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
-            {tab === "debts" && <DebtsTab orders={data.orders} clients={data.clients} payments={data.payments} reload={reload} canEdit={isDirector || isRep} isDirector={isDirector} />}
-            {tab === "contracts" && <ContractsTab clients={data.clients} />}
-            {tab === "invoice" && <SoftInvoiceTab clients={data.clients} orders={data.orders} />}
-            {tab === "reactivate" && <ReactivateTab clients={data.clients} orders={data.orders} />}
-            {tab === "clients" && <ClientsTab clients={data.clients} orders={data.orders} payments={data.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep} />}
+            {tab === "debts" && <DebtsTab orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} />}
+            {tab === "contracts" && <ContractsTab clients={view.clients} />}
+            {tab === "invoice" && <SoftInvoiceTab clients={view.clients} orders={view.orders} />}
+            {tab === "reactivate" && <ReactivateTab clients={view.clients} orders={view.orders} />}
+            {tab === "clients" && <ClientsTab clients={view.clients} orders={view.orders} payments={view.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep || isCityMgr} cities={cityList} activeCity={activeCity} />}
             {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} />}
-            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={isDirector} />}
-            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={isDirector} />}
-            {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} reload={reload} canEdit={isDirector} />}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={isDirector} />}
-            {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} />}
+            {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
+            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
+            {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} users={data.users} notes={data.notes} me={user} myRecord={myRecord} isOwner={isDirector || user.role === "viewer" || isCityMgr} fullOwner={isDirector || user.role === "viewer"} canEdit={user.role !== "viewer"} reload={reload} />}
+            {/* Отчёты: селектор городов внутри (Все / выбранные). Данные передаём глобально, ReportsTab фильтрует по выбору. */}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={canCity} cities={availableCities} notes={data.notes} />}
+            {tab === "cities" && <CitiesTab notes={data.notes} reload={reload} canEdit={isDirector} />}
+            {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} activeCity={activeCity} />}
           </>
         )}
       </div>
 
-      {(isDirector || isRep) && (
+      {(isDirector || isRep || isCityMgr) && (
         <>
           {fabOpen && (
             <div className="fixed inset-0 z-40" onClick={() => setFabOpen(false)} style={{ background: "rgba(0,0,0,0.35)" }}>
@@ -7096,7 +7645,7 @@ export default function App() {
                   {isDirector && <button onClick={() => { setFabOpen(false); setAssistantOpen(true); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-semibold text-amber-700">ИИ-помощник</span><span className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-lg ring-2 ring-amber-200"><Icon name="sparkle" size={22} /></span></button>}
                   <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="chat" size={20} /></span></button>
                   <button onClick={() => { goTab("today"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="pencil" size={20} /></span></button>
-                  {isDirector && <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="expense" size={20} /></span></button>}
+                  {(isDirector || isCityMgr) && <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="expense" size={20} /></span></button>}
                 </div>
               </div>
             </div>

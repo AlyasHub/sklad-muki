@@ -2,7 +2,7 @@
 import { sha256, signToken, dbList, dbUpsert, configured } from "./_lib.js";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const makeToken = u => signToken({ uid: u.id, role: u.role, driverId: u.driverId || "", name: u.name, exp: Date.now() + 30 * 864e5 });
+const makeToken = u => signToken({ uid: u.id, role: u.role, driverId: u.driverId || "", name: u.name, city: u.city || "", cities: (u.cities && u.cities.length) ? u.cities : (u.city ? [u.city] : []), exp: Date.now() + 30 * 864e5 });
 const pub = u => ({ id: u.id, name: u.name, username: u.username, role: u.role, driverId: u.driverId || "" });
 
 export default async function handler(req, res) {

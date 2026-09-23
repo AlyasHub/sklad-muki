@@ -53,6 +53,13 @@ export default async function handler(req, res) {
     // Пользователь удалён в «Доступе» → доступ закрыт сразу (при ближайшем запросе выкинет на вход)
     const me = await dbGet("users", u.uid); // точечно по id, не грузим всех пользователей
     if (!me) return res.status(401).json({ error: "Доступ закрыт администратором — войдите заново" });
+    // Права считаем по СВЕЖЕЙ карточке из базы (токен может устареть): роль, город(а).
+    // Так изменения роли/городов действуют сразу, без ожидания перевыпуска токена.
+    u.role = me.role || u.role;
+    u.name = me.name || u.name;
+    u.driverId = me.driverId || u.driverId || "";
+    u.city = me.city || "";
+    u.cities = (me.cities && me.cities.length) ? me.cities : (me.city ? [me.city] : []);
     // Последняя активность (не чаще раза в 5 минут).
     // ВАЖНО: пишем с await — Vercel замораживает функцию после ответа, и «фоновые» записи погибают.
     if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 5 * 60000) {
@@ -70,7 +77,7 @@ export default async function handler(req, res) {
       await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
       // Автопродление входа: токену осталось меньше 7 дней — выдаём свежий, клиент тихо подхватит.
       // Пока человек пользуется приложением, его больше не выкинет на вход.
-      const fresh_token = (u.exp && u.exp - Date.now() < 7 * 864e5) ? signToken({ uid: u.uid, role: u.role, driverId: u.driverId || "", name: u.name, exp: Date.now() + 30 * 864e5 }) : null;
+      const fresh_token = (u.exp && u.exp - Date.now() < 7 * 864e5) ? signToken({ uid: u.uid, role: u.role, driverId: u.driverId || "", name: u.name, city: u.city || "", cities: u.cities || [], exp: Date.now() + 30 * 864e5 }) : null;
       return res.status(200).json(fresh_token ? { data: out, fresh_token } : { data: out });
     }
     // Журнал изменений и резервные копии — только администратор
@@ -187,6 +194,40 @@ async function listFor(u, table) {
     // + payments (только чтение): нужно для точного долга клиента в календаре/долгах (иначе долг завышен)
     return ["orders", "clients", "drivers", "payments"].includes(table) ? await dbList(table) : [];
   }
+  if (u.role === "citymanager") {
+    // 🏙 Менеджер города: как директор, но ТОЛЬКО по своим городам (u.cities — из свежей карточки).
+    const myCities = (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+    const inCity = x => myCities.includes((x && x.city) || "astana");
+    if (table === "clients") return (await dbList("clients")).filter(inCity);
+    if (table === "drivers") return (await dbList("drivers")).filter(inCity);
+    if (table === "expenses") return (await dbList("expenses")).filter(inCity);
+    if (table === "trucks") return (await dbList("trucks")).filter(inCity); // входящие поставки своих городов
+    if (table === "stock") return (await dbList("stock")).filter(inCity);
+    if (table === "lab") return (await dbList("lab")).filter(x => !x.city || inCity(x)); // анализы своих городов (старые без города — общие)
+    if (table === "crm") return (await dbList("crm")).filter(x => x.ownerId === u.uid); // своя личная CRM (у каждого своя)
+    if (table === "orders") {
+      const [all, clis] = await Promise.all([dbList("orders"), dbList("clients")]);
+      const cmap = new Map(clis.map(c => [c.id, c]));
+      const oCity = o => o.city || (cmap.get(o.clientId) || {}).city || "astana";
+      return all.filter(o => myCities.includes(oCity(o)));
+    }
+    if (table === "payments") {
+      const [pays, clis] = await Promise.all([dbList("payments"), dbList("clients")]);
+      const myIds = new Set(clis.filter(inCity).map(c => c.id));
+      return pays.filter(p => myIds.has(p.clientId));
+    }
+    if (table === "notes") return await dbList("notes"); // справочник городов + адрес склада (не секретно)
+    if (table === "users") {
+      // Свои подчинённые: торгпреды его городов + водители/бригадиры, привязанные к водителям его городов. И сам.
+      const [all, drv] = await Promise.all([dbList("users"), dbList("drivers")]);
+      const myDrvIds = new Set(drv.filter(inCity).map(d => d.id));
+      const repMine = x => x.role === "rep" && ((x.cities && x.cities.length) ? x.cities.some(c => myCities.includes(c)) : myCities.includes(x.city || "astana"));
+      const drvMine = x => (x.role === "driver" || x.role === "brigadir") && myDrvIds.has(x.driverId);
+      return all.filter(x => x.id === u.uid || repMine(x) || drvMine(x)).map(({ passhash, ...r }) => r);
+    }
+    if (table === "cashbox") return (await dbList("cashbox")).filter(x => x.userId && (x.userId === u.uid || inCity(x))); // своя касса + кассы подчинённых своих городов (старые без владельца не показываем)
+    return []; // logins/crm/lab/kgd — не отдаём
+  }
   if (u.role === "driver") {
     // Заявки водителя: где он развозит (driverId) ИЛИ грузит самовывоз (loaderId) — фильтром на сервере БД.
     // Раньше брали только driverId → самовывозы, которые он грузил, не приходили (и не попадали в его тоннаж).
@@ -216,7 +257,7 @@ async function listFor(u, table) {
     const allDrivers = await dbList("drivers");
     const brigade = new Set([u.driverId, ...allDrivers.filter(d => d.foremanId === u.driverId).map(d => d.id)]);
     if (table === "drivers") return allDrivers.filter(d => brigade.has(d.id)).map(d => d.id === u.driverId ? d : (({ rate_per_kg, load_rate_per_kg, base_salary, base_included_t, tier1_to_t, tier1_rate, tier2_rate, ...rest }) => rest)(d)); // свою зарплату бригадир видит, у младших — скрыто
-    if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse" || n.id === "brigadir"); // + заметки-задания бригадиру
+    if (table === "notes") return (await dbList("notes")).filter(n => /^(warehouse|brigadir)(_|$)/.test(String(n.id))); // адрес склада + задания бригадиру (по городам)
     // Заявки бригады: развоз (driverId ∈ бригада) + самовывоз, который грузил кто-то из бригады (loaderId ∈ бригада,
     // у самовывоза driverId пустой). Иначе бригадир не видит свою погрузку самовывоза в «Моя ЗП».
     const myOrders = (await dbList("orders")).filter(o => brigade.has(o.driverId) || (o.pickup && brigade.has(o.loaderId)));
@@ -233,7 +274,9 @@ async function listFor(u, table) {
     // Торговый представитель: СВОИ клиенты (по ownerId), свои оплаты, общий склад (без цен закупа),
     // водители (без ставок). ВСЕ заявки видит как расписание (куда/кого/что/адрес/2ГИС/водитель),
     // но чужие — ТОЛЬКО ДЛЯ ЧТЕНИЯ и БЕЗ цен. Нужно, чтобы он видел маршруты и не уводил водителя.
-    if (!["clients", "orders", "stock", "drivers", "payments", "notes"].includes(table)) return [];
+    if (!["clients", "orders", "stock", "drivers", "payments", "notes", "users", "cashbox"].includes(table)) return [];
+    if (table === "users") return (await dbList("users")).filter(x => x.id === u.uid).map(({ passhash, ...r }) => r); // только своя карточка (город, есть ли касса)
+    if (table === "cashbox") return (await dbList("cashbox")).filter(x => x.userId === u.uid); // только СВОЯ касса
     if (table === "stock") return (await dbList("stock")).map(({ price_per_kg, ...s }) => s); // без закупочных цен
     if (table === "drivers") return (await dbList("drivers")).map(({ rate_per_kg, load_rate_per_kg, ...d }) => d); // без ставок
     if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse"); // адрес склада для маршрута
@@ -287,8 +330,97 @@ async function upsertFor(u, table, item) {
       item = { ...item, delivered_by_driver: !!existing.delivered_by_driver || !!item.delivered_by_driver, delivered_at: item.delivered_at || existing.delivered_at, photos, photo_at };
     }
     const out = await dbUpsert(table, item);
+    if (table === "orders") await syncOrderStock(existing, item); // движение склада всегда = заявке (пересчёт при правках)
     if (LOGGED.has(table)) await logChange(u, existing ? "update" : "create", table, item);
     return out;
+  }
+  if (u.role === "citymanager") {
+    // 🏙 Менеджер города правит ТОЛЬКО свои города (u.cities). Новым записям город проставляем/проверяем;
+    // чужой город менять нельзя. Формирование поставок фур (межгородское, склад мельницы) — пока у владельца.
+    const myCities = (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+    const inMy = c => myCities.includes(c || "astana");
+    const guard = async (t) => { const ex = await dbGet(t, item.id); if (ex && !inMy(ex.city || "astana")) throw new Error("Это запись другого города"); return ex; };
+    const cityFor = ex => ex ? (ex.city || myCities[0]) : (inMy(item.city) ? item.city : myCities[0]); // правка — сохраняем город записи; новая — выбранный (из его городов)
+    if (table === "clients") { const ex = await guard("clients"); return dbUpsert("clients", { ...item, city: cityFor(ex) }); }
+    if (table === "drivers") { const ex = await guard("drivers"); return dbUpsert("drivers", { ...item, city: cityFor(ex) }); }
+    if (table === "expenses") { const ex = await guard("expenses"); return dbUpsert("expenses", { ...item, city: cityFor(ex) }); }
+    if (table === "stock") {
+      // Списание на мельнице при приёмке фуры (tout_<фура>_<i>): разрешаем, если фура едет в его город — город движения (мельница) не меняем
+      if (String(item.id).startsWith("tout_")) {
+        const tid = String(item.id).slice(5).split("_")[0];
+        const tr = await dbGet("trucks", tid);
+        if (!tr || !inMy(tr.city || "astana")) throw new Error("Нет прав на это движение склада"); // фура должна ехать В ЕГО город
+        // Источник (город списания) — только мельница или один из его же городов. Нельзя списывать с чужого склада.
+        let srcMill = false;
+        try { const cdoc = await dbGet("notes", "cities"); srcMill = (((cdoc && cdoc.items) || []).find(x => x.id === item.city) || {}).kind === "mill"; } catch {}
+        if (!inMy(item.city || "astana") && !srcMill) throw new Error("Списывать можно только с мельницы или своего склада");
+        return dbUpsert("stock", item);
+      }
+      const ex = await guard("stock"); return dbUpsert("stock", { ...item, city: cityFor(ex) });
+    }
+    // Поставка фур В СВОЙ город (склад мельницы списывается через tout_, см. выше). Межгородские перемещения между чужими складами — нет.
+    if (table === "trucks") { const ex = await dbGet("trucks", item.id); if (ex && !inMy(ex.city || "astana")) throw new Error("Фура другого города"); const toC = item.city || (ex && ex.city) || myCities[0]; if (!inMy(toC)) throw new Error("Поставка в чужой город"); return dbUpsert("trucks", { ...item, city: toC }); }
+    if (table === "lab") { const ex = await dbGet("lab", item.id); if (ex && ex.city && !inMy(ex.city)) throw new Error("Анализ другого города"); return dbUpsert("lab", { ...item, city: inMy(item.city) ? item.city : myCities[0] }); }
+    if (table === "crm") { const ex = await dbGet("crm", item.id); if (ex && ex.ownerId && ex.ownerId !== u.uid) throw new Error("Чужая запись CRM"); return dbUpsert("crm", { ...item, ownerId: u.uid }); }
+    if (table === "orders") {
+      // город заявки — по её клиенту (или уже проставленный). Только свои города. Прямые с Караганды (fromKaraganda) склад не трогают.
+      const cli = item.clientId ? await dbGet("clients", item.clientId) : null;
+      if (cli && !inMy(cli.city || "astana")) throw new Error("Клиент другого города"); // нельзя завести заявку на чужого клиента (даже подменив item.city)
+      const oCity = item.city || (cli && cli.city) || myCities[0];
+      if (!inMy(oCity)) throw new Error("Заявка другого города");
+      const existing = await dbGet("orders", item.id);
+      if (existing) { const exCity = existing.city || (existing.clientId ? ((await dbGet("clients", existing.clientId)) || {}).city : null) || "astana"; if (!inMy(exCity)) throw new Error("Это заявка другого города"); }
+      // Автор заявки (кто внёс) — чтобы было видно в календаре, как у владельца
+      const author = existing?.created_by_name
+        ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }
+        : { created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString(), created_by_role: "citymanager" };
+      const saved = await dbUpsert("orders", { ...item, city: oCity, ...author });
+      await syncOrderStock(existing, { ...item, city: oCity, ...author }); // движение склада = заявке
+      return saved;
+    }
+    if (table === "payments") { const cli = await dbGet("clients", item.clientId); if (!cli || !inMy(cli.city || "astana")) throw new Error("Клиент другого города"); const ex = await dbGet("payments", item.id); if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!exCli || !inMy(exCli.city || "astana")) throw new Error("Это оплата другого города"); } return dbUpsert("payments", item); }
+    // Касса: менеджер ведёт ТОЛЬКО свою (userId = он сам). Чужую кассу трогать нельзя.
+    if (table === "cashbox") { const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса"); return dbUpsert("cashbox", { ...item, userId: u.uid, city: myCities[0], created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name }); }
+    // Ревизия склада (заметка revision_<город>): только по своим городам
+    if (table === "notes" && /^revision(_|$)/.test(String(item.id))) { const c = String(item.id).startsWith("revision_") ? String(item.id).slice(9) : myCities[0]; if (!inMy(c)) throw new Error("Ревизия другого города"); return dbUpsert("notes", item); }
+    // Адрес склада (старт маршрута) города: warehouse_<город> — только по своим городам
+    if (table === "notes" && /^warehouse(_|$)/.test(String(item.id))) { const c = String(item.id).startsWith("warehouse_") ? String(item.id).slice(10) : myCities[0]; if (!inMy(c)) throw new Error("Склад другого города"); return dbUpsert("notes", item); }
+    // Общие заметки и задания бригадиру по городу (shared_<город>, brigadir_<город>) — только свои города
+    if (table === "notes" && /^(shared|brigadir)_/.test(String(item.id))) { const c = String(item.id).replace(/^(shared|brigadir)_/, ""); if (!inMy(c)) throw new Error("Заметка другого города"); return dbUpsert("notes", item); }
+    // 👥 Делегированный доступ: менеджер заводит/правит ТОЛЬКО своих подчинённых (бригадир/водитель/торгпред)
+    // в своих городах. Выше своей роли, чужие города, dev и себя (кроме своей кассы) — нельзя.
+    if (table === "users") {
+      const allowed = ["brigadir", "driver", "rep"];
+      const ex = await dbGet("users", item.id);
+      if (item.id === u.uid) { if (!ex) throw new Error("Нет прав"); return dbUpsert("users", { ...ex, hasKassa: !!item.hasKassa }); } // себе — только касса
+      if (!allowed.includes(item.role)) throw new Error("Менеджер может заводить только бригадира, водителя или торгпреда");
+      const drv = await dbList("drivers");
+      const myDrvIds = new Set(drv.filter(d => inMy(d.city || "astana")).map(d => d.id));
+      if (ex) {
+        if (!allowed.includes(ex.role)) throw new Error("Этого пользователя менеджер править не может");
+        const exOk = ex.role === "rep" ? ((ex.cities && ex.cities.length) ? ex.cities : [ex.city || "astana"]).every(c => inMy(c)) : myDrvIds.has(ex.driverId);
+        if (!exOk) throw new Error("Это не ваш подчинённый");
+      }
+      const cs = (item.cities && item.cities.length) ? item.cities : (item.city ? [item.city] : []);
+      if (item.role === "rep") { if (!cs.length || !cs.every(c => inMy(c))) throw new Error("Торгпреду можно назначить только ваши города"); }
+      else if (!myDrvIds.has(item.driverId)) throw new Error("Привязать можно только к водителю вашего города");
+      const allU = await dbList("users"); // логин не должен совпадать с чужим (менеджер не видит всех — проверяем на сервере)
+      if (allU.some(x => x.id !== item.id && String(x.username || "").toLowerCase() === String(item.username || "").trim().toLowerCase())) throw new Error("Такой логин уже занят");
+      const passhash = item.passhash || ex?.passhash;
+      if (!passhash) throw new Error("Задай пароль");
+      const clean = {
+        id: item.id, name: item.name, username: item.username, passhash, role: item.role,
+        driverId: (item.role === "driver" || item.role === "brigadir") ? item.driverId : "",
+        group_name: item.role === "rep" ? (item.group_name || "") : "",
+        cities: item.role === "rep" ? cs : [], city: item.role === "rep" ? (cs[0] || "") : "",
+        hasKassa: !!item.hasKassa, dev: false, last_seen: ex?.last_seen,
+        created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name,
+      };
+      const out = await dbUpsert("users", clean);
+      await logChange(u, ex ? "update" : "create", "users", clean);
+      return out;
+    }
+    throw new Error("Нет прав на изменение");
   }
   if ((u.role === "kgdmanager" || u.role === "kgdsenior") && (table === "kgd_clients" || table === "kgd_docs")) {
     // Справочник клиентов ведут оба; документ в историю подписываем автором на сервере
@@ -311,7 +443,7 @@ async function upsertFor(u, table, item) {
   }
   if (u.role === "brigadir") {
     // Заметки-задания бригадиру (id="brigadir"): пишут и офис, и сам бригадир (галочки/пункты)
-    if (table === "notes" && item.id === "brigadir") return dbUpsert("notes", { ...item, id: "brigadir" });
+    if (table === "notes" && (item.id === "brigadir" || /^brigadir_/.test(String(item.id)))) return dbUpsert("notes", item);
     // Бригадир меняет только заявки своей бригады: переназначить водителя ВНУТРИ бригады + отметки доставки/загрузки/фото
     if (table !== "orders") throw new Error("Нет прав на изменение");
     const existing = await dbGet("orders", item.id);
@@ -369,8 +501,12 @@ async function upsertFor(u, table, item) {
     if (table === "payments") {
       const cli = await dbGet("clients", item.clientId);
       if (!cli || cli.ownerId !== u.uid) throw new Error("Оплату можно вносить только своим клиентам");
+      const ex = await dbGet("payments", item.id); // существующую оплату можно править только свою
+      if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); }
       return dbUpsert("payments", item);
     }
+    // Касса: торгпред ведёт ТОЛЬКО свою (userId = он сам). Поля санитизируем, чужую кассу трогать нельзя.
+    if (table === "cashbox") { const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса"); return dbUpsert("cashbox", { id: item.id, dir: item.dir === "in" ? "in" : "out", date: item.date, amount: Number(item.amount) || 0, note: String(item.note || "").slice(0, 300), userId: u.uid, city: u.city || "astana", created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name }); }
     throw new Error("Нет прав на изменение");
   }
   throw new Error("Нет прав на изменение");
@@ -383,23 +519,28 @@ function todayAstana() {
 // Синхронизация склада со статусом заявки. Заявка стала «отгружена» → расход; перестала → откат.
 // Нужна там, где движение не может записать браузер (торгпред: нет прав на stock).
 async function syncOrderStock(existing, item) {
-  if (!item || item.fromKaraganda) return;
-  const was = existing?.status === "отгружена";
-  const now = item.status === "отгружена";
-  if (now === was) return;
+  if (!item || item.fromKaraganda) return; // карагандинские (прямые) склад не трогают
   const mvId = "mv_" + item.id;
-  if (now) {
-    const bags = Number(item.bags) || 0, bag_kg = Number(item.bag_kg) || 0;
-    if (!bags || !bag_kg) return;
-    await dbUpsert("stock", {
-      // дата — реальный день отгрузки (как пишет админ через TODAY()), а НЕ дата доставки
-      // из заявки: иначе движение уедет в будущее/прошлое и исказит сводки «за сегодня»/за месяц
-      id: mvId, date: todayAstana(), brand: item.brand, grade: item.grade,
-      bag_kg, bags: -bags, weight_kg: -(bags * bag_kg), note: `Отгрузка: ${item.clientName || ""}`,
-    });
-  } else {
-    try { await dbDelete("stock", mvId); } catch {}
-  }
+  const nowShipped = item.status === "отгружена";
+  const wasShipped = !!(existing && existing.status === "отгружена");
+  const bags = Number(item.bags) || 0, bag_kg = Number(item.bag_kg) || 0;
+  let prev = null; try { prev = await dbGet("stock", mvId); } catch {} // движение по этой заявке (если есть)
+  // Не отгружена (или пустая позиция) — движение по заявке убираем, если оно было.
+  if (!nowShipped || !bags || !bag_kg) { if (prev) { try { await dbDelete("stock", mvId); } catch {} } return; }
+  // Отгружена. Пишем/обновляем mv_ ТОЛЬКО когда:
+  //  • заявка ТОЛЬКО ЧТО стала отгружена (переход) → создаём списание;
+  //  • или mv_ уже есть → пересчитываем под текущее кол-во/сорт (лечит правку ПОСЛЕ отгрузки — недостача не копится).
+  // Если заявка была отгружена, но mv_ НЕТ — значит списана по-старому (случайный id движения);
+  // НЕ создаём mv_, иначе задвоим списание старых отгрузок.
+  if (!prev && wasShipped) return;
+  let city = item.city || null;
+  if (!city && item.clientId) { try { const cli = await dbGet("clients", item.clientId); city = cli && cli.city; } catch {} }
+  city = city || "astana";
+  const date = (prev && prev.date) || todayAstana(); // сохраняем день первого списания
+  await dbUpsert("stock", {
+    id: mvId, date, brand: item.brand, grade: item.grade,
+    bag_kg, bags: -bags, weight_kg: -(bags * bag_kg), note: `Отгрузка: ${item.clientName || ""}`, city,
+  });
 }
 
 async function deleteFor(u, table, id) {
@@ -413,11 +554,39 @@ async function deleteFor(u, table, id) {
     if (ex) await logChange(u, "delete", "kgd_docs", ex);
     return dbDelete("kgd_docs", id);
   }
+  if (u.role === "citymanager") {
+    // Менеджер города удаляет только записи своих городов
+    const myCities = (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+    const inMy = c => myCities.includes(c || "astana");
+    if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const exCity = ex.city || (ex.clientId ? ((await dbGet("clients", ex.clientId)) || {}).city : null) || "astana"; if (!inMy(exCity)) throw new Error("Заявка другого города"); try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
+    if (table === "stock" && String(id).startsWith("tout_")) { const tid = String(id).slice(5).split("_")[0]; const tr = await dbGet("trucks", tid); if (!tr || inMy(tr.city || "astana")) return dbDelete("stock", id); throw new Error("Нет прав на это движение склада"); }
+    if (["clients", "drivers", "expenses", "stock"].includes(table)) { const ex = await dbGet(table, id); if (ex && !inMy(ex.city || "astana")) throw new Error("Запись другого города"); return dbDelete(table, id); }
+    if (table === "trucks") { const ex = await dbGet("trucks", id); if (ex && !inMy(ex.city || "astana")) throw new Error("Фура другого города"); return dbDelete("trucks", id); }
+    if (table === "lab") { const ex = await dbGet("lab", id); if (ex && ex.city && !inMy(ex.city)) throw new Error("Анализ другого города"); return dbDelete("lab", id); }
+    if (table === "crm") { const ex = await dbGet("crm", id); if (ex && ex.ownerId && ex.ownerId !== u.uid) throw new Error("Чужая запись CRM"); return dbDelete("crm", id); }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || !inMy(cli.city || "astana")) throw new Error("Оплата другого города"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); return dbDelete("payments", id); }
+    if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
+    if (table === "users") {
+      const ex = await dbGet("users", id);
+      if (!ex) return;
+      if (ex.id === u.uid) throw new Error("Себя удалить нельзя");
+      const allowed = ["brigadir", "driver", "rep"];
+      if (!allowed.includes(ex.role)) throw new Error("Этого пользователя менеджер удалить не может");
+      const drv = await dbList("drivers");
+      const myDrvIds = new Set(drv.filter(d => inMy(d.city || "astana")).map(d => d.id));
+      const exOk = ex.role === "rep" ? ((ex.cities && ex.cities.length) ? ex.cities : [ex.city || "astana"]).every(c => inMy(c)) : myDrvIds.has(ex.driverId);
+      if (!exOk) throw new Error("Это не ваш подчинённый");
+      await logChange(u, "delete", "users", ex);
+      return dbDelete("users", id);
+    }
+    throw new Error("Нет прав на удаление");
+  }
   if (u.role === "rep") {
     // Торгпред удаляет только своё
     if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); return dbDelete("clients", id); }
     if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!cli || cli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
     if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || cli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); return dbDelete("payments", id); }
+    if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
     throw new Error("Нет прав на удаление");
   }
   if (u.role !== "director") throw new Error("Нет прав на удаление");

@@ -2,7 +2,9 @@
 // Файлы с _ в начале Vercel НЕ превращает в эндпоинты — это просто модуль.
 import crypto from "crypto";
 
-export const SUPA_URL = "https://lemcpwgmsvsvrrxpzjgx.supabase.co";
+// Адрес базы можно переопределить переменной окружения (полигон/стейджинг смотрит на свою базу).
+// Без переменной — рабочая (боевая) база, как было: живой сайт ведёт себя без изменений.
+export const SUPA_URL = process.env.SUPABASE_URL || "https://lemcpwgmsvsvrrxpzjgx.supabase.co";
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const AUTH_SECRET = process.env.AUTH_SECRET;
 

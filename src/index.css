@@ -6,6 +6,11 @@
 html, body { font-family: 'Open Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 .font-display { font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif; }
 
+/* Плавное появление выпадающих меню (переключатель города и т.п.) */
+@keyframes darad-pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+.animate-pop { animation: darad-pop .13s cubic-bezier(.2,.8,.3,1); transform-origin: top center; }
+@media (prefers-reduced-motion: reduce) { .animate-pop { animation: none; } }
+
 /* Samsung/мобильные: страница не должна ездить влево-вправо — клипаем горизонтальный overflow */
 html, body { overflow-x: hidden; width: 100%; max-width: 100%; }
 #root { overflow-x: hidden; }
