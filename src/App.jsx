@@ -2138,7 +2138,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
 // 🧪 Лаборатория — журнал анализов муки. Каждая строка — партия с показателями.
 // Марка/сорт — свободные поля (анализируем и свою, и чужую муку), с подсказками.
 // «🤖 Разобрать анализ» — вставить протокол/сообщение, ИИ заполнит поля (как разбор заявки).
-function LabTab({ lab = [], reload, canEdit = true }) {
+function LabTab({ lab = [], reload, canEdit = true, activeCity = DEFAULT_CITY, multiCity = false }) {
   const blank = { prod_date: TODAY(), brand: BRANDS[0], grade: GRADES[0], moisture: "", whiteness: "", gluten: "", idk_group: "", idk: "", falling_number: "", extra: "", note: "" };
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2156,7 +2156,7 @@ function LabTab({ lab = [], reload, canEdit = true }) {
 
   const save = async () => {
     setSaving(true);
-    try { await dbUpsert("lab", { id: editId || uid(), ...form }); setShowAdd(false); await reload("lab"); }
+    try { await dbUpsert("lab", { id: editId || uid(), ...form, city: form.city || activeCity }); setShowAdd(false); await reload("lab"); }
     catch (e) { alert("⚠️ Не сохранилось: " + ((e && e.message) || e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
@@ -2189,7 +2189,8 @@ function LabTab({ lab = [], reload, canEdit = true }) {
     setAiBusy(false);
   };
 
-  const rows = [...lab].sort((a, b) => (b.prod_date || "").localeCompare(a.prod_date || "") || String(b.id).localeCompare(String(a.id)));
+  const cityLab = multiCity ? lab.filter(x => (x.city || DEFAULT_CITY) === activeCity) : lab; // в мультигороде — анализы своего города
+  const rows = [...cityLab].sort((a, b) => (b.prod_date || "").localeCompare(a.prod_date || "") || String(b.id).localeCompare(String(a.id)));
   const ql = q.trim().toLowerCase();
   const shown = ql ? rows.filter(r => `${r.brand} ${r.grade} ${r.extra} ${r.prod_date}`.toLowerCase().includes(ql)) : rows;
 
@@ -3409,14 +3410,17 @@ function RepAnalytics({ delivered = [], allMine = [], payments = [] }) {
 }
 function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expensesProp = [], payments: paymentsProp = [], clients = [], users = [], role = "director", reload = () => {}, canEdit = true, cities = [], notes = [], curCity = "all" }) {
   const repMode = role === "rep"; // торгпред видит СВОЮ аналитику: считаем только по его заявкам (не foreign)
-  const [selCities, setSelCities] = useState(curCity && curCity !== "all" ? [curCity] : []); // по умолчанию — город из шапки
-  useEffect(() => { setSelCities(curCity && curCity !== "all" ? [curCity] : []); }, [curCity]); // отчёт следует за выбранным в шапке городом
-  const multiCityR = cities.length > 1 && !repMode; // селектор городов — только владельцу при нескольких городах
-  const cityOk = cid => selCities.length === 0 || selCities.includes(cid);
-  // Отчёт считается по выбранным городам: заявки (город фиксирован на заявке/клиенте), оплаты (город клиента), расходы (город расхода).
-  const orders = (repMode ? ordersProp.filter(o => !o.foreign) : ordersProp).filter(o => !multiCityR || cityOk(orderCity(o, clients)));
-  const payments = (paymentsProp || []).filter(p => { if (!multiCityR) return true; const cl = clients.find(c => c.id === p.clientId); return cityOk(cl ? clientCity(cl) : DEFAULT_CITY); });
-  const expenses = (expensesProp || []).filter(x => !multiCityR || cityOk(x.city || DEFAULT_CITY));
+  const [selCities, setSelCities] = useState([]); // свой выбор городов отчёта ([] = все доступные). Не зависит от шапки.
+  // Города, доступные пользователю: владелец/просмотр — все, менеджер — только свои, торгпред — нет селектора.
+  const allowedIds = cities.map(c => c.id);
+  const cityScoped = allowedIds.length > 0 && !repMode; // ограничивать ли отчёт по городам (в т.ч. менеджер с одним городом)
+  const showCitySel = allowedIds.length > 1 && !repMode; // селектор показываем, только если есть из чего выбирать
+  const scopedIds = selCities.length ? selCities.filter(id => allowedIds.includes(id)) : allowedIds; // выбранные, но в пределах доступных
+  const cityOk = cid => !cityScoped || scopedIds.includes(cid);
+  // Отчёт считается по доступным/выбранным городам: заявки (город фиксирован на заявке/клиенте), оплаты (город клиента), расходы (город расхода).
+  const orders = (repMode ? ordersProp.filter(o => !o.foreign) : ordersProp).filter(o => cityOk(orderCity(o, clients)));
+  const payments = (paymentsProp || []).filter(p => { if (!cityScoped) return true; const cl = clients.find(c => c.id === p.clientId); return cityOk(cl ? clientCity(cl) : DEFAULT_CITY); });
+  const expenses = (expensesProp || []).filter(x => cityOk(x.city || DEFAULT_CITY));
   const toggleCity = id => setSelCities(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   const [selRep, setSelRep] = useState(""); // директор: подробная аналитика по выбранному торгпреду
   const [openCity, setOpenCity] = useState(""); // раскрытый город в сводке «По городам» (показать что чаще берут)
@@ -3651,7 +3655,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
           <Inp type="date" value={to} onChange={e => setTo(e.target.value)} />
         </div>
       )}
-      {multiCityR && (
+      {showCitySel && (
         <div className="flex gap-1.5 flex-wrap items-center">
           <span className="text-xs font-semibold text-amber-800 flex items-center gap-1 mr-1"><Icon name="globe" size={13} />Города:</span>
           <button onClick={() => setSelCities([])} className={`text-xs font-medium px-3 py-1.5 rounded-full ${selCities.length === 0 ? "bg-amber-500 text-white" : "bg-white text-gray-600 border border-gray-200"}`}>Все</button>
@@ -3699,7 +3703,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
         </div>
       )}
 
-      {multiCityR && (
+      {showCitySel && (
         <div className="bg-white border border-gray-100 rounded-2xl p-4">
           <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5 mb-3"><Icon name="globe" size={16} />По городам <span className="text-xs font-normal text-gray-400">· за период · нажми город — что чаще берут</span></div>
           <div className="space-y-2">
@@ -4185,12 +4189,13 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
   };
 
   const totalKg = t => (t.items || []).reduce((s, i) => s + itemKg(i), 0);
-  const sorted = [...trucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
+  const cityTrucks = multiCity ? trucks.filter(t => (t.city || DEFAULT_CITY) === activeCity) : trucks; // в мультигороде — поставки в свой город
+  const sorted = [...cityTrucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
   const waLink = n => "https://wa.me/" + String(n || "").replace(/\D/g, "");
 
   // Выгрузка в Excel (CSV) по выбранному месяцу: фуры на склад + прямые фуры с Караганды клиенту.
   const itemsText = t => (t.items || []).map(i => `${i.brand} ${i.grade} ${i.bag_kg}кг — ${fmt(itemKg(i))} кг`).join("; ");
-  const monthTrucks = trucks.filter(t => (t.date || "").slice(0, 7) === expMonth).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const monthTrucks = cityTrucks.filter(t => (t.date || "").slice(0, 7) === expMonth).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const monthDirect = (orders || []).filter(o => o.fromKaraganda && (o.date || "").slice(0, 7) === expMonth).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const monthLabel = () => { const [y, m] = expMonth.split("-"); return `${["","янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"][Number(m)]}.${y}`; };
   const exportExcel = () => {
@@ -4737,7 +4742,7 @@ function LoginScreen({ onLogin }) {
 
 // 💵 Касса (подотчётные деньги): тебе дали сумму — ты тратишь, всегда виден остаток.
 // Полностью отдельно от расходов компании и отчётов склада.
-function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = {}, isOwner = false, fullOwner = false, canEdit = true, reload }) {
+function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = {}, isOwner = false, fullOwner = false, canEdit = true, reload, activeCity = DEFAULT_CITY, multiCity = false }) {
   const [showAdd, setShowAdd] = useState(false);
   const [dir, setDir] = useState("out"); // in — приход (дали), out — трата
   const [editItem, setEditItem] = useState(null); // редактируемая запись (null = новая)
@@ -4754,8 +4759,16 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
   const ownerIdOf = x => x.userId || legacyOwnerId;
   const uCity = uid => { const u = users.find(x => x.id === uid); return (u && u.city) || ""; };
   const kassaLabel = k => `${k.city ? cityName(notes, k.city) + " · " : ""}${k.name || "?"} · ${ROLES[k.role] || k.role || ""}`;
+  // Фильтр по городу: при переключении города владелец видит кассы только этого города
+  // (свою кассу — всегда). У человека берём cities[] или город; без города (напр. другой директор) — не привязан к городу.
+  const kassaInCity = k => {
+    if (!multiCity) return true;
+    if (k.id === me.id) return true;
+    const cs = (k.cities && k.cities.length) ? k.cities : (k.city ? [k.city] : []);
+    return cs.includes(activeCity);
+  };
   const kassaList = (isOwner
-    ? users.filter(u => u.hasKassa || u.role === "director")
+    ? users.filter(u => (u.hasKassa || u.role === "director") && kassaInCity(u))
     : ((myRecord && myRecord.id) ? [myRecord] : [{ id: me.id, name: me.name, role: me.role, city: (myRecord && myRecord.city) || "" }]))
     .slice().sort((a, b) => kassaLabel(a).localeCompare(kassaLabel(b)));
   const [selUid, setSelUid] = useState(me.id);
@@ -5115,21 +5128,21 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
 
 // 🎯 Личная CRM: потенциальные клиенты + личные записи и статус. Только для админа.
 // Договорился — «→ В клиенты» переносит карточку в обычную вкладку «Клиенты».
-function CrmTab({ crm = [], clients = [], reload }) {
+function CrmTab({ crm = [], clients = [], reload, activeCity = DEFAULT_CITY, multiCity = false }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState("all");
-  const blank = { name: "", contact: "", address: "", status: "new", note: "", next_date: "" };
+  const blank = { name: "", contact: "", address: "", status: "new", note: "", next_date: "", city: activeCity };
   const [form, setForm] = useState(blank);
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
-  const openEdit = c => { setEditId(c.id); setForm({ name: c.name || "", contact: c.contact || "", address: c.address || "", status: c.status || "new", note: c.note || "", next_date: c.next_date || "" }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setForm({ name: c.name || "", contact: c.contact || "", address: c.address || "", status: c.status || "new", note: c.note || "", next_date: c.next_date || "", city: c.city || activeCity }); setShowAdd(true); };
   const save = async () => {
     if (!form.name.trim()) { alert("Впиши название/имя."); return; }
     setSaving(true);
     try {
-      await dbUpsert("crm", { id: editId || uid(), name: form.name.trim(), contact: form.contact.trim(), address: form.address.trim(), status: form.status, note: form.note.trim(), next_date: form.next_date });
+      await dbUpsert("crm", { id: editId || uid(), name: form.name.trim(), contact: form.contact.trim(), address: form.address.trim(), status: form.status, note: form.note.trim(), next_date: form.next_date, city: form.city || activeCity });
       setShowAdd(false); setEditId(null); setForm(blank); await reload("crm");
     } catch (e) { const m = String((e && e.message) || e); alert(/crm|PGRST205/i.test(m) ? "Нужно один раз создать таблицу «crm» в Supabase — попроси инструкцию." : "⚠️ Не сохранилось: " + m); }
     finally { setSaving(false); }
@@ -5139,25 +5152,26 @@ function CrmTab({ crm = [], clients = [], reload }) {
   const toClient = async c => {
     if (!confirm(`Перенести «${c.name}» в обычную вкладку «Клиенты»? Карточку CRM после этого удалим.`)) return;
     try {
-      await dbUpsert("clients", { id: uid(), name: c.name, address: c.address || "", contact: c.contact || "", ownerId: "", prices: [] });
+      await dbUpsert("clients", { id: uid(), name: c.name, address: c.address || "", contact: c.contact || "", ownerId: "", prices: [], city: c.city || activeCity });
       await dbDelete("crm", c.id);
       await reload("clients"); await reload("crm");
       alert(`✓ «${c.name}» теперь в «Клиентах». Допиши цены и реквизиты там.`);
     } catch (e) { alert("⚠️ Не перенеслось: " + ((e && e.message) || e)); }
   };
 
-  const list = [...crm].filter(c => filter === "all" || c.status === filter);
+  const cityCrm = multiCity ? crm.filter(c => (c.city || DEFAULT_CITY) === activeCity) : crm;
+  const list = [...cityCrm].filter(c => filter === "all" || c.status === filter);
   // сортировка: сначала «позвонить»/«в работе», потом по дате следующего контакта
   const order = { call: 0, work: 1, meet: 2, new: 3, think: 4, deal: 5, reject: 6 };
   list.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || (a.next_date || "9999").localeCompare(b.next_date || "9999"));
-  const counts = {}; crm.forEach(c => { counts[c.status] = (counts[c.status] || 0) + 1; });
+  const counts = {}; cityCrm.forEach(c => { counts[c.status] = (counts[c.status] || 0) + 1; });
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between"><div><h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="target" size={17} />Мои потенциальные клиенты</h3><p className="text-xs text-gray-400">Личная база — заношу, кому продать, и веду записи по ним.</p></div><Btn onClick={openNew}>+ Добавить</Btn></div>
 
       <div className="flex flex-wrap gap-1.5">
-        <button onClick={() => setFilter("all")} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === "all" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Все · {crm.length}</button>
+        <button onClick={() => setFilter("all")} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === "all" ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Все · {cityCrm.length}</button>
         {CRM_STATUSES.map(s => counts[s.v] ? <button key={s.v} onClick={() => setFilter(s.v)} className={`px-3 py-1 rounded-full text-xs font-medium ${filter === s.v ? "bg-amber-500 text-white" : s.cls}`}>{s.label} · {counts[s.v]}</button> : null)}
       </div>
 
@@ -5179,8 +5193,8 @@ function CrmTab({ crm = [], clients = [], reload }) {
       )}
 
       <div className="space-y-2">
-        {crm.length === 0 && <div className="text-center py-12 text-gray-400">Пока пусто. Нажми «+ Добавить», чтобы занести первого.</div>}
-        {crm.length > 0 && list.length === 0 && <div className="text-center py-8 text-gray-400">В этом статусе никого нет.</div>}
+        {cityCrm.length === 0 && <div className="text-center py-12 text-gray-400">Пока пусто. Нажми «+ Добавить», чтобы занести первого.</div>}
+        {cityCrm.length > 0 && list.length === 0 && <div className="text-center py-8 text-gray-400">В этом статусе никого нет.</div>}
         {list.map(c => {
           const st = crmStatus(c.status);
           return (
@@ -5229,9 +5243,10 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
   };
   const del = async id => { if (!confirm("Удалить расход?")) return; try { await dbDelete("expenses", id); await reload("expenses"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
 
+  const cityExp = multiCity ? expenses.filter(x => (x.city || DEFAULT_CITY) === activeCity) : expenses; // в мультигороде — расходы своего города
   const now = new Date();
-  const monthTotal = expenses.filter(x => { const d = new Date(x.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); }).reduce((s, x) => s + (x.amount || 0), 0);
-  const sorted = [...expenses].sort((a, b) => b.date.localeCompare(a.date));
+  const monthTotal = cityExp.filter(x => { const d = new Date(x.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); }).reduce((s, x) => s + (x.amount || 0), 0);
+  const sorted = [...cityExp].sort((a, b) => b.date.localeCompare(a.date));
 
   return (
     <div className="space-y-5">
@@ -7590,7 +7605,7 @@ export default function App() {
           </div>
         </div>
       </div>
-      {showCityBar && (
+      {showCityBar && tab !== "reports" && (
         <div className="bg-amber-50 border-b border-amber-100 px-4 py-2">
           <div className="max-w-2xl mx-auto">
             <CityMenu cities={availableCities} city={city} notes={data.notes} onPick={pickCity} />
@@ -7615,20 +7630,20 @@ export default function App() {
             {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={data.stock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <div className="space-y-4">{canCity && <WarehouseSettings notes={data.notes} reload={reload} city={activeCity} multiCity={multiCity} cityLabel={cityName(data.notes, activeCity)} />}<StockTab stock={stockView} orders={stockOrdersView} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={canCity} activeCity={activeCity} curCity={curCity} notes={data.notes} multiCity={multiCity} allStock={data.stock} allOrderIds={allOrderIdSet} cities={cityList} /></div>}
-            {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} />}
+            {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} activeCity={activeCity} multiCity={multiCity} />}
             {tab === "revision" && (isDev || isCityMgr) && <RevisionTab stock={stockView} notes={data.notes} reload={reload} applyLocal={applyLocal} activeCity={activeCity} multiCity={multiCity} />}
             {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
-            {tab === "karaganda" && <KaragandaTab orders={data.orders} clients={data.clients} reload={reload} canEdit={isDirector || isCityMgr} />}
+            {tab === "karaganda" && <KaragandaTab orders={view.orders} clients={view.clients} reload={reload} canEdit={isDirector || isCityMgr} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
             {tab === "debts" && <DebtsTab orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={view.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={view.clients} orders={view.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={view.clients} orders={view.orders} />}
             {tab === "clients" && <ClientsTab clients={view.clients} orders={view.orders} payments={view.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep || isCityMgr} cities={cityList} activeCity={activeCity} />}
-            {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} />}
+            {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} activeCity={activeCity} multiCity={multiCity} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
-            {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} users={data.users} notes={data.notes} me={user} myRecord={myRecord} isOwner={isDirector || user.role === "viewer" || isCityMgr} fullOwner={isDirector || user.role === "viewer"} canEdit={user.role !== "viewer"} reload={reload} />}
+            {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} users={data.users} notes={data.notes} me={user} myRecord={myRecord} isOwner={isDirector || user.role === "viewer" || isCityMgr} fullOwner={isDirector || user.role === "viewer"} canEdit={user.role !== "viewer"} reload={reload} activeCity={activeCity} multiCity={multiCity} />}
             {/* Отчёты: селектор городов внутри (Все / выбранные). Данные передаём глобально, ReportsTab фильтрует по выбору. */}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={canCity} cities={availableCities} notes={data.notes} curCity={curCity} />}
             {tab === "cities" && <CitiesTab notes={data.notes} reload={reload} canEdit={isDirector} />}

@@ -66,7 +66,12 @@ export default async function handler(req, res) {
       // Если не был активен больше 30 минут — это новый «заход», пишем в журнал.
       // Вход по паролю бывает редко (токен живёт 30 дней), поэтому журнал ведём по заходам в приложение.
       if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 30 * 60000) {
-        try { await dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" }); } catch {}
+        try {
+          await dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" });
+          // Держим журнал компактным — не больше ~200 последних записей. Лишние (самые старые) чистим порциями.
+          const allLog = (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+          if (allLog.length > 200) for (const old of allLog.slice(200, 260)) { try { await dbDelete("logins", old.id); } catch {} }
+        } catch {}
       }
       try { await dbUpsert("users", { ...me, last_seen: new Date().toISOString() }); } catch {}
     }
@@ -170,7 +175,7 @@ export default async function handler(req, res) {
 async function listFor(u, table) {
   if (u.role === "director") {
     if (table === "users") return (await dbList("users")).map(({ passhash, ...rest }) => rest); // не отдаём хэши в браузер
-    if (table === "logins") return (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 300); // только свежие — не гоняем весь журнал
+    if (table === "logins") return (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 200); // только последние 200 — не гоняем весь журнал
     return await dbList(table);
   }
   if (u.role === "kgdmanager") {
