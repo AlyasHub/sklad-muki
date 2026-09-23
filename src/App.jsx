@@ -4755,7 +4755,9 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
   const [newKassaUid, setNewKassaUid] = useState("");
   // 💳 Кассы: у каждого человека своя. Владелец видит все (город · имя · роль) и переключается;
   // остальные — только свою. Старые записи без владельца показываем в кассе директора.
-  const legacyOwnerId = (users.find(u => u.role === "director") || {}).id || me.id;
+  // Старые записи без владельца закрепляем за ОСНОВАТЕЛЕМ (самый ранний директор по id) —
+  // детерминированно, чтобы касса не «прыгала» между директорами при разном порядке загрузки.
+  const legacyOwnerId = (users.filter(u => u.role === "director").sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || {}).id || me.id;
   const ownerIdOf = x => x.userId || legacyOwnerId;
   const uCity = uid => { const u = users.find(x => x.id === uid); return (u && u.city) || ""; };
   const kassaLabel = k => `${k.city ? cityName(notes, k.city) + " · " : ""}${k.name || "?"} · ${ROLES[k.role] || k.role || ""}`;

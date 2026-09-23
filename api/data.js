@@ -60,20 +60,28 @@ export default async function handler(req, res) {
     u.driverId = me.driverId || u.driverId || "";
     u.city = me.city || "";
     u.cities = (me.cities && me.cities.length) ? me.cities : (me.city ? [me.city] : []);
-    // Последняя активность (не чаще раза в 5 минут).
+    // Последняя активность + журнал заходов.
     // ВАЖНО: пишем с await — Vercel замораживает функцию после ответа, и «фоновые» записи погибают.
-    if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 5 * 60000) {
-      // Если не был активен больше 30 минут — это новый «заход», пишем в журнал.
-      // Вход по паролю бывает редко (токен живёт 30 дней), поэтому журнал ведём по заходам в приложение.
-      if (!me.last_seen || Date.now() - Date.parse(me.last_seen) > 30 * 60000) {
-        try {
-          await dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" });
-          // Держим журнал компактным — не больше ~200 последних записей. Лишние (самые старые) чистим порциями.
-          const allLog = (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
-          if (allLog.length > 200) for (const old of allLog.slice(200, 260)) { try { await dbDelete("logins", old.id); } catch {} }
-        } catch {}
+    // «Заход» в журнал пишем РАЗ В ДЕНЬ на человека (по календарю Астаны, UTC+5) — иначе журнал
+    // «молчал»: приложение (PWA) висит открытым и фоном обновляется, поэтому 30-минутный простой
+    // почти не наступает и новые записи не появлялись. Плюс отмечаем возвращение после >30 минут.
+    {
+      const nowMs = Date.now();
+      const todayAstana = new Date(nowMs + 5 * 3600000).toISOString().slice(0, 10);
+      const gap5 = !me.last_seen || nowMs - Date.parse(me.last_seen) > 5 * 60000;
+      const gap30 = !me.last_seen || nowMs - Date.parse(me.last_seen) > 30 * 60000;
+      const newDay = me.last_open_day !== todayAstana;
+      if (gap5 || newDay) {
+        if (newDay || gap30) {
+          try {
+            await dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" });
+            // Держим журнал компактным — не больше ~200 последних записей. Лишние (самые старые) чистим порциями.
+            const allLog = (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+            if (allLog.length > 200) for (const old of allLog.slice(200, 260)) { try { await dbDelete("logins", old.id); } catch {} }
+          } catch {}
+        }
+        try { await dbUpsert("users", { ...me, last_seen: new Date().toISOString(), last_open_day: todayAstana }); } catch {}
       }
-      try { await dbUpsert("users", { ...me, last_seen: new Date().toISOString() }); } catch {}
     }
     if (op === "loadAll") {
       // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
