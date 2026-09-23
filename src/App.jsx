@@ -206,7 +206,7 @@ const PRIMARY_NAV = {
 // Разделы, осмысленные для города-мельницы (Караганда): отправки по городам + отчёт/расходы, без клиентов/заявок/WhatsApp.
 const MILL_TABS = ["stock", "supply", "reports", "expenses", "cashbox", "cities", "access"];
 const NAV_ICON = { today: "home", calendar: "calendar", stock: "box", lab: "flask", revision: "calculator", clients: "building", crm: "target", reactivate: "bell", reports: "chart", debts: "wallet", contracts: "file", invoice: "receipt", orders: "clipboard", supply: "truck", karaganda: "store", kgdm: "folder", drivers: "cash", mysalary: "wallet", expenses: "expense", cashbox: "coin", cities: "globe", access: "settings" };
-const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", revision: "Ревизия", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Караганда", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", cities: "Города", access: "Доступ" };
+const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", revision: "Ревизия", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Под клиента", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", cities: "Города", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт", "Отруби"];
 const WEIGHTS = [5, 10, 25, 35, 50];
@@ -6485,12 +6485,12 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
     try { await Promise.all(ordersArr.map(o => dbUpsert("orders", { ...o, status }))); await reload("orders"); }
     catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
-  const del = async o => { if (!confirm("Удалить эту отгрузку из Караганды?")) return; try { await dbDelete("orders", o.id); await reload("orders"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
+  const del = async o => { if (!confirm("Удалить эту прямую отгрузку клиенту?")) return; try { await dbDelete("orders", o.id); await reload("orders"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
 
   return (
     <div className="space-y-4">
       <div className="bg-orange-50 border border-orange-100 rounded-2xl p-4 text-sm text-orange-800">
-        Склад <b>Караганда</b>. Фуры идут <b>напрямую клиентам</b>. Записываешь как <b>«в пути»</b>; когда отправили — жмёшь <b>«Отгружено»</b>, и сумма идёт клиенту в долг и в отчёт. Склад в Астане <b>не трогается</b>.
+Фура едет <b>напрямую клиенту</b> (минуя склад Астаны). Записываешь как <b>«в пути»</b>; когда отправили — жмёшь <b>«Отгружено»</b>, и сумма идёт клиенту в долг и в отчёт. Склад в Астане <b>не трогается</b>.
       </div>
       <div className="flex items-center justify-between">
         <div className="text-sm text-gray-500">Всего отправлено: <b>{fmt(totalKg)} кг</b></div>
@@ -6498,7 +6498,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
       </div>
 
       {showAdd && (
-        <Modal title="Отгрузка из Караганды" onClose={() => setShowAdd(false)}>
+        <Modal title="Отгрузка напрямую клиенту" onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
             <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
             <div className="grid grid-cols-2 gap-3">
