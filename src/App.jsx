@@ -2138,7 +2138,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
 // 🧪 Лаборатория — журнал анализов муки. Каждая строка — партия с показателями.
 // Марка/сорт — свободные поля (анализируем и свою, и чужую муку), с подсказками.
 // «🤖 Разобрать анализ» — вставить протокол/сообщение, ИИ заполнит поля (как разбор заявки).
-function LabTab({ lab = [], reload, canEdit = true, activeCity = DEFAULT_CITY, multiCity = false }) {
+function LabTab({ lab = [], reload, canEdit = true, activeCity = DEFAULT_CITY, multiCity = false, curCity = "all" }) {
   const blank = { prod_date: TODAY(), brand: BRANDS[0], grade: GRADES[0], moisture: "", whiteness: "", gluten: "", idk_group: "", idk: "", falling_number: "", extra: "", note: "" };
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2189,7 +2189,7 @@ function LabTab({ lab = [], reload, canEdit = true, activeCity = DEFAULT_CITY, m
     setAiBusy(false);
   };
 
-  const cityLab = multiCity ? lab.filter(x => (x.city || DEFAULT_CITY) === activeCity) : lab; // в мультигороде — анализы своего города
+  const cityLab = (multiCity && curCity !== "all") ? lab.filter(x => (x.city || DEFAULT_CITY) === curCity) : lab; // город выбран — его анализы; «Все города» — все
   const rows = [...cityLab].sort((a, b) => (b.prod_date || "").localeCompare(a.prod_date || "") || String(b.id).localeCompare(String(a.id)));
   const ql = q.trim().toLowerCase();
   const shown = ql ? rows.filter(r => `${r.brand} ${r.grade} ${r.extra} ${r.prod_date}`.toLowerCase().includes(ql)) : rows;
@@ -4076,7 +4076,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   );
 }
 
-function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], notes = [], multiCity = false, activeCity = DEFAULT_CITY, toCities = null, fromCities = null }) {
+function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], notes = [], multiCity = false, activeCity = DEFAULT_CITY, curCity = "all", toCities = null, fromCities = null }) {
   const [showAdd, setShowAdd] = useState(false);
   const [expMonth, setExpMonth] = useState(TODAY().slice(0, 7)); // месяц для выгрузки в Excel (YYYY-MM)
   const [editId, setEditId] = useState(null);
@@ -4189,7 +4189,7 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
   };
 
   const totalKg = t => (t.items || []).reduce((s, i) => s + itemKg(i), 0);
-  const cityTrucks = multiCity ? trucks.filter(t => (t.city || DEFAULT_CITY) === activeCity) : trucks; // в мультигороде — поставки в свой город
+  const cityTrucks = (multiCity && curCity !== "all") ? trucks.filter(t => (t.city || DEFAULT_CITY) === curCity) : trucks; // город выбран — поставки в него; «Все города» — все
   const sorted = [...cityTrucks].sort((a, b) => ((a.status === "принята") === (b.status === "принята") ? (b.date || "").localeCompare(a.date || "") : a.status === "принята" ? 1 : -1));
   const waLink = n => "https://wa.me/" + String(n || "").replace(/\D/g, "");
 
@@ -4742,7 +4742,7 @@ function LoginScreen({ onLogin }) {
 
 // 💵 Касса (подотчётные деньги): тебе дали сумму — ты тратишь, всегда виден остаток.
 // Полностью отдельно от расходов компании и отчётов склада.
-function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = {}, isOwner = false, fullOwner = false, canEdit = true, reload, activeCity = DEFAULT_CITY, multiCity = false }) {
+function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = {}, isOwner = false, fullOwner = false, canEdit = true, reload, activeCity = DEFAULT_CITY, multiCity = false, curCity = "all" }) {
   const [showAdd, setShowAdd] = useState(false);
   const [dir, setDir] = useState("out"); // in — приход (дали), out — трата
   const [editItem, setEditItem] = useState(null); // редактируемая запись (null = новая)
@@ -4764,10 +4764,10 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
   // Фильтр по городу: при переключении города владелец видит кассы только этого города
   // (свою кассу — всегда). У человека берём cities[] или город; без города (напр. другой директор) — не привязан к городу.
   const kassaInCity = k => {
-    if (!multiCity) return true;
-    if (k.id === me.id) return true;
-    const cs = (k.cities && k.cities.length) ? k.cities : (k.city ? [k.city] : []);
-    return cs.includes(activeCity);
+    if (!multiCity || curCity === "all") return true;         // «Все города» — показываем все кассы
+    if (k.id === me.id || k.role === "director") return true; // владелец и директора — вне привязки к городу (видят/видны везде)
+    const cs = (k.cities && k.cities.length) ? k.cities : [k.city || DEFAULT_CITY]; // без города — считаем городом по умолчанию
+    return cs.includes(curCity);
   };
   const kassaList = (isOwner
     ? users.filter(u => (u.hasKassa || u.role === "director") && kassaInCity(u))
@@ -5130,7 +5130,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
 
 // 🎯 Личная CRM: потенциальные клиенты + личные записи и статус. Только для админа.
 // Договорился — «→ В клиенты» переносит карточку в обычную вкладку «Клиенты».
-function CrmTab({ crm = [], clients = [], reload, activeCity = DEFAULT_CITY, multiCity = false }) {
+function CrmTab({ crm = [], clients = [], reload, activeCity = DEFAULT_CITY, multiCity = false, curCity = "all" }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -5161,7 +5161,7 @@ function CrmTab({ crm = [], clients = [], reload, activeCity = DEFAULT_CITY, mul
     } catch (e) { alert("⚠️ Не перенеслось: " + ((e && e.message) || e)); }
   };
 
-  const cityCrm = multiCity ? crm.filter(c => (c.city || DEFAULT_CITY) === activeCity) : crm;
+  const cityCrm = (multiCity && curCity !== "all") ? crm.filter(c => (c.city || DEFAULT_CITY) === curCity) : crm; // город выбран — его CRM; «Все города» — все
   const list = [...cityCrm].filter(c => filter === "all" || c.status === filter);
   // сортировка: сначала «позвонить»/«в работе», потом по дате следующего контакта
   const order = { call: 0, work: 1, meet: 2, new: 3, think: 4, deal: 5, reject: 6 };
@@ -5225,7 +5225,7 @@ function CrmTab({ crm = [], clients = [], reload, activeCity = DEFAULT_CITY, mul
   );
 }
 
-function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities = [], activeCity = DEFAULT_CITY, multiCity = false, notes = [] }) {
+function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities = [], activeCity = DEFAULT_CITY, multiCity = false, curCity = "all", notes = [] }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -5245,7 +5245,7 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
   };
   const del = async id => { if (!confirm("Удалить расход?")) return; try { await dbDelete("expenses", id); await reload("expenses"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
 
-  const cityExp = multiCity ? expenses.filter(x => (x.city || DEFAULT_CITY) === activeCity) : expenses; // в мультигороде — расходы своего города
+  const cityExp = (multiCity && curCity !== "all") ? expenses.filter(x => (x.city || DEFAULT_CITY) === curCity) : expenses; // город выбран — его расходы; «Все города» — все
   const now = new Date();
   const monthTotal = cityExp.filter(x => { const d = new Date(x.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); }).reduce((s, x) => s + (x.amount || 0), 0);
   const sorted = [...cityExp].sort((a, b) => b.date.localeCompare(a.date));
@@ -7632,9 +7632,9 @@ export default function App() {
             {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={data.stock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <div className="space-y-4">{canCity && <WarehouseSettings notes={data.notes} reload={reload} city={activeCity} multiCity={multiCity} cityLabel={cityName(data.notes, activeCity)} />}<StockTab stock={stockView} orders={stockOrdersView} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={canCity} activeCity={activeCity} curCity={curCity} notes={data.notes} multiCity={multiCity} allStock={data.stock} allOrderIds={allOrderIdSet} cities={cityList} /></div>}
-            {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} activeCity={activeCity} multiCity={multiCity} />}
+            {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {tab === "revision" && (isDev || isCityMgr) && <RevisionTab stock={stockView} notes={data.notes} reload={reload} applyLocal={applyLocal} activeCity={activeCity} multiCity={multiCity} />}
-            {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
+            {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} curCity={curCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
             {tab === "karaganda" && <KaragandaTab orders={view.orders} clients={view.clients} reload={reload} canEdit={isDirector || isCityMgr} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
             {tab === "debts" && <DebtsTab orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} />}
@@ -7642,10 +7642,10 @@ export default function App() {
             {tab === "invoice" && <SoftInvoiceTab clients={view.clients} orders={view.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={view.clients} orders={view.orders} />}
             {tab === "clients" && <ClientsTab clients={view.clients} orders={view.orders} payments={view.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep || isCityMgr} cities={cityList} activeCity={activeCity} />}
-            {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} activeCity={activeCity} multiCity={multiCity} />}
+            {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
-            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
-            {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} users={data.users} notes={data.notes} me={user} myRecord={myRecord} isOwner={isDirector || user.role === "viewer" || isCityMgr} fullOwner={isDirector || user.role === "viewer"} canEdit={user.role !== "viewer"} reload={reload} activeCity={activeCity} multiCity={multiCity} />}
+            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} curCity={curCity} notes={data.notes} />}
+            {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} users={data.users} notes={data.notes} me={user} myRecord={myRecord} isOwner={isDirector || user.role === "viewer" || isCityMgr} fullOwner={isDirector || user.role === "viewer"} canEdit={user.role !== "viewer"} reload={reload} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {/* Отчёты: селектор городов внутри (Все / выбранные). Данные передаём глобально, ReportsTab фильтрует по выбору. */}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={canCity} cities={availableCities} notes={data.notes} curCity={curCity} />}
             {tab === "cities" && <CitiesTab notes={data.notes} reload={reload} canEdit={isDirector} />}

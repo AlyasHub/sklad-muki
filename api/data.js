@@ -291,7 +291,10 @@ async function listFor(u, table) {
     if (!["clients", "orders", "stock", "drivers", "payments", "notes", "users", "cashbox"].includes(table)) return [];
     if (table === "users") return (await dbList("users")).filter(x => x.id === u.uid).map(({ passhash, ...r }) => r); // только своя карточка (город, есть ли касса)
     if (table === "cashbox") return (await dbList("cashbox")).filter(x => x.userId === u.uid); // только СВОЯ касса
-    if (table === "stock") return (await dbList("stock")).map(({ price_per_kg, ...s }) => s); // без закупочных цен
+    if (table === "stock") { // склад ТОЛЬКО своего города (не видит Караганду/другие) и без закупочных цен
+      const myC = (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+      return (await dbList("stock")).filter(s => myC.includes((s && s.city) || "astana")).map(({ price_per_kg, ...s }) => s);
+    }
     if (table === "drivers") return (await dbList("drivers")).map(({ rate_per_kg, load_rate_per_kg, ...d }) => d); // без ставок
     if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse"); // адрес склада для маршрута
     const myClients = await dbFindBy("clients", "ownerId", u.uid);
