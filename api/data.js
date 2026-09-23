@@ -1,6 +1,6 @@
 // Привратник базы. Все чтения/записи идут сюда. Проверяет токен и роль,
 // отдаёт только то, что роли положено. Водитель НЕ может прочитать клиентов/цены/чужие отгрузки.
-import { verifyToken, signToken, dbList, dbGet, dbFindBy, dbUpsert, dbDelete, configured, orderLinkSig } from "./_lib.js";
+import { verifyToken, signToken, dbList, dbSelect, dbDeleteWhere, dbGet, dbFindBy, dbUpsert, dbDelete, configured, orderLinkSig } from "./_lib.js";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -75,9 +75,10 @@ export default async function handler(req, res) {
         if (newDay || gap30) {
           try {
             await dbUpsert("logins", { id: uid(), userId: me.id, name: me.name, username: me.username, role: me.role, at: new Date().toISOString(), kind: "open" });
-            // Держим журнал компактным — не больше ~200 последних записей. Лишние (самые старые) чистим порциями.
-            const allLog = (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
-            if (allLog.length > 200) for (const old of allLog.slice(200, 260)) { try { await dbDelete("logins", old.id); } catch {} }
+            // Держим журнал компактным — оставляем только 200 свежих (по id ≈ по времени),
+            // всё, что старее 200-й записи, удаляем одним запросом. id монотонно растёт (uid на Date.now()).
+            const newest = await dbSelect("logins", "select=id&order=id.desc&limit=200");
+            if (newest.length >= 200) { const edge = newest[newest.length - 1].id; await dbDeleteWhere("logins", `id=lt.${encodeURIComponent(edge)}`); }
           } catch {}
         }
         try { await dbUpsert("users", { ...me, last_seen: new Date().toISOString(), last_open_day: todayAstana }); } catch {}
@@ -183,7 +184,7 @@ export default async function handler(req, res) {
 async function listFor(u, table) {
   if (u.role === "director") {
     if (table === "users") return (await dbList("users")).map(({ passhash, ...rest }) => rest); // не отдаём хэши в браузер
-    if (table === "logins") return (await dbList("logins")).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))).slice(0, 200); // только последние 200 — не гоняем весь журнал
+    if (table === "logins") return (await dbSelect("logins", "select=data&order=id.desc&limit=200")).map(r => r.data); // только последние 200 (по id ≈ по времени) — не тянем весь журнал
     return await dbList(table);
   }
   if (u.role === "kgdmanager") {

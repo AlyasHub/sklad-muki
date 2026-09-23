@@ -39,10 +39,35 @@ export function verifyToken(token) {
 }
 
 // Доступ к таблицам сервисным ключом (обходит RLS — поэтому только на сервере)
+// ВАЖНО: PostgREST/Supabase отдаёт максимум 1000 строк за один ответ. Раньше запрос был без
+// постраничности — большие таблицы (журнал входов, склад, заявки) молча ОБРЕЗАЛИСЬ до 1000,
+// причём в порядке вставки (сначала старые) → терялись свежие данные и «плыл» баланс склада.
+// Теперь тянем ВСЕ строки постранично (по 1000), по стабильному порядку id.
 export async function dbList(table) {
-  const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=*`, { headers: svc() });
+  const PAGE = 1000;
+  let out = [], from = 0;
+  for (;;) {
+    const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=data&order=id.asc&limit=${PAGE}&offset=${from}`, { headers: svc() });
+    if (!r.ok) throw new Error(await r.text());
+    const rows = await r.json();
+    for (const row of rows) out.push(row.data);
+    if (rows.length < PAGE) break;
+    from += PAGE;
+    if (from > 500000) break; // предохранитель от бесконечного цикла
+  }
+  return out;
+}
+// Выборка по готовому запросу (сортировка/лимит) — чтобы не тянуть всю таблицу, когда нужны
+// только свежие N записей (например, последние 200 входов). Возвращает сырые строки.
+export async function dbSelect(table, query) {
+  const r = await fetch(`${SUPA_URL}/rest/v1/${table}?${query}`, { headers: svc() });
   if (!r.ok) throw new Error(await r.text());
-  return (await r.json()).map(row => row.data);
+  return await r.json();
+}
+// Удаление по условию (не по одному id) — например, подчистить старые записи журнала одним запросом.
+export async function dbDeleteWhere(table, filter) {
+  const r = await fetch(`${SUPA_URL}/rest/v1/${table}?${filter}`, { method: "DELETE", headers: { ...svc(), Prefer: "return=minimal" } });
+  if (!r.ok) throw new Error(await r.text());
 }
 // Одна запись по id — вместо «скачать всю таблицу и найти». Быстро (индекс по первичному ключу).
 export async function dbGet(table, id) {
