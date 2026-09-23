@@ -3407,9 +3407,10 @@ function RepAnalytics({ delivered = [], allMine = [], payments = [] }) {
     </div>
   );
 }
-function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expensesProp = [], payments: paymentsProp = [], clients = [], users = [], role = "director", reload = () => {}, canEdit = true, cities = [], notes = [] }) {
+function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expensesProp = [], payments: paymentsProp = [], clients = [], users = [], role = "director", reload = () => {}, canEdit = true, cities = [], notes = [], curCity = "all" }) {
   const repMode = role === "rep"; // торгпред видит СВОЮ аналитику: считаем только по его заявкам (не foreign)
-  const [selCities, setSelCities] = useState([]); // выбранные города отчёта ([] = все города)
+  const [selCities, setSelCities] = useState(curCity && curCity !== "all" ? [curCity] : []); // по умолчанию — город из шапки
+  useEffect(() => { setSelCities(curCity && curCity !== "all" ? [curCity] : []); }, [curCity]); // отчёт следует за выбранным в шапке городом
   const multiCityR = cities.length > 1 && !repMode; // селектор городов — только владельцу при нескольких городах
   const cityOk = cid => selCities.length === 0 || selCities.includes(cid);
   // Отчёт считается по выбранным городам: заявки (город фиксирован на заявке/клиенте), оплаты (город клиента), расходы (город расхода).
@@ -7629,7 +7630,7 @@ export default function App() {
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
             {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} users={data.users} notes={data.notes} me={user} myRecord={myRecord} isOwner={isDirector || user.role === "viewer" || isCityMgr} fullOwner={isDirector || user.role === "viewer"} canEdit={user.role !== "viewer"} reload={reload} />}
             {/* Отчёты: селектор городов внутри (Все / выбранные). Данные передаём глобально, ReportsTab фильтрует по выбору. */}
-            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={canCity} cities={availableCities} notes={data.notes} />}
+            {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={canCity} cities={availableCities} notes={data.notes} curCity={curCity} />}
             {tab === "cities" && <CitiesTab notes={data.notes} reload={reload} canEdit={isDirector} />}
             {tab === "access" && <UsersTab users={data.users} drivers={data.drivers} logins={data.logins} notes={data.notes} reload={reload} currentUser={user} activeCity={activeCity} />}
           </>
