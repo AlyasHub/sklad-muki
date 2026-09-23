@@ -4445,7 +4445,7 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
         role: form.role,
         driverId,
         group_name: form.role === "rep" ? form.group_name.trim() : "",
-        cities: (form.role === "rep" || form.role === "citymanager") ? (form.cities || []) : [], // города доступа (галочки)
+        cities: ["rep", "citymanager", "viewer", "accountant"].includes(form.role) ? (form.cities || []) : [], // города доступа (галочки); пусто у наблюдателя/бухгалтера = все города
         city: (form.role === "rep" || form.role === "citymanager") ? ((form.cities && form.cities[0]) || DEFAULT_CITY) : "", // первичный город (для обратной совместимости)
         dev: false, // разработчик назначается только по имени (Альяс) — флагом не задаётся
         last_seen: existing?.last_seen, // не терять отметку «был в сети» при редактировании
@@ -4482,17 +4482,22 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
               {brigadirCards.length === 0 && <p className="text-xs text-amber-600">Сначала создай бригадира — потом привяжешь к нему водителей. Или оставь «самостоятельный».</p>}
             </>)}
             {form.role === "rep" && <Inp label="Название группы клиентов" value={form.group_name} onChange={e => setForm({ ...form, group_name: e.target.value })} placeholder={`напр. Клиенты ${form.name || "торгпреда"}`} />}
-            {multiCity && (form.role === "rep" || form.role === "citymanager") && (
-              <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Города{form.role === "citymanager" ? " (можно несколько)" : ""}</label>
-                <div className="flex flex-wrap gap-2">
-                  {cityChoices.map(c => {
-                    const on = (form.cities || []).includes(c.id);
-                    return <button type="button" key={c.id} onClick={() => setForm(f => ({ ...f, cities: on ? (f.cities || []).filter(x => x !== c.id) : [...(f.cities || []), c.id] }))} className={`px-3 py-1.5 rounded-full text-sm font-medium border transition ${on ? "bg-amber-500 text-white border-amber-500" : "bg-white text-gray-600 border-gray-200"}`}>{on ? "✓ " : ""}{c.name}</button>;
-                  })}
+            {multiCity && ["rep", "citymanager", "viewer", "accountant"].includes(form.role) && (() => {
+              const optional = form.role === "viewer" || form.role === "accountant"; // наблюдателю/бухгалтеру город можно не задавать
+              const cityOpts = optional ? cities.filter(c => !isManager || myCities.includes(c.id)) : cityChoices; // им доступна и мельница (Караганда)
+              return (
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Доступные города{optional ? " (пусто = все города)" : (form.role === "citymanager" ? " (можно несколько)" : "")}</label>
+                  <div className="flex flex-wrap gap-2">
+                    {cityOpts.map(c => {
+                      const on = (form.cities || []).includes(c.id);
+                      return <button type="button" key={c.id} onClick={() => setForm(f => ({ ...f, cities: on ? (f.cities || []).filter(x => x !== c.id) : [...(f.cities || []), c.id] }))} className={`px-3 py-1.5 rounded-full text-sm font-medium border transition ${on ? "bg-amber-500 text-white border-amber-500" : "bg-white text-gray-600 border-gray-200"}`}>{on ? "✓ " : ""}{c.name}</button>;
+                    })}
+                  </div>
+                  {optional && <p className="text-xs text-gray-400 mt-1">Не отмечено ни одного города — видит все города. Отметь — будет видеть только их.</p>}
                 </div>
-              </div>
-            )}
+              );
+            })()}
             {form.role === "rep" && <p className="text-xs text-gray-500">Торгпред заводит СВОИХ клиентов (наших не видит), создаёт им заявки для нашего водителя и ведёт их долги. Склад общий. Его клиенты автоматически привязываются к его городу.</p>}
             {form.role === "citymanager" && <p className="text-xs text-gray-500">Менеджер города видит и ведёт ТОЛЬКО свой город (клиенты, заявки, склад, водители, отчёты этого города). Как мини-директор по одному городу.</p>}
             {err && <p className="text-red-500 text-sm">{err}</p>}
@@ -7556,7 +7561,10 @@ export default function App() {
   // 🏙 Мультигород: владелец переключает все города; менеджер — только свои (галочки в карточке).
   const cityList = citiesOf(data.notes);
   const myCities = (myRecord.cities && myRecord.cities.length) ? myRecord.cities : (myRecord.city ? [myRecord.city] : []);
-  const availableCities = (isDirector || user.role === "viewer") ? cityList : (isCityMgr ? cityList.filter(c => myCities.includes(c.id)) : []);
+  const availableCities = isDirector ? cityList
+    : user.role === "viewer" ? (myCities.length ? cityList.filter(c => myCities.includes(c.id)) : cityList) // наблюдателю с городами — только они; без городов — все
+    : isCityMgr ? cityList.filter(c => myCities.includes(c.id))
+    : [];
   const showCityBar = availableCities.length > 1;
   const curCity = showCityBar ? city : (isCityMgr ? (myCities[0] || DEFAULT_CITY) : "all"); // менеджер с 1 городом — его; торгпред/остальные — без фильтра
   // Город роли: торгпред/менеджер — их город (выбранный или первый), водитель/бригадир — из карточки; остальные — по умолчанию.

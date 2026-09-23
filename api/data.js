@@ -199,14 +199,37 @@ async function listFor(u, table) {
     return [];
   }
   if (u.role === "viewer") {
-    // Директор-просмотрщик: видит все данные, но НЕ пароли, НЕ журнал входов и НЕ личную CRM админа
+    // Директор-просмотрщик: видит все данные, но НЕ пароли, НЕ журнал входов и НЕ личную CRM админа.
+    // Если ему назначили города (u.cities) — видит только их; пусто = все города (как раньше).
     if (table === "logins" || table === "crm") return [];
     if (table === "users") return (await dbList("users")).map(({ passhash, ...rest }) => rest); // без хэшей — нужно для названий групп клиентов
-    return await dbList(table);
+    const rows = await dbList(table);
+    const myC = (u.cities && u.cities.length) ? u.cities : null;
+    if (!myC || ["notes", "kgd_clients", "kgd_docs", "cashbox"].includes(table)) return rows; // общие/кассу не режем (кассу фильтрует сам экран по городу)
+    const inC = c => myC.includes(c || "astana");
+    if (table === "clients") return rows.filter(c => inC(c.city));
+    if (table === "drivers") return rows.filter(d => inC(d.city));
+    if (table === "expenses") return rows.filter(x => inC(x.city));
+    if (table === "trucks") return rows.filter(t => inC(t.city));
+    if (table === "stock") return rows.filter(s => inC(s.city));
+    if (table === "lab") return rows.filter(x => !x.city || inC(x.city));
+    if (table === "orders") { const cmap = new Map((await dbList("clients")).map(c => [c.id, c])); return rows.filter(o => inC(o.city || (cmap.get(o.clientId) || {}).city)); }
+    if (table === "payments") { const ids = new Set((await dbList("clients")).filter(c => inC(c.city)).map(c => c.id)); return rows.filter(p => ids.has(p.clientId)); }
+    return rows;
   }
   if (u.role === "accountant") {
-    // + payments (только чтение): нужно для точного долга клиента в календаре/долгах (иначе долг завышен)
-    return ["orders", "clients", "drivers", "payments"].includes(table) ? await dbList(table) : [];
+    // + payments (только чтение): нужно для точного долга клиента в календаре/долгах (иначе долг завышен).
+    // Если назначили города (u.cities) — только они; пусто = все (как раньше).
+    if (!["orders", "clients", "drivers", "payments"].includes(table)) return [];
+    const rows = await dbList(table);
+    const myC = (u.cities && u.cities.length) ? u.cities : null;
+    if (!myC) return rows;
+    const inC = c => myC.includes(c || "astana");
+    if (table === "clients") return rows.filter(c => inC(c.city));
+    if (table === "drivers") return rows.filter(d => inC(d.city));
+    if (table === "orders") { const cmap = new Map((await dbList("clients")).map(c => [c.id, c])); return rows.filter(o => inC(o.city || (cmap.get(o.clientId) || {}).city)); }
+    if (table === "payments") { const ids = new Set((await dbList("clients")).filter(c => inC(c.city)).map(c => c.id)); return rows.filter(p => ids.has(p.clientId)); }
+    return rows;
   }
   if (u.role === "citymanager") {
     // 🏙 Менеджер города: как директор, но ТОЛЬКО по своим городам (u.cities — из свежей карточки).
