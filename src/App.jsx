@@ -3552,7 +3552,8 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   const expectedWk = {};
   for (let i = 1; i <= 7; i++) { const d = new Date(now); d.setDate(d.getDate() + i); const m = demandWD[d.getDay()] || {}; Object.entries(m).forEach(([p, kg]) => { expectedWk[p] = (expectedWk[p] || 0) + kg / 8; }); }
   const stockByProd = {};
-  stock.forEach(s => { const p = `${s.brand} ${s.grade} ${s.bag_kg}кг`; stockByProd[p] = (stockByProd[p] || 0) + s.weight_kg; }); // каждая фасовка отдельно
+  const millSet = new Set(citiesOf(notes).filter(c => c.kind === "mill").map(c => c.id)); // мельница пишет отправки «в минус» — в остаток складов не считаем
+  stock.filter(s => !millSet.has(stockCity(s))).forEach(s => { const p = `${s.brand} ${s.grade} ${s.bag_kg}кг`; stockByProd[p] = (stockByProd[p] || 0) + s.weight_kg; }); // каждая фасовка отдельно
   const restock = Object.entries(expectedWk).map(([p, kg]) => ({ p, exp: Math.round(kg), st: Math.round(stockByProd[p] || 0) })).filter(x => x.exp > 0).sort((a, b) => (b.exp - b.st) - (a.exp - a.st));
   const byClientWD = {};
   recentDel.forEach(o => { const c = o.clientName || "?"; const wd = new Date(o.date).getDay(); const k = byClientWD[c] = byClientWD[c] || {}; const v = k[wd] = k[wd] || { kg: 0, days: new Set() }; v.kg += o.bags * o.bag_kg; v.days.add(o.date); });
@@ -7585,6 +7586,11 @@ export default function App() {
   // Склад — по конкретному городу-складу (activeCity): при «Все города» показываем склад города по умолчанию.
   const stockView = multiCity ? data.stock.filter(s => stockCity(s) === activeCity) : data.stock;
   const stockOrdersView = multiCity ? data.orders.filter(o => orderCity(o, data.clients) === activeCity) : data.orders;
+  // Остаток для проверки «хватит ли муки под заявки» (Календарь): выбран город — его склад;
+  // «Все города» — сумма складов БЕЗ мельницы. Мельница пишет отправки фур «в минус» (безлимитный
+  // источник) — если её сложить со складами, минус съедает остаток и появляется ложное «на складе 0».
+  const millIds = new Set(cityList.filter(c => c.kind === "mill").map(c => c.id));
+  const calStock = !multiCity ? data.stock : curCity === "all" ? data.stock.filter(s => !millIds.has(stockCity(s))) : stockView;
   const allOrderIdSet = new Set(data.orders.map(o => o.id)); // все id заявок — для проверки «сирот» на складе (не по городскому срезу)
   // 🏭 Мельница (Караганда): показываем только разделы про отправки/склад, без клиентов/заявок.
   const isMillCity = curCity !== "all" && (cityList.find(c => c.id === activeCity)?.kind === "mill");
@@ -7637,7 +7643,7 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "today" && <TodayTab orders={view.orders} clients={view.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep || isCityMgr} openSignal={openOrderSignal} activeCity={activeCity} />}
-            {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={data.stock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} />}
+            {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={calStock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <div className="space-y-4">{canCity && <WarehouseSettings notes={data.notes} reload={reload} city={activeCity} multiCity={multiCity} cityLabel={cityName(data.notes, activeCity)} />}<StockTab stock={stockView} orders={stockOrdersView} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={canCity} activeCity={activeCity} curCity={curCity} notes={data.notes} multiCity={multiCity} allStock={data.stock} allOrderIds={allOrderIdSet} cities={cityList} /></div>}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
