@@ -2856,16 +2856,28 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                   {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-flex items-center gap-1"><Icon name="box" size={12} />{c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
                   {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
                 </div>
-                {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}><Icon name="trash" size={15} /></Btn></div>}
+                {canEdit && (!isRep || c.ownerId === myUid) && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}><Icon name="trash" size={15} /></Btn></div>}
               </div>
               <div className="flex gap-2 flex-wrap">
                 <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}><Icon name="clipboard" size={15} />История и оплаты</Btn>
-                {canEdit && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}><Icon name="link" size={15} />Заказ-ссылка</Btn>}
+                {canEdit && (!isRep || c.ownerId === myUid) && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}><Icon name="link" size={15} />Заказ-ссылка</Btn>}
               </div>
             </div>
             );
           };
-          if (isRep) return shown.map(card); // торгпред: только свои, плоским списком
+          if (isRep) {
+            // торгпред: свои — плоским списком; если админ открыл ему чужие группы — разделы «Мои» / «Наши» / группы торгпредов
+            const others = shown.filter(c => c.ownerId !== myUid);
+            if (!others.length) return shown.map(card);
+            const rGroups = [{ key: "mine", label: "Мои клиенты", items: shown.filter(c => c.ownerId === myUid) }, { key: "", label: houseName, items: others.filter(c => !c.ownerId) },
+              ...repUsers.filter(u => u.id !== myUid).map(u => ({ key: u.id, label: u.group_name || u.name, items: others.filter(c => c.ownerId === u.id) }))];
+            return rGroups.filter(g => g.items.length).map(g => (
+              <div key={g.key || "house"} className="space-y-3">
+                <h4 className="font-semibold text-gray-700 flex items-center gap-1.5 pt-1 border-b border-gray-100 pb-1"><Icon name={g.key === "" ? "home" : "user"} size={15} />{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
+                {g.items.map(card)}
+              </div>
+            ));
+          }
           // Админ/директор: разделы по группам с переименованием
           const groups = [{ key: "", label: houseName, items: shown.filter(c => !c.ownerId) }, ...repUsers.map(u => ({ key: u.id, label: u.group_name || u.name, items: shown.filter(c => c.ownerId === u.id) }))];
           const orphan = shown.filter(c => c.ownerId && !repUsers.some(u => u.id === c.ownerId));
@@ -4405,15 +4417,15 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
   const myCities = (meRec.cities && meRec.cities.length) ? meRec.cities : (meRec.city ? [meRec.city] : []);
   const roleOptions = isManager ? [["brigadir", ROLES.brigadir], ["driver", ROLES.driver], ["rep", ROLES.rep]] : Object.entries(ROLES);
   const cityChoices = cities.filter(c => c.kind !== "mill" && (!isManager || myCities.includes(c.id)));
-  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "", foremanId: "", group_name: "", dev: false, cities: [] });
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "accountant", driverId: "", foremanId: "", group_name: "", dev: false, cities: [], seeGroups: [] });
   // Карточки водителей/бригадиров (для зарплаты): бригадир создаётся сразу, водители привязываются к нему.
   const usedByOthers = new Set(users.filter(u => u.id !== editId && u.driverId).map(u => u.driverId));
   const brigadirCards = drivers.filter(d => d.salary_type === "brigadir");
   const freeBrigadirCards = brigadirCards.filter(d => !usedByOthers.has(d.id));
   const freeDriverCards = drivers.filter(d => (d.salary_type === "kg" || d.salary_type === "junior") && !usedByOthers.has(d.id) && (!form.foremanId || d.foremanId === form.foremanId));
 
-  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: isManager ? "rep" : "accountant", driverId: "", foremanId: "", group_name: "", dev: false, cities: [] }); setErr(""); setShowAdd(true); };
-  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "", foremanId: (drivers.find(d => d.id === u.driverId)?.foremanId) || "", group_name: u.group_name || "", dev: !!u.dev, cities: (u.cities && u.cities.length) ? u.cities : (u.city ? [u.city] : []) }); setErr(""); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setForm({ name: "", username: "", password: "", role: isManager ? "rep" : "accountant", driverId: "", foremanId: "", group_name: "", dev: false, cities: [], seeGroups: [] }); setErr(""); setShowAdd(true); };
+  const openEdit = u => { setEditId(u.id); setForm({ name: u.name, username: u.username, password: "", role: u.role, driverId: u.driverId || "", foremanId: (drivers.find(d => d.id === u.driverId)?.foremanId) || "", group_name: u.group_name || "", dev: !!u.dev, cities: (u.cities && u.cities.length) ? u.cities : (u.city ? [u.city] : []), seeGroups: Array.isArray(u.seeGroups) ? u.seeGroups : [] }); setErr(""); setShowAdd(true); };
 
   const saveUser = async () => {
     setErr("");
@@ -4448,6 +4460,7 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
         group_name: form.role === "rep" ? form.group_name.trim() : "",
         cities: ["rep", "citymanager", "viewer", "accountant"].includes(form.role) ? (form.cities || []) : [], // города доступа (галочки); пусто у наблюдателя/бухгалтера = все города
         city: (form.role === "rep" || form.role === "citymanager") ? ((form.cities && form.cities[0]) || DEFAULT_CITY) : "", // первичный город (для обратной совместимости)
+        seeGroups: form.role === "rep" ? (form.seeGroups || []) : [], // торгпред: чьих ещё клиентов видит ("_main" = наши, id торгпреда)
         dev: false, // разработчик назначается только по имени (Альяс) — флагом не задаётся
         last_seen: existing?.last_seen, // не терять отметку «был в сети» при редактировании
       });
@@ -4499,7 +4512,25 @@ function UsersTab({ users, drivers, logins = [], notes = [], reload, currentUser
                 </div>
               );
             })()}
-            {form.role === "rep" && <p className="text-xs text-gray-500">Торгпред заводит СВОИХ клиентов (наших не видит), создаёт им заявки для нашего водителя и ведёт их долги. Склад общий. Его клиенты автоматически привязываются к его городу.</p>}
+            {form.role === "rep" && !isManager && (() => {
+              // Какие ещё группы клиентов открыть торгпреду (кроме своих): «Наши» + группы других торгпредов
+              const houseName = ((notes || []).find(n => n.id === "clientgroups") || {}).houseName || "Наши клиенты";
+              const groupOpts = [{ id: "_main", label: houseName }, ...users.filter(x => x.role === "rep" && x.id !== editId).map(x => ({ id: x.id, label: x.group_name || x.name }))];
+              const sg = form.seeGroups || [];
+              return (
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Видит ещё клиентов (кроме своих)</label>
+                  <div className="flex flex-wrap gap-2">
+                    {groupOpts.map(g => {
+                      const on = sg.includes(g.id);
+                      return <button type="button" key={g.id} onClick={() => setForm(f => ({ ...f, seeGroups: on ? (f.seeGroups || []).filter(x => x !== g.id) : [...(f.seeGroups || []), g.id] }))} className={`px-3 py-1.5 rounded-full text-sm font-medium border transition ${on ? "bg-amber-500 text-white border-amber-500" : "bg-white text-gray-600 border-gray-200"}`}>{on ? "✓ " : ""}{g.label}</button>;
+                    })}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">Только в его городах. Отмеченных клиентов видит полностью (цены, долги), может делать им заявки и вносить оплаты; менять или удалять их карточки не может.</p>
+                </div>
+              );
+            })()}
+            {form.role === "rep" && <p className="text-xs text-gray-500">Торгпред заводит СВОИХ клиентов, создаёт им заявки для нашего водителя и ведёт их долги. Чужих клиентов видит, только если отметить выше. Его клиенты автоматически привязываются к его городу.</p>}
             {form.role === "citymanager" && <p className="text-xs text-gray-500">Менеджер города видит и ведёт ТОЛЬКО свой город (клиенты, заявки, склад, водители, отчёты этого города). Как мини-директор по одному городу.</p>}
             {err && <p className="text-red-500 text-sm">{err}</p>}
           </div>

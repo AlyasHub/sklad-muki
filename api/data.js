@@ -60,6 +60,7 @@ export default async function handler(req, res) {
     u.driverId = me.driverId || u.driverId || "";
     u.city = me.city || "";
     u.cities = (me.cities && me.cities.length) ? me.cities : (me.city ? [me.city] : []);
+    u.seeGroups = Array.isArray(me.seeGroups) ? me.seeGroups : []; // торгпред: чьих ещё клиентов видит ("_main" = наши, или id торгпредов)
     // Последняя активность + журнал заходов.
     // ВАЖНО: пишем с await — Vercel замораживает функцию после ответа, и «фоновые» записи погибают.
     // «Заход» в журнал пишем РАЗ В ДЕНЬ на человека (по календарю Астаны, UTC+5) — иначе журнал
@@ -179,6 +180,31 @@ export default async function handler(req, res) {
   } catch (e) {
     return res.status(400).json({ error: String(e.message || e) });
   }
+}
+
+// 👀 Видимость клиентов для торгпреда. Всегда — свои (ownerId = он). Дополнительно — группы,
+// которые ему открыл админ (u.seeGroups: "_main" = «Наши клиенты» без владельца, или id другого
+// торгпреда), но ТОЛЬКО в городах торгпреда. Видимых клиентов он видит полностью (цены, долги)
+// и может вести по ним заявки/оплаты; править/удалять карточку — только свою.
+const repCities = u => (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+async function repVisibleClients(u) {
+  const sg = u.seeGroups || [];
+  if (!sg.length) return await dbFindBy("clients", "ownerId", u.uid);
+  const [all, users] = await Promise.all([dbList("clients"), dbList("users")]);
+  const repIds = new Set(users.filter(x => x.role === "rep").map(x => x.id));
+  const myC = repCities(u);
+  return all.filter(c => c.ownerId === u.uid || (myC.includes(c.city || "astana") &&
+    (c.ownerId ? (repIds.has(c.ownerId) && sg.includes(c.ownerId)) : sg.includes("_main"))));
+}
+async function repSeesClient(u, cli) {
+  if (!cli) return false;
+  if (cli.ownerId === u.uid) return true;
+  const sg = u.seeGroups || [];
+  if (!sg.length || !repCities(u).includes(cli.city || "astana")) return false;
+  if (!cli.ownerId) return sg.includes("_main");
+  if (!sg.includes(cli.ownerId)) return false;
+  const owner = await dbGet("users", cli.ownerId);
+  return !!owner && owner.role === "rep";
 }
 
 async function listFor(u, table) {
@@ -312,17 +338,21 @@ async function listFor(u, table) {
     // водители (без ставок). ВСЕ заявки видит как расписание (куда/кого/что/адрес/2ГИС/водитель),
     // но чужие — ТОЛЬКО ДЛЯ ЧТЕНИЯ и БЕЗ цен. Нужно, чтобы он видел маршруты и не уводил водителя.
     if (!["clients", "orders", "stock", "drivers", "payments", "notes", "users", "cashbox"].includes(table)) return [];
-    if (table === "users") return (await dbList("users")).filter(x => x.id === u.uid).map(({ passhash, ...r }) => r); // только своя карточка (город, есть ли касса)
+    if (table === "users") { // своя карточка (город, касса) + имена торгпредов, чьих клиентов ему открыли (для названий групп)
+      const sg = u.seeGroups || [];
+      return (await dbList("users")).filter(x => x.id === u.uid || (x.role === "rep" && sg.includes(x.id)))
+        .map(x => x.id === u.uid ? (({ passhash, ...r }) => r)(x) : { id: x.id, name: x.name, role: x.role, group_name: x.group_name || "" });
+    }
     if (table === "cashbox") return (await dbList("cashbox")).filter(x => x.userId === u.uid); // только СВОЯ касса
     if (table === "stock") { // склад ТОЛЬКО своего города (не видит Караганду/другие) и без закупочных цен
       const myC = (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
       return (await dbList("stock")).filter(s => myC.includes((s && s.city) || "astana")).map(({ price_per_kg, ...s }) => s);
     }
     if (table === "drivers") return (await dbList("drivers")).map(({ rate_per_kg, load_rate_per_kg, ...d }) => d); // без ставок
-    if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse"); // адрес склада для маршрута
-    const myClients = await dbFindBy("clients", "ownerId", u.uid);
+    if (table === "notes") return (await dbList("notes")).filter(n => n.id === "warehouse" || n.id === "clientgroups"); // адрес склада для маршрута + название группы «Наши»
+    const myClients = await repVisibleClients(u); // свои + открытые ему группы (в его городах)
     const myIds = new Set(myClients.map(c => c.id));
-    if (table === "clients") return myClients; // только свои — чужие карточки (контакты/цены/реквизиты) не отдаём
+    if (table === "clients") return myClients; // чужие (не открытые) карточки — контакты/цены/реквизиты — не отдаём
     if (table === "orders") {
       const [all, allCli] = await Promise.all([dbList("orders"), dbList("clients")]);
       const cliMap = new Map(allCli.map(c => [c.id, c]));
@@ -454,6 +484,7 @@ async function upsertFor(u, table, item) {
         group_name: item.role === "rep" ? (item.group_name || "") : "",
         cities: item.role === "rep" ? cs : [], city: item.role === "rep" ? (cs[0] || "") : "",
         hasKassa: !!item.hasKassa, dev: false, last_seen: ex?.last_seen,
+        seeGroups: Array.isArray(ex?.seeGroups) ? ex.seeGroups : [], // «чьих клиентов видит» задаёт только админ — менеджер не меняет
         created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name,
       };
       const out = await dbUpsert("users", clean);
@@ -519,8 +550,8 @@ async function upsertFor(u, table, item) {
       const ownClientless = !item.clientId && (item.isSample || item.trial || item.oneOff) && (!existing || !existing.clientId);
       if (!ownClientless) {
         const cli = await dbGet("clients", item.clientId);
-        if (!cli || cli.ownerId !== u.uid) throw new Error("Заявку можно создавать только для своих клиентов");
-        if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); }
+        if (!(await repSeesClient(u, cli))) throw new Error("Заявку можно создавать только для своих клиентов");
+        if (existing) { const exCli = await dbGet("clients", existing.clientId); if (!(await repSeesClient(u, exCli))) throw new Error("Это не ваша заявка"); }
       } else if (existing && existing.created_by !== u.uid) {
         throw new Error("Это не ваша заявка"); // чужую/ничейную клиентскую-пустую заявку править нельзя
       }
@@ -540,9 +571,9 @@ async function upsertFor(u, table, item) {
     }
     if (table === "payments") {
       const cli = await dbGet("clients", item.clientId);
-      if (!cli || cli.ownerId !== u.uid) throw new Error("Оплату можно вносить только своим клиентам");
-      const ex = await dbGet("payments", item.id); // существующую оплату можно править только свою
-      if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!exCli || exCli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); }
+      if (!(await repSeesClient(u, cli))) throw new Error("Оплату можно вносить только своим клиентам");
+      const ex = await dbGet("payments", item.id); // существующую оплату можно править только по видимому клиенту
+      if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!(await repSeesClient(u, exCli))) throw new Error("Это не ваша оплата"); }
       return dbUpsert("payments", item);
     }
     // Касса: торгпред ведёт ТОЛЬКО свою (userId = он сам). Поля санитизируем, чужую кассу трогать нельзя.
@@ -624,8 +655,8 @@ async function deleteFor(u, table, id) {
   if (u.role === "rep") {
     // Торгпред удаляет только своё
     if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); return dbDelete("clients", id); }
-    if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!cli || cli.ownerId !== u.uid) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
-    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || cli.ownerId !== u.uid) throw new Error("Это не ваша оплата"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); return dbDelete("payments", id); }
+    if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!(await repSeesClient(u, cli))) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !(await repSeesClient(u, cli))) throw new Error("Это не ваша оплата"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); return dbDelete("payments", id); }
     if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
     throw new Error("Нет прав на удаление");
   }
