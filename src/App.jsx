@@ -377,7 +377,8 @@ async function parseOrderWithAI(text, clients) {
       today: TODAY(),
       tomorrow: TOMORROW(),
       weekday: TODAY_WEEKDAY(),
-      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, address: c.address, contact_name: c.contact_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand, products: (c.prices || []).map(p => ({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg })) })),
+      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, address: c.address, contact_name: c.contact_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand, products: (c.prices || []).map(p => ({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg })),
+        points: (c.points || []).map(p => ({ id: p.id, label: p.label || "", address: p.address || "" })) })), // доп. адреса доставки — чтобы разбор понял «это на этот адрес, это на тот»
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -1367,7 +1368,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
       const parsed = await parseOrderWithAI(aiText, clients);
       setAiResult(parsed.map(p => {
         const found = clients.find(c => c.name.toLowerCase().includes(p.clientName.toLowerCase()) || p.clientName.toLowerCase().includes(c.name.toLowerCase()));
-        return { ...p, trial: !!p.trial, clientId: found?.id || null, clientFound: found?.name || p.clientName, price_per_kg: p.trial ? 0 : (found ? getPrice(found, p.brand, p.grade, p.bag_kg) : null) };
+        return { ...p, pointId: validPoint(found, p.pointId), trial: !!p.trial, clientId: found?.id || null, clientFound: found?.name || p.clientName, price_per_kg: p.trial ? 0 : (found ? getPrice(found, p.brand, p.grade, p.bag_kg) : null) };
       }));
     } catch { setAiError("Не удалось разобрать. Попробуй ещё раз."); }
     setAiLoading(false);
@@ -1377,7 +1378,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
     setSaving(true);
     try {
       for (const p of aiResult) {
-        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: "", status: "новая" });
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, pointId: validPoint(clients.find(c => c.id === p.clientId), p.pointId), brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, driverId: "", status: "новая" });
       }
       setAiResult(null); setAiText(""); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + e.message); }
@@ -1472,6 +1473,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           {aiResult.map((p, i) => (
             <div key={i} className="bg-gray-50 rounded-xl p-4 mb-3 text-sm space-y-1">
               <div className="flex items-center gap-2"><span className="font-semibold">{p.clientFound}</span>{!p.clientId && <Badge color="red">Не в базе</Badge>}{p.trial && <Badge color="yellow">на пробу</Badge>}</div>
+              {p.clientId && <PointSel client={clients.find(x => x.id === p.clientId)} value={p.pointId} onChange={v => setAiResult(prev => prev.map((it, idx) => idx === i ? { ...it, pointId: v } : it))} />}
               <div className="text-gray-600">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
               <div className="text-gray-600">Дата: {p.date} · {p.trial ? <span className="text-orange-600 font-medium">бесплатно (на пробу)</span> : <>Цена: {p.price_per_kg ? fmt(p.price_per_kg) + " тг/кг" : <span className="text-red-500">не найдена</span>}</>}</div>
             </div>
@@ -6909,9 +6911,14 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
         let matchBy = "имя";
         let matches = clients.filter(c => c.name.toLowerCase().includes(q) || q.includes(c.name.toLowerCase()));
         if (!matches.length) { matchBy = "организация"; matches = clients.filter(c => (c.org_name || "").toLowerCase().includes(q) || (c.contact_name || "").toLowerCase() === q); }
-        if (!matches.length && q.length >= 4) { matchBy = "адрес"; matches = clients.filter(c => c.address && (c.address.toLowerCase().includes(q) || q.includes(c.address.toLowerCase()))); }
+        const hit = s => !!s && (s.toLowerCase().includes(q) || q.includes(s.toLowerCase()));
+        // по адресу ищем и в основном, и в доп. адресах доставки клиента
+        if (!matches.length && q.length >= 4) { matchBy = "адрес"; matches = clients.filter(c => hit(c.address) || (c.points || []).some(pt => hit(pt.address) || hit(pt.label))); }
         const chosen = matches.length === 1 ? matches[0] : null; // если совпало несколько (тёзки/похожие адреса) — пусть выберет вручную
-        return { ...p, trial: !!p.trial, matchBy, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
+        // 📍 Точка доставки: что вернул разбор (только если она реально есть у клиента); если клиента нашли по доп. адресу — эта точка
+        let pointId = validPoint(chosen, p.pointId);
+        if (chosen && !pointId && matchBy === "адрес" && !hit(chosen.address)) pointId = ((chosen.points || []).find(pt => hit(pt.address) || hit(pt.label)) || {}).id || "";
+        return { ...p, pointId, trial: !!p.trial, matchBy, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       });
       setAiResult(mapped);
       // Самовывоз/контроль/грузчик — из разбора (можно поправить вручную ниже)
@@ -6926,19 +6933,20 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const chooseClient = (i, clientId) => setAiResult(prev => prev.map((it, idx) => {
     if (idx !== i) return it;
     const c = clients.find(x => x.id === clientId);
-    return { ...it, clientId, clientFound: c?.name || it.clientFound, price_per_kg: it.trial ? 0 : (c ? priceFor(c, it.brand, it.grade, it.bag_kg) : null) };
+    return { ...it, clientId, pointId: validPoint(c, it.pointId), clientFound: c?.name || it.clientFound, price_per_kg: it.trial ? 0 : (c ? priceFor(c, it.brand, it.grade, it.bag_kg) : null) };
   }));
+  const choosePoint = (i, pointId) => setAiResult(prev => prev.map((it, idx) => idx === i ? { ...it, pointId } : it)); // поправить адрес позиции вручную
   const confirmAI = async () => {
     const ambiguous = aiResult.find(p => (p.matchOptions || []).length > 1 && !p.clientId);
     if (ambiguous) { alert(`Выбери, какой именно клиент «${ambiguous.clientFound}» — их несколько с таким названием.`); return; }
     if (!aiPickup && !aiDriver) { alert("Сначала выбери водителя — кто повезёт эту заявку."); return; } // при самовывозе грузчика можно определить позже
     // Дубль: такая же заявка (клиент+дата+товар+мешки) уже есть — предупреждаем
-    const dupAI = aiResult.find(p => p.clientId && orders.some(x => x.status !== "отменена" && x.clientId === p.clientId && x.date === p.date && x.brand === p.brand && x.grade === p.grade && String(x.bag_kg) === String(p.bag_kg) && Number(x.bags) === Number(p.bags)));
+    const dupAI = aiResult.find(p => p.clientId && orders.some(x => x.status !== "отменена" && x.clientId === p.clientId && (x.pointId || "") === (p.pointId || "") && x.date === p.date && x.brand === p.brand && x.grade === p.grade && String(x.bag_kg) === String(p.bag_kg) && Number(x.bags) === Number(p.bags)));
     if (dupAI && !confirm(`Похоже, у «${dupAI.clientFound}» уже есть такая заявка: ${dupAI.brand} ${dupAI.grade} ${dupAI.bag_kg}кг × ${dupAI.bags} на ${String(dupAI.date).split("-").reverse().join(".")}.\nВсё равно добавить? (проверь, не дубль ли)`)) return;
     setSaving(true);
     try {
       for (const p of aiResult) {
-        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", pickup: aiPickup, pickupWatch: aiPickup && aiPickupWatch, driverId: aiPickup ? "" : aiDriver, loaderId: aiPickup ? aiDriver : "", status: "новая" });
+        await dbUpsert("orders", { id: uid(), date: p.date, clientId: p.clientId, clientName: p.clientFound, pointId: validPoint(clients.find(c => c.id === p.clientId), p.pointId), brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.trial ? 0 : p.price_per_kg, trial: !!p.trial, note: p.note || "", pickup: aiPickup, pickupWatch: aiPickup && aiPickupWatch, driverId: aiPickup ? "" : aiDriver, loaderId: aiPickup ? aiDriver : "", status: "новая" });
       }
       setAiResult(null); setAiText(""); setAiDriver(""); setAiPickup(false); setAiPickupWatch(false); await reload("orders");
     } catch (e) { setAiError("Ошибка: " + (e && e.message ? e.message : e)); }
@@ -7111,9 +7119,10 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
               <div key={i} className="bg-gray-50 rounded-xl p-3 text-sm">
                 <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold">{p.clientFound}</span>{(p.matchOptions || []).length === 0 && <Badge color="red">Не в базе</Badge>}{p.clientId && p.matchBy === "адрес" && <Badge color="yellow">найден по адресу — проверь</Badge>}{p.trial && <Badge color="yellow">на пробу</Badge>}</div>
                 {p.clientId && (() => {
-                  const c = clients.find(x => x.id === p.clientId);
-                  return c && (c.org_name || c.address) ? <div className="text-xs text-gray-500 mt-0.5">{c.org_name || ""}{c.org_name && c.address ? " · " : ""}{c.address || ""}</div> : null;
+                  const c = clientAt(clients.find(x => x.id === p.clientId), p); // адрес выбранной точки доставки
+                  return c && (c.org_name || c.address) ? <div className="text-xs text-gray-500 mt-0.5">{c.org_name || ""}{c.org_name && c.address ? " · " : ""}{c.pointLabel ? <b className="text-gray-700 font-medium">{c.pointLabel}: </b> : null}{c.address || ""}</div> : null;
                 })()}
+                {p.clientId && <div className="mt-1"><PointSel client={clients.find(x => x.id === p.clientId)} value={p.pointId} onChange={v => choosePoint(i, v)} /></div>}
                 <div className="mt-1">
                   {(p.matchOptions || []).length > 1 && <div className="text-xs text-orange-600 mb-1">⚠️ Несколько похожих клиентов — выбери, какая именно организация:</div>}
                   <select value={p.clientId || ""} onChange={e => chooseClient(i, e.target.value)} className={`w-full border rounded-lg px-2 py-1.5 text-xs ${(p.matchOptions || []).length > 1 && !p.clientId ? "border-orange-300 bg-orange-50" : "border-gray-200 text-gray-500"}`}>
