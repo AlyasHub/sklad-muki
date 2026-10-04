@@ -57,7 +57,7 @@ const clientTime = c => (c && ((c.delivery_from && c.delivery_to) ? `${c.deliver
 const pointOf = (client, o) => (client && o && o.pointId && (client.points || []).find(p => p.id === o.pointId)) || null;
 const clientAt = (client, o) => {
   const p = pointOf(client, o);
-  if (!p) return client;
+  if (!p) return (client && client.address_label) ? { ...client, pointLabel: client.address_label } : client; // основной адрес — со своим названием, если задано
   return { ...client, address: p.address || "", gis_link: p.gis_link || "", coords: p.coords || null, coords_manual: p.coords_manual || "",
     access_note: p.access_note || "", contact: p.contact || client.contact, pointLabel: p.label || "",
     ...(p.work_hours ? { work_hours: p.work_hours, delivery_from: "", delivery_to: "", delivery_time: "" } : {}) };
@@ -377,7 +377,7 @@ async function parseOrderWithAI(text, clients) {
       today: TODAY(),
       tomorrow: TOMORROW(),
       weekday: TODAY_WEEKDAY(),
-      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, address: c.address, contact_name: c.contact_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand, products: (c.prices || []).map(p => ({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg })),
+      clients: clients.map(c => ({ name: c.name, org_name: c.org_name, address: c.address, address_label: c.address_label || "", contact_name: c.contact_name, default_bag_kg: c.default_bag_kg, default_brand: c.default_brand, products: (c.prices || []).map(p => ({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg })),
         points: (c.points || []).map(p => ({ id: p.id, label: p.label || "", address: p.address || "" })) })), // доп. адреса доставки — чтобы разбор понял «это на этот адрес, это на тот»
     }),
   });
@@ -445,7 +445,7 @@ function PointSel({ client, value, onChange }) {
   const pts = (client && client.points) || [];
   if (!pts.length) return null;
   return <Sel label="Адрес доставки" value={value || ""} onChange={e => onChange(e.target.value)}
-    options={[{ value: "", label: "Основной: " + (client.address || "—") }, ...pts.map(p => ({ value: p.id, label: (p.label ? p.label + " — " : "") + (p.address || "без адреса") }))]} />;
+    options={[{ value: "", label: (client.address_label ? client.address_label + " — " : "Основной: ") + (client.address || "—") }, ...pts.map(p => ({ value: p.id, label: (p.label ? p.label + " — " : "") + (p.address || "без адреса") }))]} />;
 }
 // pointId только если такая точка есть у этого клиента (защита от «чужой» точки после смены клиента)
 const validPoint = (client, pid) => (pid && client && (client.points || []).some(p => p.id === pid)) ? pid : "";
@@ -2642,8 +2642,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY, points: c.points || [] }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity, points: [] }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY, points: c.points || [], address_label: c.address_label || "" }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity, points: [], address_label: "" }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -2859,6 +2859,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                 <p className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="pin" size={14} />Ещё адреса доставки</p>
                 <button type="button" onClick={() => setForm(f => ({ ...f, points: [...(f.points || []), { id: uid(), label: "", address: "", gis_link: "", access_note: "", work_hours: "", contact: "" }] }))} className="text-xs text-amber-700 font-medium inline-flex items-center gap-1"><Icon name="plus" size={13} />Добавить адрес</button>
               </div>
+              <Inp label="Название основного адреса (по желанию)" value={form.address_label || ""} onChange={e => setForm({ ...form, address_label: e.target.value })} placeholder="напр. Магазин на Кенесары / Главный склад" />
               {!(form.points || []).length && <p className="text-xs text-gray-400">Если у клиента (одно ИП) несколько точек — добавь их здесь. Долг, цены и реквизиты останутся общими, а в заявке можно будет выбрать, куда везти.</p>}
               {(form.points || []).map((p, i) => {
                 const setP = (k, v) => setForm(f => ({ ...f, points: (f.points || []).map((x, j) => j === i ? { ...x, [k]: v, ...(k === "gis_link" ? { coords: null } : {}) } : x) }));
@@ -2910,7 +2911,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                   <div className="font-bold text-gray-900">{c.name}{cities.length > 1 && <span className="ml-2 text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full align-middle">{cityName(notes, clientCity(c))}</span>}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
                   {c.org_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="building" size={13} />{c.org_name}</div>}
                   {c.contact_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="user" size={13} />{c.contact_name}</div>}
-                  {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
+                  {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address_label ? <b className="text-gray-700 font-medium">{c.address_label}:</b> : null} {c.address}</div>}
                   {(c.points || []).map(p => <div key={p.id} className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{p.label ? <b className="text-gray-700 font-medium">{p.label}:</b> : null} {p.address || "—"}</div>)}
                   {c.work_hours && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="clock" size={13} />Работает: <b className="text-gray-700 font-medium">{c.work_hours}</b></div>}
                   {c.contact && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="phone" size={13} />{c.contact}</div>}
@@ -6913,11 +6914,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
         if (!matches.length) { matchBy = "организация"; matches = clients.filter(c => (c.org_name || "").toLowerCase().includes(q) || (c.contact_name || "").toLowerCase() === q); }
         const hit = s => !!s && (s.toLowerCase().includes(q) || q.includes(s.toLowerCase()));
         // по адресу ищем и в основном, и в доп. адресах доставки клиента
-        if (!matches.length && q.length >= 4) { matchBy = "адрес"; matches = clients.filter(c => hit(c.address) || (c.points || []).some(pt => hit(pt.address) || hit(pt.label))); }
+        if (!matches.length && q.length >= 4) { matchBy = "адрес"; matches = clients.filter(c => hit(c.address) || hit(c.address_label) || (c.points || []).some(pt => hit(pt.address) || hit(pt.label))); }
         const chosen = matches.length === 1 ? matches[0] : null; // если совпало несколько (тёзки/похожие адреса) — пусть выберет вручную
         // 📍 Точка доставки: что вернул разбор (только если она реально есть у клиента); если клиента нашли по доп. адресу — эта точка
         let pointId = validPoint(chosen, p.pointId);
-        if (chosen && !pointId && matchBy === "адрес" && !hit(chosen.address)) pointId = ((chosen.points || []).find(pt => hit(pt.address) || hit(pt.label)) || {}).id || "";
+        if (chosen && !pointId && matchBy === "адрес" && !hit(chosen.address) && !hit(chosen.address_label)) pointId = ((chosen.points || []).find(pt => hit(pt.address) || hit(pt.label)) || {}).id || "";
         return { ...p, pointId, trial: !!p.trial, matchBy, matchOptions: matches, clientId: chosen?.id || null, clientFound: chosen?.name || p.clientName, price_per_kg: p.trial ? 0 : (chosen ? priceFor(chosen, p.brand, p.grade, p.bag_kg) : null) };
       });
       setAiResult(mapped);

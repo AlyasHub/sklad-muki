@@ -60,7 +60,7 @@ function buildText(dateStr, day, clients, drivers, orders, stock) {
     const st = statuses.length === 1 ? statuses[0] : "частично";
     const drv = drivers.find(d => d.id === g.orders[0].driverId);
     const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
-    L.push(`• ${g.name}${pt ? ` [${pt.label || pt.address}]` : ""}${client?.org_name ? ` (${client.org_name})` : ""} — ${st}${drv ? `, водитель: ${drv.name}` : ""} — ${fmt(gKg)} кг`);
+    L.push(`• ${g.name}${pt ? ` [${pt.label || pt.address}]` : (client?.address_label ? ` [${client.address_label}]` : "")}${client?.org_name ? ` (${client.org_name})` : ""} — ${st}${drv ? `, водитель: ${drv.name}` : ""} — ${fmt(gKg)} кг`);
     g.orders.forEach(o => L.push(`    - ${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags} = ${fmt(o.bags * o.bag_kg)} кг${(o.trial || o.isSample) ? " (на пробу, бесплатно)" : ""}`));
   });
   const byDrv = {};
