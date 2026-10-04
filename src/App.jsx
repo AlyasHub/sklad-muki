@@ -49,6 +49,21 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // Время доставки клиента: точный интервал (с–по) если задан, иначе пресет
 const clientTime = c => (c && ((c.delivery_from && c.delivery_to) ? `${c.delivery_from}–${c.delivery_to}` : c.delivery_time)) || "";
+// 📍 Точки доставки: у одного клиента (ИП) бывает несколько адресов. client.points = [{id, label,
+// address, gis_link, coords, coords_manual, access_note, work_hours, contact}], в заявке — pointId.
+// Долг, цены, реквизиты — общие на клиента; адрес/2ГИС/время/как заехать — от выбранной точки.
+// clientAt(client, заявка) отдаёт карточку клиента с адресом этой точки — дальше карточка заявки,
+// 2ГИС, маршрут и накладная работают как раньше. Без точки — основной адрес клиента.
+const pointOf = (client, o) => (client && o && o.pointId && (client.points || []).find(p => p.id === o.pointId)) || null;
+const clientAt = (client, o) => {
+  const p = pointOf(client, o);
+  if (!p) return client;
+  return { ...client, address: p.address || "", gis_link: p.gis_link || "", coords: p.coords || null, coords_manual: p.coords_manual || "",
+    access_note: p.access_note || "", contact: p.contact || client.contact, pointLabel: p.label || "",
+    ...(p.work_hours ? { work_hours: p.work_hours, delivery_from: "", delivery_to: "", delivery_time: "" } : {}) };
+};
+// Ключ «одной доставки»: клиент + точка (два адреса одного ИП в один день — две карточки, две точки маршрута)
+const dropKey = o => (o.clientId || "nm:" + (o.clientName || "")) + (o.pointId ? "@" + o.pointId : "");
 
 // Текст для накладной (бухгалтеру) по заявке клиента
 // Суммируем одинаковые позиции (один бренд+сорт+фасовка) в одну строку: общий вес и сумма
@@ -424,6 +439,15 @@ function Inp({ label, ...p }) {
 function Sel({ label, options, ...p }) {
   return <div className="flex flex-col gap-1">{label && <label className="text-sm font-medium text-gray-700">{label}</label>}<select className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" {...p}>{options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}</select></div>;
 }
+// 📍 Выбор адреса доставки в заявке — показывается, только если у клиента есть доп. точки
+function PointSel({ client, value, onChange }) {
+  const pts = (client && client.points) || [];
+  if (!pts.length) return null;
+  return <Sel label="Адрес доставки" value={value || ""} onChange={e => onChange(e.target.value)}
+    options={[{ value: "", label: "Основной: " + (client.address || "—") }, ...pts.map(p => ({ value: p.id, label: (p.label ? p.label + " — " : "") + (p.address || "без адреса") }))]} />;
+}
+// pointId только если такая точка есть у этого клиента (защита от «чужой» точки после смены клиента)
+const validPoint = (client, pid) => (pid && client && (client.points || []).some(p => p.id === pid)) ? pid : "";
 function Btn({ variant = "primary", size = "md", children, onClick, disabled, ...p }) {
   const sz = { sm: "px-3 py-1.5 text-xs", md: "px-4 py-2 text-sm", lg: "px-6 py-3 text-base" };
   const vr = { primary: "bg-amber-500 hover:bg-amber-600 text-white", secondary: "bg-gray-100 hover:bg-gray-200 text-gray-700", danger: "bg-red-500 hover:bg-red-600 text-white", ghost: "hover:bg-gray-100 text-gray-600" };
@@ -776,7 +800,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
   const seenByDate = {}; // считаем заявки по клиентам, а не по позициям
   [...vis, ...karagandaVis].forEach(o => {
     kgByDate[o.date] = (kgByDate[o.date] || 0) + o.bags * o.bag_kg;
-    const key = o.clientId || ("nm:" + (o.clientName || ""));
+    const key = dropKey(o); // клиент + точка доставки
     if (!seenByDate[o.date]) seenByDate[o.date] = new Set();
     if (!seenByDate[o.date].has(key)) { seenByDate[o.date].add(key); countByDate[o.date] = (countByDate[o.date] || 0) + 1; }
   });
@@ -807,13 +831,14 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
   const dayRoute = (() => {
     const seen = new Set(); const pts = [];
     dayOrders.filter(o => o.status !== "отгружена" && !o.pickup).forEach(o => { // самовывоз в маршрут доставки не идёт
-      const client = clients.find(c => c.id === o.clientId);
+      const client = clientAt(clients.find(c => c.id === o.clientId), o); // адрес выбранной точки доставки (если есть)
       if (client) {
-        if (seen.has(client.id)) return;
+        const rk = dropKey(o); // у одного ИП может быть несколько точек — каждая отдельно в маршруте
+        if (seen.has(rk)) return;
         const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
         if (!coords) return;
-        seen.add(client.id);
-        pts.push({ ...coords, id: client.id, name: o.clientName, delivery_time: clientTime(client) });
+        seen.add(rk);
+        pts.push({ ...coords, id: rk, name: o.clientName + (client.pointLabel ? ` (${client.pointLabel})` : ""), delivery_time: clientTime(client) || client.work_hours || "" });
         return;
       }
       // Разовая продажа с доставкой: точка 2ГИС хранится прямо в заявке
@@ -830,8 +855,8 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
   const dayGroups = (() => {
     const m = {};
     dayOrders.forEach(o => {
-      const key = o.clientId || ("nm:" + (o.clientName || ""));
-      if (!m[key]) m[key] = { key, clientId: o.clientId, clientName: o.clientName, isSample: false, isTrial: false, orders: [] };
+      const key = dropKey(o); // клиент + точка доставки: два адреса одного ИП — две карточки
+      if (!m[key]) m[key] = { key, clientId: o.clientId, pointId: o.pointId || "", clientName: o.clientName, isSample: false, isTrial: false, orders: [] };
       m[key].orders.push(o);
       if (o.isSample) m[key].isSample = true;
       if (o.trial) m[key].isTrial = true;
@@ -841,7 +866,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
     return Object.values(m).sort((a, b) => {
       const ta = tierOf(a), tb = tierOf(b);
       if (ta !== tb) return ta - tb;
-      const ra = routeIndex[a.clientId || a.key] ?? 9999, rb = routeIndex[b.clientId || b.key] ?? 9999;
+      const ra = routeIndex[a.key] ?? 9999, rb = routeIndex[b.key] ?? 9999; // ключ группы = ключ точки маршрута
       if (ra !== rb) return ra - rb;
       return (a.clientName || "").localeCompare(b.clientName || "");
     });
@@ -867,7 +892,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
     const L = [`Отчёт за ${d}`, "=".repeat(30), `Заявок: ${dayGroups.length}  ·  Всего: ${fmt(totalKg)} кг${showPrices ? `  ·  Сумма: ${fmt(totalSum)} тг` : ""}`, ""];
     L.push("ПО КЛИЕНТАМ:");
     dayGroups.forEach(g => {
-      const client = clients.find(c => c.id === g.clientId);
+      const client = clientAt(clients.find(c => c.id === g.clientId), g.orders[0]);
       const statuses = [...new Set(g.orders.map(o => o.status))];
       const st = statuses.length === 1 ? statuses[0] : "частично";
       const drv = drivers.find(dr => dr.id === g.orders[0].driverId);
@@ -1005,7 +1030,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
         ) : (
           <div className="space-y-2">
             {dayGroups.map((g, gi, arr) => {
-              const client = clients.find(c => c.id === g.clientId);
+              const client = clientAt(clients.find(c => c.id === g.clientId), g.orders[0]);
               const driver = drivers.find(d => d.id === g.orders[0].driverId);
               const isPickup = g.orders.some(o => o.pickup);
               const isWatch = isPickup && g.orders.some(o => o.pickupWatch); // самовывоз только под контролем (без погрузки)
@@ -1051,7 +1076,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                   {g.orders.length > 1 && <div className="text-xs text-gray-500 mt-1">Итого: <b>{fmt(gKg)} кг</b>{showPrices && gSum ? ` · ${fmt(gSum)} тг` : ""}</div>}
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
-                  {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{client?.address || g.orders[0].address}</div>}
+                  {!isOneOff && (client?.address || g.orders[0].address) && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{client?.pointLabel ? <b className="font-medium text-gray-700 mr-1">{client.pointLabel}:</b> : null}{client?.address || g.orders[0].address}</div>}
                   {(clientTime(client) || client?.work_hours || g.orders[0].work_hours) && <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-sky-800 bg-sky-100 border border-sky-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Время: {clientTime(client) || client?.work_hours || g.orders[0].work_hours}</div>}
                   {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
@@ -1146,7 +1171,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
         )}
         {!driverMode && allDayGroups.filter(g => !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample)).length > 0 && (
           <div className="mt-3">
-            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + allDayGroups.filter(g => !g.orders.some(o => o.foreign)).map(g => nakladnayaText(g, clients.find(c => c.id === g.clientId))).filter(Boolean).join("\n\n"))}><Icon name="copy" size={15} />Скопировать все накладные ({allDayGroups.filter(g => !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
+            <Btn variant="secondary" onClick={() => copyToClipboard(`Накладные на ${selected.split("-").reverse().join(".")}:\n\n` + allDayGroups.filter(g => !g.orders.some(o => o.foreign)).map(g => nakladnayaText(g, clientAt(clients.find(c => c.id === g.clientId), g.orders[0]))).filter(Boolean).join("\n\n"))}><Icon name="copy" size={15} />Скопировать все накладные ({allDayGroups.filter(g => !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample)).length})</Btn>
           </div>
         )}
 
@@ -1158,7 +1183,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                 const statuses = [...new Set(g.orders.map(o => o.status))];
                 const st = statuses.length === 1 ? statuses[0] : "частично";
                 const shipped = st === "отгружена";
-                const client = clients.find(c => c.id === g.clientId);
+                const client = clientAt(clients.find(c => c.id === g.clientId), g.orders[0]);
                 return (
                   <div key={g.key} className={`rounded-xl px-4 py-3 text-sm border ${shipped ? "bg-emerald-50 border-emerald-200" : "bg-orange-50 border-orange-100"}`}>
                     <div className="flex items-center justify-between gap-2">
@@ -1201,13 +1226,14 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
         const buildRoute = list => {
           const seen = new Set(); const pts = [];
           list.filter(o => !o.pickup).forEach(o => { // самовывоз в маршрут не идёт
-            const client = clients.find(c => c.id === o.clientId);
+            const client = clientAt(clients.find(c => c.id === o.clientId), o); // адрес выбранной точки доставки
             if (client) {
-              if (seen.has(client.id)) return;
+              const rk = dropKey(o); // каждая точка одного ИП — отдельная остановка
+              if (seen.has(rk)) return;
               const coords = client.coords || parseCoordsFromGisLink(client.gis_link) || parseCoordsFromText(client.coords_manual);
               if (!coords) return;
-              seen.add(client.id);
-              pts.push({ ...coords, name: o.clientName, delivery_time: clientTime(client) });
+              seen.add(rk);
+              pts.push({ ...coords, name: o.clientName + (client.pointLabel ? ` (${client.pointLabel})` : ""), delivery_time: clientTime(client) || client.work_hours || "" });
               return;
             }
             // Разовая продажа: точка 2ГИС в самой заявке
@@ -1373,6 +1399,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
         isSample: form.isSample, trial: isTrial,
         clientId: form.isSample ? null : form.clientId,
         clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
+        pointId: form.isSample ? "" : validPoint(client, form.pointId), // точка доставки (если у клиента их несколько)
       });
       setShowManual(false); await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
@@ -1418,7 +1445,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   const filteredGroups = (() => {
     const m = {};
     [...filtered].sort((a, b) => a.date.localeCompare(b.date)).forEach(o => {
-      const key = (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date;
+      const key = dropKey(o) + "|" + o.date;
       if (!m[key]) m[key] = { key, clientName: o.clientName, isSample: false, isTrial: false, orders: [] };
       m[key].orders.push(o); if (o.isSample) m[key].isSample = true; if (o.trial) m[key].isTrial = true;
     });
@@ -1473,7 +1500,8 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           <div className="grid grid-cols-2 gap-3">
             {form.isSample
               ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
-              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
+              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value, pointId: "" })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
+            {!form.isSample && (clients.find(c => c.id === form.clientId)?.points || []).length > 0 && <div className="col-span-2"><PointSel client={clients.find(c => c.id === form.clientId)} value={form.pointId} onChange={v => setForm(f => ({ ...f, pointId: v }))} /></div>}
             <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
             <Sel label="Фасовка" value={form.bag_kg} onChange={e => setForm({ ...form, bag_kg: e.target.value })} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
@@ -2612,8 +2640,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY, points: c.points || [] }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity, points: [] }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -2636,7 +2664,15 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     setSaving(true);
     // ownerId: торгпреду сервер всё равно проставит своего; админ выбирает группу (пусто = наши)
     const ownerId = isRep ? myUid : (form.ownerId || "");
-    try { await dbUpsert("clients", { id: editId || uid(), ...form, ownerId }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    // Доп. адреса доставки: пустые убираем, координаты для маршрута берём из ссылки 2ГИС (как у основного адреса)
+    const points = [];
+    for (const p of (form.points || [])) {
+      if (!(p.address || "").trim() && !(p.gis_link || "").trim()) continue;
+      let coords = p.coords || parseCoordsFromGisLink(p.gis_link) || parseCoordsFromText(p.coords_manual) || null;
+      if (!coords && p.gis_link) { try { coords = await resolveGisCoords(p.gis_link); } catch {} }
+      points.push({ ...p, id: p.id || uid(), label: (p.label || "").trim(), address: (p.address || "").trim(), gis_link: (p.gis_link || "").trim(), coords });
+    }
+    try { await dbUpsert("clients", { id: editId || uid(), ...form, points, ownerId }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
   // Группы клиентов: «Наши» (ownerId пусто) + группа каждого торгпреда. Названия можно переименовать.
@@ -2815,6 +2851,29 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                 <Inp label="Координаты вручную (широта, долгота)" value={form.coords_manual} onChange={e => setForm({ ...form, coords_manual: e.target.value, coords: parseCoordsFromText(e.target.value) })} placeholder="51.1234, 71.4567" />
               )}
             </div>
+            {/* 📍 Доп. адреса доставки: одно ИП — несколько точек. Долг/цены/реквизиты общие, в заявке выбирается адрес. */}
+            <div className="border border-gray-100 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><Icon name="pin" size={14} />Ещё адреса доставки</p>
+                <button type="button" onClick={() => setForm(f => ({ ...f, points: [...(f.points || []), { id: uid(), label: "", address: "", gis_link: "", access_note: "", work_hours: "", contact: "" }] }))} className="text-xs text-amber-700 font-medium inline-flex items-center gap-1"><Icon name="plus" size={13} />Добавить адрес</button>
+              </div>
+              {!(form.points || []).length && <p className="text-xs text-gray-400">Если у клиента (одно ИП) несколько точек — добавь их здесь. Долг, цены и реквизиты останутся общими, а в заявке можно будет выбрать, куда везти.</p>}
+              {(form.points || []).map((p, i) => {
+                const setP = (k, v) => setForm(f => ({ ...f, points: (f.points || []).map((x, j) => j === i ? { ...x, [k]: v, ...(k === "gis_link" ? { coords: null } : {}) } : x) }));
+                return (
+                  <div key={p.id || i} className="bg-gray-50 rounded-lg p-2.5 space-y-2 relative">
+                    <button type="button" onClick={() => { if (confirm("Убрать этот адрес? Заявки, уже оформленные на него, покажут основной адрес.")) setForm(f => ({ ...f, points: (f.points || []).filter((_, j) => j !== i) })); }} className="absolute top-2 right-2 text-red-400 hover:text-red-600" title="Убрать адрес"><Icon name="trash" size={15} /></button>
+                    <Inp label={`Название точки ${i + 2}`} value={p.label || ""} onChange={e => setP("label", e.target.value)} placeholder="напр. Магазин на Абая / Цех" />
+                    <Inp label="Адрес" value={p.address || ""} onChange={e => setP("address", e.target.value)} />
+                    <Inp label="Ссылка 2ГИС" value={p.gis_link || ""} onChange={e => setP("gis_link", e.target.value)} placeholder="https://2gis.kz/astana/geo/..." />
+                    <Inp label="Время работы (по желанию)" value={p.work_hours || ""} onChange={e => setP("work_hours", e.target.value)} placeholder="напр. 09:00–18:00 или 24/7" />
+                    <Inp label="Телефон на точке (по желанию)" value={p.contact || ""} onChange={e => setP("contact", e.target.value)} />
+                    <Inp label="Как заехать (по желанию)" value={p.access_note || ""} onChange={e => setP("access_note", e.target.value)} />
+                    {p.coords && <p className="text-xs text-emerald-600">✓ точка для маршрута найдена</p>}
+                  </div>
+                );
+              })}
+            </div>
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">Цены по сортам и фасовкам</p>
               <div className="grid grid-cols-2 gap-2 mb-2">
@@ -2850,6 +2909,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                   {c.org_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="building" size={13} />{c.org_name}</div>}
                   {c.contact_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="user" size={13} />{c.contact_name}</div>}
                   {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address}</div>}
+                  {(c.points || []).map(p => <div key={p.id} className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{p.label ? <b className="text-gray-700 font-medium">{p.label}:</b> : null} {p.address || "—"}</div>)}
                   {c.work_hours && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="clock" size={13} />Работает: <b className="text-gray-700 font-medium">{c.work_hours}</b></div>}
                   {c.contact && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="phone" size={13} />{c.contact}</div>}
                   <div className="text-xs text-gray-500 mt-1 flex items-center gap-1.5"><Icon name="calendar" size={12} />{last ? `последний заказ ${last.split("-").reverse().join(".")}${days > 0 ? ` (${days} дн. назад)` : " (сегодня)"}` : "ещё не заказывал"}</div>
@@ -4072,7 +4132,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
       {Object.keys(ds).length > 0 && <div><h4 className="font-semibold text-gray-700 mb-3">Расчёт с водителями</h4><div className="space-y-2">{Object.values(ds).map((d, i) => <div key={i} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between"><div><div className="font-medium flex items-center gap-1.5"><Icon name="truck" size={15} />{d.name}</div><div className="text-sm text-gray-500">{fmt(d.kg)} кг</div></div><div className="text-emerald-600 font-bold">{fmt(d.pay)} тг</div></div>)}</div></div>}
       <div><h4 className="font-semibold text-gray-700 mb-3">Маршрутный лист</h4>{filtered.length === 0 ? <div className="text-center py-8 text-gray-400">Нет заявок</div> : (() => {
         const groups = {};
-        [...filtered].sort((a, b) => a.date.localeCompare(b.date)).forEach(o => { const key = (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date; (groups[key] = groups[key] || { clientName: o.clientName, date: o.date, orders: [] }).orders.push(o); });
+        [...filtered].sort((a, b) => a.date.localeCompare(b.date)).forEach(o => { const key = dropKey(o) + "|" + o.date; (groups[key] = groups[key] || { clientName: o.clientName, date: o.date, orders: [] }).orders.push(o); });
         return <div className="space-y-2">{Object.values(groups).map((g, i) => {
           const driver = drivers.find(d => d.id === g.orders[0].driverId);
           const statuses = [...new Set(g.orders.map(o => o.status))];
@@ -6589,7 +6649,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
         const dayKg = day.reduce((s, o) => s + o.bags * o.bag_kg, 0);
         // внутри даты — по клиенту (одна отправка клиенту)
         const groups = {};
-        day.forEach(o => { const k = o.clientId || ("nm:" + (o.clientName || "")); (groups[k] = groups[k] || { clientName: o.clientName, orders: [] }).orders.push(o); });
+        day.forEach(o => { const k = dropKey(o); (groups[k] = groups[k] || { clientName: o.clientName, orders: [] }).orders.push(o); });
         return (
           <div key={date} className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
             <div className="flex items-center justify-between mb-2">
@@ -6640,6 +6700,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
   const base = group.orders[0];
   const [positions, setPositions] = useState(group.orders.map(o => ({ id: o.id, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags, price_per_kg: o.price_per_kg ?? "", trial: !!o.trial })));
   const [note, setNote] = useState(group.orders.map(o => o.note).find(Boolean) || "");
+  const [pointId, setPointId] = useState(base.pointId || ""); // адрес доставки (точка клиента) — можно перенести на другой адрес
   const [date, setDate] = useState(base.date); // дата доставки — можно поправить, если поставили не на то число
   const [saving, setSaving] = useState(false);
   const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
@@ -6665,9 +6726,9 @@ function EditGroupModal({ group, clients, reload, onClose }) {
         const carry = idx === 0 ? { photos: allPhotos, delivered_by_driver: anyDelivered } : {};
         if (p.id) {
           const orig = group.orders.find(o => o.id === p.id);
-          return dbUpsert("orders", { ...orig, date, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
+          return dbUpsert("orders", { ...orig, date, pointId: validPoint(client, pointId), brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
         }
-        return dbUpsert("orders", { id: uid(), date, clientId: base.clientId, clientName: base.clientName, brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, pickupWatch: grpWatch, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
+        return dbUpsert("orders", { id: uid(), date, clientId: base.clientId, clientName: base.clientName, pointId: validPoint(client, pointId), brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, pickupWatch: grpWatch, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
       }));
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
       await Promise.all(group.orders.filter(o => !keep.has(o.id)).map(o => dbDelete("orders", o.id)));
@@ -6680,6 +6741,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
       <div className="space-y-3">
         <div className="text-xs text-gray-500">Измени дату, сорт/количество/цену, удали лишнюю позицию (✕) или добавь новую.</div>
         <Inp label="Дата доставки" type="date" value={date} onChange={e => setDate(e.target.value)} />
+        <PointSel client={clients.find(c => c.id === base.clientId)} value={pointId} onChange={setPointId} />
         {positions.map((p, i) => (
           <div key={i} className="border border-gray-200 rounded-xl p-3 relative">
             <button onClick={() => rm(i)} className="absolute top-2 right-2 text-red-400 hover:text-red-600 text-lg leading-none" title="Удалить позицию">✕</button>
@@ -6818,15 +6880,15 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const local = orders.filter(o => !o.fromKaraganda); // карагандинские отгрузки тут не показываем
   const loadRows = local.filter(o => o.foreignLoad); // сводная загрузка чужих заявок (торгпред) — только тоннаж/число
   const vis = (driverFilter != null ? local.filter(o => o.driverId === driverFilter || o.loaderId === driverFilter) : local).filter(o => !o.foreignLoad);
-  const groupCount = list => new Set(list.map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
+  const groupCount = list => new Set(list.map(o => dropKey(o) + "|" + o.date)).size;
   const todayList = vis.filter(o => o.date === TODAY());
   const tomorrowList = vis.filter(o => o.date === TOMORROW());
 
   const todayGroups = (() => {
     const m = {};
     todayList.forEach(o => {
-      const k = o.clientId || ("nm:" + (o.clientName || ""));
-      if (!m[k]) m[k] = { key: k, clientId: o.clientId, clientName: o.clientName, isTrial: false, orders: [] };
+      const k = dropKey(o); // клиент + точка доставки
+      if (!m[k]) m[k] = { key: k, clientId: o.clientId, pointId: o.pointId || "", clientName: o.clientName, isTrial: false, orders: [] };
       m[k].orders.push(o); if (o.trial) m[k].isTrial = true;
     });
     // Отвезённые — вниз, неотвезённые — сверху
@@ -6998,7 +7060,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
     }
     setSavingManual(true);
     // если у клиента на эту дату уже назначен водитель — наследуем его (чтобы новая позиция не «потерялась» у водителя)
-    const inheritedDriver = (!form.isSample && form.clientId) ? (orders.find(o => o.clientId === form.clientId && o.date === form.date && o.driverId)?.driverId || "") : "";
+    const pointId = form.isSample ? "" : validPoint(client, form.pointId); // точка доставки (если у клиента их несколько)
+    const inheritedDriver = (!form.isSample && form.clientId) ? (orders.find(o => o.clientId === form.clientId && (o.pointId || "") === pointId && o.date === form.date && o.driverId)?.driverId || "") : "";
     try {
       for (const p of validMan) {
         // Проба клиенту (trial) — всегда бесплатно. Пробник новой компании (isSample) — по введённой
@@ -7016,6 +7079,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           clientId: form.isSample ? null : form.clientId,
           clientName: form.isSample ? (form.sampleName || "Проба") : (client?.name || ""),
           city: form.isSample ? activeCity : (client?.city || activeCity),
+          pointId,
         });
       }
       setShowManual(false); setForm(f => ({ ...f, bags: "", price_per_kg: "", note: "" })); setManPos([{ ...manBlank }]); await reload("orders");
@@ -7146,11 +7210,11 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                   </div>
                   {[...new Set(g.orders.map(o => o.note).filter(Boolean))].map((n, ni) => <div key={ni} className="text-sm font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2 mt-1.5 flex items-start gap-1.5"><span className="text-amber-700 mt-0.5"><Icon name="note" size={15} /></span><span className="break-words">{n}</span></div>)}
                   {(!isOneOff || worker) && <div className="text-xs text-gray-500 mt-1 flex items-center gap-1"><Icon name={isPickup ? (isWatch ? "eye" : "bag") : "truck"} size={14} />{isPickup ? (isWatch ? "Контроль: " : "Грузчик: ") : "Водитель: "}<b className={worker ? "text-gray-700" : "text-orange-600"}>{worker?.name || (isPickup ? "определить позже" : "не назначен")}</b></div>}
-                  {(() => { const cl = clients.find(c => c.id === g.clientId); const wh = clientTime(cl) || cl?.work_hours || g.orders[0].work_hours; return wh ? <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-sky-800 bg-sky-100 border border-sky-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Время: {wh}</div> : null; })()}
+                  {(() => { const cl = clientAt(clients.find(c => c.id === g.clientId), g.orders[0]); const wh = clientTime(cl) || cl?.work_hours || g.orders[0].work_hours; return wh ? <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm font-bold text-sky-800 bg-sky-100 border border-sky-300 rounded-lg px-3 py-1.5"><Icon name="clock" size={16} />Время: {wh}</div> : null; })()}
                   {isOneOff && g.orders[0].oneOffAddress && <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><Icon name="pin" size={13} />{g.orders[0].oneOffAddress}</div>}
                   {(() => {
                     // Куда, как пройти и маршрут — чтобы понимать направление движения водителя
-                    const client = clients.find(c => c.id === g.clientId);
+                    const client = clientAt(clients.find(c => c.id === g.clientId), g.orders[0]);
                     const addr = client?.address || g.orders[0].address || g.orders[0].oneOffAddress || "";
                     const access = client?.access_note || "";
                     const gis = client?.gis_link || g.orders[0].gis_link || "";
@@ -7158,7 +7222,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                     if (!addr && !access && !gis && !co) return null;
                     return (<>
                       <div className="flex items-center gap-2 flex-wrap mt-1 text-xs">
-                        {addr && !isOneOff && <span className="text-gray-500 inline-flex items-center gap-1"><Icon name="pin" size={13} />{addr}</span>}
+                        {addr && !isOneOff && <span className="text-gray-500 inline-flex items-center gap-1"><Icon name="pin" size={13} />{client?.pointLabel ? <b className="font-medium text-gray-700">{client.pointLabel}:</b> : null}{addr}</span>}
                         {gis && <a href={gis} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pin" size={12} />2ГИС</a>}
                       </div>
                       {access && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{access}</span></div>}
@@ -7171,8 +7235,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                         {(allNew || allRoute) && <Btn size="sm" onClick={() => setGroupStatus(g, "отгружена")}><Icon name="check" size={15} stroke={2.4} />{isPickup ? "Отгрузить" : "Доставлено"}</Btn>}
                         {shipped && <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g, (isPickup || isOneOff) ? "новая" : "в пути")}>↩ {(isPickup || isOneOff) ? "Отменить" : "Не доставлено"}</Btn>}
                         {isOneOff && !g.clientId && <Btn size="sm" variant="secondary" onClick={() => addOneOffToClients(g)}><Icon name="plus" size={15} />В клиенты</Btn>}
-                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => softInvoiceFromOrders(g, clients.find(c => c.id === g.clientId))}><Icon name="receipt" size={15} />Накладная</Btn>}
-                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => invoiceFromOrders(g, clients.find(c => c.id === g.clientId))}><Icon name="wallet" size={15} />Счет</Btn>}
+                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => softInvoiceFromOrders(g, clientAt(clients.find(c => c.id === g.clientId), g.orders[0]))}><Icon name="receipt" size={15} />Накладная</Btn>}
+                        {g.orders.some(o => !o.trial && !o.isSample) && <Btn size="sm" variant="secondary" onClick={() => invoiceFromOrders(g, clientAt(clients.find(c => c.id === g.clientId), g.orders[0]))}><Icon name="wallet" size={15} />Счет</Btn>}
                         <Btn size="sm" variant="secondary" onClick={() => setEditGroup(g)}><Icon name="pencil" size={15} />Изменить</Btn>
                         <Btn size="sm" variant="danger" onClick={() => deleteGroup(g)}><Icon name="trash" size={15} /></Btn>
                       </div>
@@ -7267,7 +7331,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           <div className="space-y-3">
             {form.isSample
               ? <Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" />
-              : <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />}
+              : <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value, pointId: "" })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />}
+            {!form.isSample && <PointSel client={clients.find(c => c.id === form.clientId)} value={form.pointId} onChange={v => setForm(f => ({ ...f, pointId: v }))} />}
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">{form.trial ? "Что даём на пробу" : "Что везём (по позициям)"}</p>
               {manPos.map((p, i) => (
@@ -7630,7 +7695,7 @@ export default function App() {
   const primaryNav = (PRIMARY_NAV[user.role] || []).filter(id => navTabs.includes(id));
   const moreNav = navTabs.filter(id => !primaryNav.includes(id));
   // Считаем новые ЗАЯВКИ (по клиенту+дате), а не отдельные позиции
-  const newOrders = new Set(data.orders.filter(o => o.status === "новая").map(o => (o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date)).size;
+  const newOrders = new Set(data.orders.filter(o => o.status === "новая").map(o => dropKey(o) + "|" + o.date)).size;
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">

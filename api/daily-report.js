@@ -51,15 +51,16 @@ function buildText(dateStr, day, clients, drivers, orders, stock) {
   const totalKg = day.reduce((s, o) => s + o.bags * o.bag_kg, 0);
   const totalSum = day.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
   const groups = {};
-  day.forEach(o => { const k = o.clientId || ("nm:" + (o.clientName || "")); (groups[k] = groups[k] || { name: o.clientName, clientId: o.clientId, orders: [] }).orders.push(o); });
+  day.forEach(o => { const k = (o.clientId || ("nm:" + (o.clientName || ""))) + (o.pointId ? "@" + o.pointId : ""); (groups[k] = groups[k] || { name: o.clientName, clientId: o.clientId, pointId: o.pointId || "", orders: [] }).orders.push(o); }); // клиент + точка доставки
   const L = [`Отчёт за ${dDisplay}`, "==============================", `Заявок: ${Object.keys(groups).length}  ·  Отгружено: ${fmt(totalKg)} кг  ·  Сумма: ${fmt(totalSum)} тг`, ""];
   Object.values(groups).forEach(g => {
     const client = clients.find(c => c.id === g.clientId);
+    const pt = g.pointId && client && (client.points || []).find(p => p.id === g.pointId); // доп. адрес доставки
     const statuses = [...new Set(g.orders.map(o => o.status))];
     const st = statuses.length === 1 ? statuses[0] : "частично";
     const drv = drivers.find(d => d.id === g.orders[0].driverId);
     const gKg = g.orders.reduce((s, o) => s + o.bags * o.bag_kg, 0);
-    L.push(`• ${g.name}${client?.org_name ? ` (${client.org_name})` : ""} — ${st}${drv ? `, водитель: ${drv.name}` : ""} — ${fmt(gKg)} кг`);
+    L.push(`• ${g.name}${pt ? ` [${pt.label || pt.address}]` : ""}${client?.org_name ? ` (${client.org_name})` : ""} — ${st}${drv ? `, водитель: ${drv.name}` : ""} — ${fmt(gKg)} кг`);
     g.orders.forEach(o => L.push(`    - ${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags} = ${fmt(o.bags * o.bag_kg)} кг${(o.trial || o.isSample) ? " (на пробу, бесплатно)" : ""}`));
   });
   const byDrv = {};

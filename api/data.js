@@ -363,7 +363,10 @@ async function listFor(u, table) {
       // но БЕЗ контактов, цен и реквизитов. Так торгпред видит весь маршрут, но чужого не трогает и цен не знает.
       return all.filter(o => isMine(o) || !o.fromKaraganda).map(o => {
         if (isMine(o)) return o;
-        const c = cliMap.get(o.clientId);
+        const cl = cliMap.get(o.clientId);
+        // 📍 Если заявка на доп. точку доставки клиента — адрес/2ГИС/время берём от этой точки
+        const pt = o.pointId && cl && (cl.points || []).find(p => p.id === o.pointId);
+        const c = pt ? { address: pt.address, gis_link: pt.gis_link, coords: pt.coords, access_note: pt.access_note, work_hours: pt.work_hours || cl.work_hours } : cl;
         const { price_per_kg, ...rest } = o;
         return {
           ...rest, price_per_kg: 0, foreign: true,
