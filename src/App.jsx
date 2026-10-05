@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { downloadClientsReport } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»)
+import { debtAt, reconId, clientCheckpoints, checkpointDrift, saveCheckpoints, resyncCheckpoints, recentMonths, monthFirst, nextMonthFirst, monthLast, monthLabel } from "./recon.js"; // сверки долга по месяцам
 
 // Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
 // Прямого ключа к базе в браузере больше нет.
@@ -3068,6 +3069,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                 )}
               </div>
             )}
+            {canEdit && <ReconClientBlock client={historyClient} orders={orders} payments={payments} reload={reload} />}
             {canEdit && (
               <div className="mb-3">
                 {!showPayForm ? (
@@ -3089,7 +3091,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                     {(payments || []).filter(p => p.clientId === historyClient.id).sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(p => (
                       <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
                         <span className="text-gray-600 inline-flex items-center gap-1"><Icon name={p.adjust ? "receipt" : "cash"} size={13} className={p.adjust ? "text-sky-600" : "text-emerald-600"} />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
-                        <span className="flex items-center gap-2"><b className={p.adjust ? "text-sky-600" : "text-emerald-600"}>{p.adjust ? (p.amount >= 0 ? "−" : "+") + fmt(Math.abs(p.amount)) : fmt(p.amount)} тг</b>{(!p.adjust || isDirector) && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}</span>
+                        <span className="flex items-center gap-2"><b className={p.adjust ? "text-sky-600" : "text-emerald-600"}>{p.adjust ? (p.amount >= 0 ? "−" : "+") + fmt(Math.abs(p.amount)) : fmt(p.amount)} тг</b>{!p.recon && (!p.adjust || isDirector) && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить">✕</button>}</span>
                       </div>
                     ))}
                   </div>
@@ -6543,6 +6545,144 @@ function ActivityLog({ payments = [], clients = [], onOpenClient }) {
     </div>
   );
 }
+// 🧾 Сверки долга по месяцам. Сверка = «долг на начало дня»: «на начало сентября» — на 01.09, «на конец
+// сентября» — на 30.09 вечером (= на начало 01.10). Приложение записывает корректировку на разницу (как «акт
+// сверки»), поэтому «Долги», история клиента и Excel-отчёт показывают ровно сверенные цифры. Логика — в recon.js.
+const dmyR = s => String(s || "").split("-").reverse().join(".");
+const errText = e => (e && e.message) || String(e);
+// Что поменялось в полях сверки клиента за месяц → записи для saveCheckpoints ({D, A}; A=null — убрать сверку)
+function reconEntries(clientId, D1, D2, s, e, payments) {
+  const out = [];
+  for (const [v0, D] of [[s, D1], [e, D2]]) {
+    const v = String(v0 ?? "").trim(), was = (payments || []).find(p => p.id === reconId(clientId, D));
+    if (v === "" ? !!was : (!was || Number(v) !== Number(was.recon_amount))) out.push({ D, A: v === "" ? null : Number(v) });
+  }
+  return out;
+}
+
+// В окне «История и оплаты» клиента: сверки по месяцам
+function ReconClientBlock({ client, orders = [], payments = [], reload }) {
+  const months = recentMonths(TODAY(), 18);
+  const [open, setOpen] = useState(false);
+  const [ym, setYm] = useState(months[1] || months[0]); // по умолчанию — прошлый месяц (сверяемся после его окончания)
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cps = clientCheckpoints(client.id, payments);
+  const D1 = monthFirst(ym), D2 = nextMonthFirst(ym);
+  const cpAt = D => cps.find(p => p.recon === D);
+  useEffect(() => { // при смене месяца — подставить уже внесённые цифры (фоновые обновления данных набранное не стирают)
+    setStart(cpAt(D1) ? String(cpAt(D1).recon_amount) : "");
+    setEnd(cpAt(D2) ? String(cpAt(D2).recon_amount) : "");
+  }, [ym, client.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const appAt = D => debtAt(client.id, D, orders, payments, reconId(client.id, D)); // долг в приложении без самой этой сверки
+  const save = async () => {
+    const entries = reconEntries(client.id, D1, D2, start, end, payments);
+    if (!entries.length) { alert("Цифры не поменялись — сохранять нечего."); return; }
+    if (D2 > TODAY() && entries.some(x => x.D === D2 && x.A !== null) && !confirm("Месяц ещё не закончился — долг на конец может измениться. Всё равно записать?")) return;
+    setBusy(true);
+    try { await saveCheckpoints({ client, entries, orders, payments, dbUpsert, dbDelete }); await reload("payments"); } catch (e) { alert("⚠️ " + errText(e)); }
+    setBusy(false);
+  };
+  const resync = async () => { setBusy(true); try { await resyncCheckpoints({ client, orders, payments, dbUpsert }); await reload("payments"); } catch (e) { alert("⚠️ " + errText(e)); } setBusy(false); };
+  const drifts = cps.filter(p => Math.abs(checkpointDrift(p, orders, payments)) >= 1);
+  return (
+    <div className="mb-3 border border-sky-100 bg-sky-50/50 rounded-xl p-3 space-y-2">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between text-left">
+        <span className="font-semibold text-sm text-sky-800 flex items-center gap-1.5"><Icon name="receipt" size={15} />Сверки по месяцам{cps.length ? ` · ${cps.length}` : ""}</span>
+        <span className="text-xs text-gray-400">{open ? "скрыть" : "открыть"}</span>
+      </button>
+      {drifts.length > 0 && <div className="text-xs text-orange-700 bg-orange-50 rounded-lg px-2 py-1.5">⚠️ {drifts.length === 1 ? "Сверка разошлась" : "Сверки разошлись"}: после неё задним числом внесли отгрузку или оплату. <button onClick={resync} disabled={busy} className="underline font-semibold">Пересчитать</button></div>}
+      {open && (<>
+        <Sel label="Месяц" value={ym} onChange={e => setYm(e.target.value)} options={months.map(m => ({ value: m, label: monthLabel(m) }))} />
+        <div className="grid grid-cols-2 gap-2">
+          <div><Inp label={`Долг на ${dmyR(D1)}`} type="number" value={start} onChange={e => setStart(e.target.value)} placeholder="по сверке" />
+            <button type="button" onClick={() => setStart(String(Math.round(appAt(D1))))} className="text-xs text-sky-700 mt-0.5">в приложении: {fmt(appAt(D1))}</button></div>
+          <div><Inp label={`Долг на ${dmyR(monthLast(ym))}`} type="number" value={end} onChange={e => setEnd(e.target.value)} placeholder="по сверке" />
+            <button type="button" onClick={() => setEnd(String(Math.round(appAt(D2))))} className="text-xs text-sky-700 mt-0.5">в приложении: {fmt(appAt(D2))}</button></div>
+        </div>
+        <p className="text-xs text-gray-500">Впиши цифры из сверки: приложение подгонит долг клиента так, чтобы на эти даты он был ровно таким (корректировка видна в истории). Пустое поле — без сверки на эту дату. Эти же цифры пойдут в Excel-отчёт.</p>
+        <Btn size="sm" onClick={save} disabled={busy}>{busy ? "Сохраняю…" : "Сохранить сверку"}</Btn>
+        {cps.length > 0 && (
+          <div className="space-y-1 pt-1">
+            {cps.map(p => { const dr = checkpointDrift(p, orders, payments); return (
+              <div key={p.id} className="flex items-center justify-between gap-2 text-xs bg-white border border-gray-100 rounded-lg px-2.5 py-1.5">
+                <span className="text-gray-600">Долг на {dmyR(p.recon)}: <b className="text-gray-800">{fmt(p.recon_amount)} тг</b>{Math.abs(p.amount) >= 1 && <span className="text-gray-400"> · корр. {p.amount > 0 ? "−" : "+"}{fmt(Math.abs(p.amount))}</span>}</span>
+                {Math.abs(dr) >= 1 ? <span className="text-orange-600 font-medium whitespace-nowrap">разошлась на {fmt(Math.abs(dr))}</span> : <span className="text-emerald-600">✓</span>}
+              </div>); })}
+          </div>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+// В «Долгах»: сверка за месяц по всем клиентам — у каждого долг на начало и на конец месяца
+function ReconMonthTable({ clients = [], orders = [], payments = [], reload, onClose }) {
+  const months = recentMonths(TODAY(), 18);
+  const [ym, setYm] = useState(months[1] || months[0]);
+  const [vals, setVals] = useState({}); // clientId → { s, e } — что ввели (пока не сохранено)
+  const [showAll, setShowAll] = useState(false);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const D1 = monthFirst(ym), D2 = nextMonthFirst(ym);
+  useEffect(() => { setVals({}); }, [ym]);
+  const cpVal = (cid, D) => { const p = (payments || []).find(x => x.id === reconId(cid, D)); return p ? String(p.recon_amount) : ""; };
+  const val = (cid, k) => (vals[cid] && vals[cid][k] !== undefined) ? vals[cid][k] : cpVal(cid, k === "s" ? D1 : D2);
+  const setVal = (cid, k, v) => setVals(m => ({ ...m, [cid]: { ...(m[cid] || {}), [k]: v } }));
+  const rows = clients.map(c => {
+    const a1 = debtAt(c.id, D1, orders, payments, reconId(c.id, D1)), a2 = debtAt(c.id, D2, orders, payments, reconId(c.id, D2));
+    const moved = orders.some(o => o.clientId === c.id && o.status === "отгружена" && o.date >= D1 && o.date < D2) || payments.some(p => p.clientId === c.id && !p.recon && p.date >= D1 && p.date < D2);
+    const relevant = Math.abs(a1) >= 1 || Math.abs(a2) >= 1 || moved || cpVal(c.id, D1) !== "" || cpVal(c.id, D2) !== "";
+    return { c, a1, a2, relevant };
+  }).filter(r => (showAll || r.relevant) && (!q.trim() || (r.c.name || "").toLowerCase().includes(q.trim().toLowerCase())))
+    .sort((a, b) => (a.c.name || "").localeCompare(b.c.name || "", "ru"));
+  const changes = clients.map(c => ({ c, entries: reconEntries(c.id, D1, D2, val(c.id, "s"), val(c.id, "e"), payments) })).filter(x => x.entries.length);
+  const saveAll = async () => {
+    if (!changes.length) return;
+    if (D2 > TODAY() && changes.some(x => x.entries.some(e => e.D === D2 && e.A !== null)) && !confirm("Месяц ещё не закончился — долг на конец может измениться. Всё равно записать?")) return;
+    setBusy(true);
+    let done = 0;
+    try { for (const x of changes) { await saveCheckpoints({ client: x.c, entries: x.entries, orders, payments, dbUpsert, dbDelete }); done++; } }
+    catch (e) { alert(`⚠️ Записано ${done} из ${changes.length}: ${errText(e)}`); }
+    await reload("payments"); setVals({}); setBusy(false);
+  };
+  const box = "w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm mt-0.5 focus:outline-none focus:ring-2 focus:ring-sky-300";
+  return (
+    <div className="bg-white border-2 border-sky-200 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="receipt" size={16} />Сверка за месяц</span>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600" title="Закрыть"><Icon name="close" size={18} /></button>
+      </div>
+      <Sel value={ym} onChange={e => setYm(e.target.value)} options={months.map(m => ({ value: m, label: monthLabel(m) }))} />
+      <p className="text-xs text-gray-500">Впиши долг каждого клиента на начало и на конец месяца из вашей сверки. Синим — сколько сейчас в приложении (нажми, чтобы подставить). Пустое поле — без сверки. При сохранении приложение подгонит долги, и эти же цифры пойдут в Excel-отчёт.</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 Найти клиента" className="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+        <label className="text-xs text-gray-600 inline-flex items-center gap-1 whitespace-nowrap"><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="accent-sky-500" />все клиенты</label>
+      </div>
+      {!rows.length && <div className="text-sm text-gray-400 text-center py-4">{showAll ? "Клиентов нет." : "В этом месяце ни у кого не было долга и движения. Отметь «все клиенты», чтобы увидеть всех."}</div>}
+      <div className="divide-y divide-gray-100">
+        {rows.map(({ c, a1, a2 }) => (
+          <div key={c.id} className="py-2">
+            <div className="text-sm font-semibold text-gray-800">{c.name}{c.paused ? <span className="text-xs font-normal text-gray-400"> · ⏸ приостановлен</span> : null}</div>
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              <label className="text-xs text-gray-500">на {dmyR(D1)}
+                <input type="number" inputMode="decimal" value={val(c.id, "s")} onChange={e => setVal(c.id, "s", e.target.value)} placeholder="по сверке" className={box} />
+                <button type="button" onClick={() => setVal(c.id, "s", String(Math.round(a1)))} className="text-sky-700">в прил.: {fmt(a1)}</button>
+              </label>
+              <label className="text-xs text-gray-500">на {dmyR(monthLast(ym))}
+                <input type="number" inputMode="decimal" value={val(c.id, "e")} onChange={e => setVal(c.id, "e", e.target.value)} placeholder="по сверке" className={box} />
+                <button type="button" onClick={() => setVal(c.id, "e", String(Math.round(a2)))} className="text-sky-700">в прил.: {fmt(a2)}</button>
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+      <Btn onClick={saveAll} disabled={busy || !changes.length}>{busy ? "Сохраняю…" : `Сохранить сверку${changes.length ? ` (${changes.length} клиент.)` : ""}`}</Btn>
+    </div>
+  );
+}
+
 function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false, onOpenClient = () => {} }) {
   const [open, setOpen] = useState({});
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
@@ -6550,6 +6690,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
   const [payClient, setPayClient] = useState(null); // клиент, которому вносим оплату в счёт долга
   const [payForm, setPayForm] = useState({ amount: "", method: "Наличные", date: TODAY(), note: "" });
   const [savingPay, setSavingPay] = useState(false);
+  const [showRecon, setShowRecon] = useState(false); // «Сверка за месяц» — долг на начало и конец месяца по всем клиентам
   // долг = отгружено и не оплачено (новые/в пути в долг НЕ идут)
   const unpaid = orders.filter(o => o.status === "отгружена" && !o.paid && o.bags * o.bag_kg * (o.price_per_kg || 0) > 0);
   const byClient = {};
@@ -6611,6 +6752,9 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
         <div className="text-2xl font-display font-semibold text-red-600">{fmt(grand)} тг</div>
       </div>
       <ActivityLog payments={payments} clients={clients} onOpenClient={onOpenClient} />
+      {canEdit && (showRecon
+        ? <ReconMonthTable clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowRecon(false)} />
+        : <button onClick={() => setShowRecon(true)} className="w-full bg-white border border-sky-200 hover:bg-sky-50 text-sky-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="receipt" size={15} />Сверка за месяц (долг на начало и конец)</button>)}
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
@@ -6665,7 +6809,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
                     {pays.map(p => (
                       <div key={p.id} className="flex items-center justify-between text-xs bg-white border border-gray-100 rounded-lg px-3 py-1.5">
                         <span className="text-gray-600 inline-flex items-center gap-1"><Icon name={p.adjust ? "receipt" : "cash"} size={13} className={p.adjust ? "text-sky-600" : "text-emerald-600"} />{(p.date || "").split("-").reverse().join(".")} · {p.method || "оплата"}{p.note ? ` · ${p.note}` : ""}</span>
-                        <span className="flex items-center gap-2"><b className={p.adjust ? "text-sky-600" : "text-emerald-600"}>{p.adjust ? (p.amount >= 0 ? "−" : "+") + fmt(Math.abs(p.amount)) : fmt(p.amount)} тг</b>{canEdit && (!p.adjust || isDirector) && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить оплату">✕</button>}</span>
+                        <span className="flex items-center gap-2"><b className={p.adjust ? "text-sky-600" : "text-emerald-600"}>{p.adjust ? (p.amount >= 0 ? "−" : "+") + fmt(Math.abs(p.amount)) : fmt(p.amount)} тг</b>{canEdit && !p.recon && (!p.adjust || isDirector) && <button onClick={() => delPayment(p.id)} className="text-red-400 hover:text-red-600" title="Удалить оплату">✕</button>}</span>
                       </div>
                     ))}
                   </div>

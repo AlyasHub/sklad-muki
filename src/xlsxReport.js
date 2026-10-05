@@ -74,8 +74,10 @@ export function clientMoves(client, orders, payments) {
       paidNow: paidSum ? { date: g.date, amount: paidSum, label: payLabel((paid.find(o => o.pay_method) || {}).pay_method) } : null,
     };
   });
+  // corr — корректировка долга (сверка по месяцам или «акт сверки»): не деньги, показываем отдельно от оплат
   const pays = (payments || []).filter(p => p.clientId === client.id && Number(p.amount))
-    .map(p => ({ date: p.date || "", amount: Number(p.amount) || 0, label: p.adjust ? "акт сверки" : payLabel(p.method, String(p.note || "").trim()) }));
+    .map(p => ({ date: p.date || "", amount: Number(p.amount) || 0, corr: !!p.adjust,
+      label: p.adjust ? (p.recon ? `сверка на ${dmy(p.recon)}` : "акт сверки") : payLabel(p.method, String(p.note || "").trim()) }));
   return { ships, pays };
 }
 // Долг на начало дня `from` (всё, что было раньше)
@@ -93,7 +95,7 @@ function sheetEvents(mv, from, to) {
     .map(s => ({ ...s, pays: s.paidNow ? [s.paidNow] : [] }));
   const out = [...ships];
   for (const p of mv.pays.filter(p => inRange(p.date, from, to)).sort((a, b) => a.date.localeCompare(b.date))) {
-    const host = ships.find(s => s.date === p.date && s.pays.length < Math.max(1, s.lines.length));
+    const host = !p.corr && ships.find(s => s.date === p.date && s.pays.length < Math.max(1, s.lines.length)); // корректировки — всегда отдельной строкой
     if (host) host.pays.push(p); else out.push({ kind: "pay", date: p.date, pointId: "", lines: [], pays: [p] });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === "ship" ? -1 : 1));
@@ -239,9 +241,12 @@ function addGeneralSheet(wb, items, from, to, by = "day") {
         if (!lines.has(k)) lines.set(k, { name: ln.name, price: ln.price, kg: 0 });
         lines.get(k).kg += ln.kg;
       }
-      const pay = ships.reduce((a, s) => a + (s.paidNow ? s.paidNow.amount : 0), 0) + pays.reduce((a, p) => a + p.amount, 0);
+      // «Оплата» — только реальные деньги; корректировки по сверке — отдельной строкой в отгрузке (с минусом,
+      // если долг уменьшили), чтобы «Долг на конец» = долг на начало + отгрузка − оплата сходился со сверкой
+      const pay = ships.reduce((a, s) => a + (s.paidNow ? s.paidNow.amount : 0), 0) + pays.filter(p => !p.corr).reduce((a, p) => a + p.amount, 0);
+      const corr = pays.filter(p => p.corr).reduce((a, p) => a + p.amount, 0);
       const first = [...ships.map(s => s.date), ...pays.map(p => p.date)].sort()[0];
-      return { client, opening: round2(balanceBefore(mv, mFrom)), lines: [...lines.values()], pay: round2(pay), first };
+      return { client, opening: round2(balanceBefore(mv, mFrom)), lines: [...lines.values()], corr: round2(corr), pay: round2(pay), first };
     }).filter(Boolean).sort((a, b) => a.first.localeCompare(b.first) || clientTitle(a.client).localeCompare(clientTitle(b.client), "ru"));
     if (!rows.length) continue; // месяц без движения — блок не рисуем
 
@@ -271,18 +276,21 @@ function addGeneralSheet(wb, items, from, to, by = "day") {
     const firstRow = s, itogoRows = [];
     let sumC = 0, sumE = 0, sumG = 0, sumH = 0, sumI = 0;
     rows.forEach((it, idx) => {
-      const nLines = Math.max(1, it.lines.length);
+      // строки отгрузки + (если была) корректировка по сверке: сумма с минусом, если долг уменьшили
+      const disp = [...it.lines, ...(it.corr ? [{ corr: true, name: "Корректировка по сверке", sum: -it.corr }] : [])];
+      const nLines = Math.max(1, disp.length);
       const itogo = s + nLines;
       let kg = 0, money = 0;
       for (let k = 0; k < nLines; k++) {
-        const row = s + k, ln = it.lines[k];
-        const t = k === 0 ? "thin" : "thin";
+        const row = s + k, ln = disp[k], t = "thin";
+        const isCorr = !!(ln && ln.corr);
         set(row, 4, ln ? ln.name : null, { font: { italic: true }, numFmt: NF.text, alignment: { wrapText: true }, border: bd("thin", "thin", t, "thin") });
-        set(row, 5, ln ? round2(ln.kg) : null, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
-        set(row, 6, ln ? round2(ln.price) : null, { font: { italic: true }, numFmt: NF.price, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
-        const v = ln ? ln.kg * ln.price : 0;
-        set(row, 7, ln ? { formula: `F${row}*E${row}`, result: round2(v) } : null, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "right", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
-        if (ln) { kg += ln.kg; money += v; }
+        set(row, 5, ln && !isCorr ? round2(ln.kg) : null, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
+        set(row, 6, ln && !isCorr ? round2(ln.price) : null, { font: { italic: true }, numFmt: NF.price, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
+        const v = !ln ? 0 : isCorr ? ln.sum : ln.kg * ln.price;
+        const g = !ln ? null : isCorr ? round2(v) : { formula: `F${row}*E${row}`, result: round2(v) };
+        set(row, 7, g, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "right", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
+        if (ln) { if (!isCorr) kg += ln.kg; money += v; }
       }
       // «Итого» по клиенту
       set(itogo, 4, "Итого", { font: BI, alignment: { wrapText: true }, fill: FILL.white, border: bd("thin", "thin", "thin", "thick") });

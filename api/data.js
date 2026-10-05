@@ -45,6 +45,11 @@ async function logActivity(u, { kind, client, clientName, text }) {
 }
 // Текст про оплату: новая / что поменяли / удаление. null — ничего важного не изменилось (не пишем).
 function payText(p, ex, del) {
+  if (p && p.recon) { // сверка по месяцам: «долг на дату = …» (пересчёт без смены цифры сверки — не пишем)
+    if (del) return `удалил сверку на ${dmy(p.recon)} (${fmtT(p.recon_amount)} тг)`;
+    if (ex && Number(ex.recon_amount) === Number(p.recon_amount)) return null;
+    return `сверка: долг на ${dmy(p.recon)} = ${fmtT(p.recon_amount)} тг${ex ? ` (было по сверке ${fmtT(ex.recon_amount)})` : ""}`;
+  }
   const adj = !!(p && p.adjust);
   if (del) return `${adj ? "удалил корректировку по акту сверки" : "удалил оплату"} ${fmtT(p.amount)} тг${p.date ? ` от ${dmy(p.date)}` : ""}`;
   if (!ex) return adj
@@ -715,7 +720,7 @@ async function deleteFor(u, table, id) {
     if (table === "trucks") { const ex = await dbGet("trucks", id); if (ex && !inMy(ex.city || "astana")) throw new Error("Фура другого города"); return dbDelete("trucks", id); }
     if (table === "lab") { const ex = await dbGet("lab", id); if (ex && ex.city && !inMy(ex.city)) throw new Error("Анализ другого города"); return dbDelete("lab", id); }
     if (table === "crm") { const ex = await dbGet("crm", id); if (ex && ex.ownerId && ex.ownerId !== u.uid) throw new Error("Чужая запись CRM"); return dbDelete("crm", id); }
-    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || !inMy(cli.city || "astana")) throw new Error("Оплата другого города"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || !inMy(cli.city || "astana")) throw new Error("Оплата другого города"); if (ex.adjust && !ex.recon) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
     if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
     if (table === "users") {
       const ex = await dbGet("users", id);
@@ -736,7 +741,7 @@ async function deleteFor(u, table, id) {
     // Торгпред удаляет только своё
     if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); await dbDelete("clients", id); await logClient(u, null, ex, true); return; }
     if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!(await repSeesClient(u, cli))) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
-    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !(await repSeesClient(u, cli))) throw new Error("Это не ваша оплата"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !(await repSeesClient(u, cli))) throw new Error("Это не ваша оплата"); if (ex.adjust && !ex.recon) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
     if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
     throw new Error("Нет прав на удаление");
   }
