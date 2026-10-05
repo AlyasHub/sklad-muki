@@ -2,8 +2,9 @@
 //  • лист на каждого клиента: дата, [адрес точки — если у клиента несколько адресов], товар, кол-во (кг),
 //    цена, сумма, итого по отгрузке, дата оплаты, способ, сумма оплаты и остаток долга нарастающим итогом
 //    (формулы как в шаблоне: остаток = предыдущий + сумма − оплата, тянется по всем строкам);
-//  • лист «общее»: блоки по месяцам — №, организация, долг на начало, отгрузка (наименование, кг, цена,
-//    сумма, «Итого»), оплата, долг на конец; внизу «ИТОГО». В блок попадают клиенты с движением за месяц.
+//  • лист «общее»: блоки по дням (или по месяцам) — №, организация, долг на начало, отгрузка (наименование, кг, цена,
+//    сумма, «Итого»), оплата, долг на конец; внизу «ИТОГО». В блок попадают клиенты с движением за этот день/месяц.
+//  • листы клиентов в отчёте — со всей истории клиента (как в шаблоне: начало = 0), «общее» — за выбранный период.
 // Долг считаем так же, как раздел «Долги»: отгружено (без проб) − оплачено при доставке − внесённые оплаты
 // (вкл. корректировки по акту сверки). Разовые продажи без карточки клиента в отчёт не входят.
 // ExcelJS подгружаем с cdnjs при первой выгрузке (как pdfmake для накладных) — основной бандл не растёт,
@@ -114,7 +115,10 @@ function cellSetter(ws) {
 }
 
 // ── Лист клиента ─────────────────────────────────────────────────────────────────────────────
-function addClientSheet(wb, client, mv, from, to, sheetName) {
+// Как в шаблоне: в отчёте лист ведётся со всей истории клиента (с первой отгрузки, начало = 0) — каждое
+// число в остатке объясняется строками выше. Для выписки за период (statement) — с долгом на начало,
+// подписанным отдельной строкой «Долг на начало периода».
+function addClientSheet(wb, client, mv, from, to, sheetName, statement = false) {
   const ws = wb.addWorksheet(sheetName);
   const set = cellSetter(ws);
   const hasAddr = (client.points || []).length > 0; // несколько адресов — колонка «адрес», как у «Самал»
@@ -138,6 +142,10 @@ function addClientSheet(wb, client, mv, from, to, sheetName) {
     bal = bal + sumVal - payVal;
     set(r, C.bal, { formula: `${L(C.bal)}${r - 1}+${L(C.sum)}${r}-${L(C.pamt)}${r}`, result: round2(bal) }, { numFmt: NF.bal });
   };
+  if (statement && from && opening) { // выписка за период: подпись, откуда цифра в начале
+    set(2, C.date, toDate(from), { numFmt: NF.date, alignment: { horizontal: "left" } });
+    set(2, C.prod, "Долг на начало периода", { font: { italic: true } });
+  }
   balRow(2, 0, 0);
 
   let r = 3;
@@ -181,11 +189,11 @@ function addClientSheet(wb, client, mv, from, to, sheetName) {
     // Разделитель: сменился месяц — голубая полоса (как в шаблоне между августом и сентябрём), иначе пустая строка
     const next = events[i + 1];
     const band = !!next && next.date.slice(0, 7) !== ev.date.slice(0, 7);
+    if (!next) return; // после последней записи — ничего: без «хвоста» из повторяющегося остатка
     if (band) for (let c = 1; c <= C.bal; c++) set(r, c, null, { fill: FILL.band, border: thinTB });
     balRow(r, 0, 0);
     r++;
   });
-  for (let k = 0; k < 5; k++) balRow(r++, 0, 0); // формула остатка — ещё на несколько строк вниз, для ручных дописок
   return ws;
 }
 
@@ -202,14 +210,25 @@ function monthsBetween(from, to) {
   return out;
 }
 
-function addGeneralSheet(wb, items, from, to) {
+// Блоки листа «общее»: по дням (каждый день с отгрузками или оплатами) или по месяцам
+function generalPeriods(items, from, to, by) {
+  if (by === "month") return monthsBetween(from, to).map(m => ({ first: from > m.first ? from : m.first, last: to < m.last ? to : m.last, title: m.first, fmt: NF.month }));
+  const days = new Set();
+  for (const { mv } of items) {
+    for (const s of mv.ships) if (inRange(s.date, from, to)) days.add(s.date);
+    for (const p of mv.pays) if (p.date && inRange(p.date, from, to)) days.add(p.date);
+  }
+  return [...days].sort().map(d => ({ first: d, last: d, title: d, fmt: NF.date }));
+}
+
+function addGeneralSheet(wb, items, from, to, by = "day") {
   const ws = wb.addWorksheet("общее");
   const set = cellSetter(ws);
   [13, 31.9, 17.4, 25.9, 18, 11.1, 16, 18.1, 17.1].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
   const BI = { bold: true, italic: true };
   let r = 2;
-  for (const mo of monthsBetween(from, to)) {
-    const mFrom = from > mo.first ? from : mo.first, mTo = to < mo.last ? to : mo.last;
+  for (const mo of generalPeriods(items, from, to, by)) {
+    const mFrom = mo.first, mTo = mo.last;
     const rows = items.map(({ client, mv }) => {
       const ships = mv.ships.filter(s => inRange(s.date, mFrom, mTo));
       const pays = mv.pays.filter(p => inRange(p.date, mFrom, mTo));
@@ -228,7 +247,7 @@ function addGeneralSheet(wb, items, from, to) {
 
     // Заголовок блока: месяц (зелёная полоса)
     for (let c = 2; c <= 9; c++) set(r, c, null, { border: bd(c === 2 ? "thin" : null, c === 9 ? "thick" : null, "thick", null) });
-    set(r, 2, toDate(mo.first), { font: { bold: true }, numFmt: NF.month, alignment: { horizontal: "center" }, fill: FILL.period, border: bd("thin", "thick", "thick", null) });
+    set(r, 2, toDate(mo.title), { font: { bold: true }, numFmt: mo.fmt, alignment: { horizontal: "center" }, fill: FILL.period, border: bd("thin", "thick", "thick", null) });
     ws.mergeCells(r, 2, r, 9);
     // Шапка таблицы (2 строки)
     const h1 = r + 1, h2 = r + 2;
@@ -313,7 +332,9 @@ function uniqueSheetName(name, used) {
 
 // Книга: лист на каждого клиента + (по желанию) лист «общее». keepEmpty — оставить клиента и без движения
 // (для выписки одного клиента: покажет хотя бы долг на начало). Возвращает null, если показывать нечего.
-export function buildClientsWorkbook(ExcelJS, { clients, orders, payments, from = "", to = "", includeGeneral = true, keepEmpty = false }) {
+// generalBy: "day" — блоки «общее» по дням (по умолчанию), "month" — по месяцам.
+// statement: выписка одного клиента за период (лист с долгом на начало); иначе листы клиентов — со всей истории.
+export function buildClientsWorkbook(ExcelJS, { clients, orders, payments, from = "", to = "", includeGeneral = true, keepEmpty = false, generalBy = "day", statement = false }) {
   const all = (clients || []).filter(c => c && c.id).map(client => ({ client, mv: clientMoves(client, orders, payments) }));
   const items = keepEmpty ? all : all.filter(it => hasMoves(it.mv, from, to));
   if (!items.length) return null;
@@ -326,9 +347,9 @@ export function buildClientsWorkbook(ExcelJS, { clients, orders, payments, from 
   wb.calcProperties.fullCalcOnLoad = true; // Excel пересчитает формулы при открытии
   const used = new Set(["общее"]);
   items.sort((a, b) => clientTitle(a.client).localeCompare(clientTitle(b.client), "ru"));
-  for (const it of items) addClientSheet(wb, it.client, it.mv, from, to, uniqueSheetName(it.client.name, used));
+  for (const it of items) addClientSheet(wb, it.client, it.mv, statement ? from : "", to, uniqueSheetName(it.client.name, used), statement);
   if (includeGeneral && F && T) {
-    addGeneralSheet(wb, items, F, T);
+    addGeneralSheet(wb, items, F, T, generalBy);
     wb.views = [{ x: 0, y: 0, width: 20000, height: 12000, firstSheet: 0, activeTab: wb.worksheets.length - 1, visibility: "visible" }];
   }
   return wb;
