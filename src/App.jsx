@@ -448,6 +448,8 @@ function PointSel({ client, value, onChange }) {
   return <Sel label="Адрес доставки" value={value || ""} onChange={e => onChange(e.target.value)}
     options={[{ value: "", label: (client.address_label ? client.address_label + " — " : "Основной: ") + (client.address || "—") }, ...pts.map(p => ({ value: p.id, label: (p.label ? p.label + " — " : "") + (p.address || "без адреса") }))]} />;
 }
+// Клиенты для выпадающих списков: приостановленные — в конце и с пометкой
+const clientOptions = list => [...(list || [])].sort((a, b) => (a.paused ? 1 : 0) - (b.paused ? 1 : 0)).map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") + (c.paused ? " · ⏸ приостановлен" : "") }));
 // pointId только если такая точка есть у этого клиента (защита от «чужой» точки после смены клиента)
 const validPoint = (client, pid) => (pid && client && (client.points || []).some(p => p.id === pid)) ? pid : "";
 function Btn({ variant = "primary", size = "md", children, onClick, disabled, ...p }) {
@@ -1503,7 +1505,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           <div className="grid grid-cols-2 gap-3">
             {form.isSample
               ? <div className="col-span-2"><Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" /></div>
-              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value, pointId: "" })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} /></div>}
+              : <div className="col-span-2"><Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value, pointId: "" })} options={[{ value: "", label: "— выбери клиента —" }, ...clientOptions(clients)]} /></div>}
             {!form.isSample && (clients.find(c => c.id === form.clientId)?.points || []).length > 0 && <div className="col-span-2"><PointSel client={clients.find(c => c.id === form.clientId)} value={form.pointId} onChange={v => setForm(f => ({ ...f, pointId: v }))} /></div>}
             <Sel label="Бренд" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} options={BRANDS} />
             <Sel label="Сорт" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })} options={GRADES} />
@@ -2510,6 +2512,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const [histTo, setHistTo] = useState(TODAY());
   const [search, setSearch] = useState("");
   const [staleOnly, setStaleOnly] = useState(false);
+  const [showPaused, setShowPaused] = useState(false); // раздел «Приостановленные» внизу списка (свёрнут)
   const [groupFilter, setGroupFilter] = useState("all"); // директор: быстрый переход к группе (наши / торгпред)
   const [showRestore, setShowRestore] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", contact: "", prices: [] });
@@ -2678,7 +2681,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
       if (!coords && p.gis_link) { try { coords = await resolveGisCoords(p.gis_link); } catch {} }
       points.push({ ...p, id: p.id || uid(), label: (p.label || "").trim(), address: (p.address || "").trim(), gis_link: (p.gis_link || "").trim(), coords });
     }
-    try { await dbUpsert("clients", { id: editId || uid(), ...form, points, ownerId }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
+    const exClient = editId ? clients.find(x => x.id === editId) : null; // поля, которых нет в форме (пауза и т.п.), при правке не теряем
+    try { await dbUpsert("clients", { ...(exClient || {}), id: editId || uid(), ...form, points, ownerId }); setShowAdd(false); await reload("clients"); } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
   // Группы клиентов: «Наши» (ownerId пусто) + группа каждого торгпреда. Названия можно переименовать.
@@ -2692,6 +2696,18 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
       if (g.key === "") { const ex = (notes || []).find(n => n.id === "clientgroups") || { id: "clientgroups" }; await dbUpsert("notes", { ...ex, id: "clientgroups", houseName: name.trim() }); await reload("notes"); }
       else { const u = repUsers.find(x => x.id === g.key); if (u) { await dbUpsert("users", { ...u, group_name: name.trim() }); await reload("users"); } }
     } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+  };
+  // ⏸ Приостановить / возобновить работу с клиентом: карточка, цены и долг сохраняются, но клиент не попадает
+  // в «давно не заказывали», «Напомнить» и прогноз закупа (ИИ-советы, «что докупить»).
+  const togglePause = async c => {
+    if (c.paused) {
+      if (!confirm(`Возобновить работу с «${c.name}»? Он снова будет в напоминаниях «давно не заказывали».`)) return;
+      try { await dbUpsert("clients", { ...c, paused: false, paused_at: "", paused_note: "" }); await reload("clients"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+      return;
+    }
+    const note = prompt(`Приостановить «${c.name}»?\nПока приостановлен — не будет в «давно не заказывали», «Напомнить» и прогнозе закупа. Карточка, цены и долг сохранятся.\n\nПричина (по желанию):`, "");
+    if (note === null) return;
+    try { await dbUpsert("clients", { ...c, paused: true, paused_at: TODAY(), paused_note: note.trim() }); await reload("clients"); } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
   };
   const deleteClient = async id => {
     const c = clients.find(x => x.id === id);
@@ -2718,11 +2734,14 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const lastByClient = {};
   orders.forEach(o => { if (!o.clientId) return; if (!lastByClient[o.clientId] || o.date > lastByClient[o.clientId]) lastByClient[o.clientId] = o.date; });
   const daysSince = d => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null;
-  const isStale = c => { const days = daysSince(lastByClient[c.id]); return days !== null && days >= STALE_DAYS; }; // заказывал, но давно
+  const isStale = c => { if (c.paused) return false; const days = daysSince(lastByClient[c.id]); return days !== null && days >= STALE_DAYS; }; // заказывал, но давно (приостановленные — не в счёт)
 
   const q = search.trim().toLowerCase();
   let shown = clients.filter(c => !q || [c.name, c.org_name, c.contact_name, c.contact].some(v => (v || "").toLowerCase().includes(q)));
   if (staleOnly) shown = shown.filter(isStale);
+  // Приостановленные: без поиска — отдельным свёрнутым разделом внизу; при поиске — в общем списке (с меткой)
+  const pausedShown = q ? [] : shown.filter(c => c.paused).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  if (!q) shown = shown.filter(c => !c.paused);
   shown = shown.sort((a, b) => staleOnly ? (lastByClient[a.id] || "").localeCompare(lastByClient[b.id] || "") : (a.name || "").localeCompare(b.name || ""));
   const staleCount = clients.filter(isStale).length;
 
@@ -2901,18 +2920,18 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
       )}
       <div className="space-y-3">
         {clients.length === 0 && <div className="text-center py-12 text-gray-400">Клиентов нет.</div>}
-        {clients.length > 0 && shown.length === 0 && <div className="text-center py-12 text-gray-400">Ничего не найдено.</div>}
+        {clients.length > 0 && shown.length === 0 && !pausedShown.length && <div className="text-center py-12 text-gray-400">Ничего не найдено.</div>}
         {(() => {
           const card = c => {
             const debt = clientDebt(c);
             const last = lastByClient[c.id];
             const days = daysSince(last);
-            const stale = days !== null && days >= STALE_DAYS;
+            const stale = !c.paused && days !== null && days >= STALE_DAYS; // приостановленных не «торопим»
             return (
             <div key={c.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="font-bold text-gray-900">{c.name}{cities.length > 1 && <span className="ml-2 text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full align-middle">{cityName(notes, clientCity(c))}</span>}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}</div>
+                  <div className="font-bold text-gray-900">{c.name}{cities.length > 1 && <span className="ml-2 text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full align-middle">{cityName(notes, clientCity(c))}</span>}{debt > 0 && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full align-middle">долг {fmt(debt)} тг</span>}{stale && <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full align-middle">⏳ давно</span>}{c.paused && <span className="ml-2 text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full align-middle">⏸ приостановлен</span>}</div>
                   {c.org_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="building" size={13} />{c.org_name}</div>}
                   {c.contact_name && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="user" size={13} />{c.contact_name}</div>}
                   {c.address && <div className="text-sm text-gray-500 flex items-center gap-1.5"><Icon name="pin" size={13} />{c.address_label ? <b className="text-gray-700 font-medium">{c.address_label}:</b> : null} {c.address}</div>}
@@ -2928,28 +2947,43 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               <div className="flex gap-2 flex-wrap">
                 <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}><Icon name="clipboard" size={15} />История и оплаты</Btn>
                 {canEdit && (!isRep || c.ownerId === myUid) && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}><Icon name="link" size={15} />Заказ-ссылка</Btn>}
+                {canEdit && (!isRep || c.ownerId === myUid) && <Btn size="sm" variant="secondary" onClick={() => togglePause(c)}>{c.paused ? "▶ Возобновить" : "⏸ Приостановить"}</Btn>}
               </div>
+              {c.paused && <div className="text-xs text-gray-600 bg-gray-100 rounded-lg px-2 py-1 mt-2">⏸ Работа приостановлена{c.paused_at ? ` с ${c.paused_at.split("-").reverse().join(".")}` : ""}{c.paused_note ? ` · ${c.paused_note}` : ""}. В «давно не заказывали», «Напомнить» и прогнозе закупа не учитывается.</div>}
             </div>
             );
           };
+          // ⏸ Приостановленные — отдельным свёрнутым разделом внизу (при фильтре группы у директора — только этой группы)
+          const inGroup = c => isRep || groupFilter === "all" || (groupFilter === "" ? !c.ownerId : groupFilter === "orphan" ? (c.ownerId && !repUsers.some(u => u.id === c.ownerId)) : c.ownerId === groupFilter);
+          const pausedList = pausedShown.filter(inGroup);
+          const pausedSection = pausedList.length > 0 && (
+            <div key="paused" className="space-y-3 pt-2">
+              <button onClick={() => setShowPaused(v => !v)} className="w-full flex items-center justify-between border-b border-gray-100 pb-1">
+                <h4 className="font-semibold text-gray-500 flex items-center gap-1.5">⏸ Приостановленные <span className="text-gray-400 font-normal text-sm">· {pausedList.length}</span></h4>
+                <span className="text-xs text-gray-400">{showPaused ? "скрыть" : "показать"}</span>
+              </button>
+              {showPaused && pausedList.map(card)}
+            </div>
+          );
+          const withPaused = list => <>{list}{pausedSection}</>;
           if (isRep) {
             // торгпред: свои — плоским списком; если админ открыл ему чужие группы — разделы «Мои» / «Наши» / группы торгпредов
             const others = shown.filter(c => c.ownerId !== myUid);
-            if (!others.length) return shown.map(card);
+            if (!others.length) return withPaused(shown.map(card));
             const rGroups = [{ key: "mine", label: "Мои клиенты", items: shown.filter(c => c.ownerId === myUid) }, { key: "", label: houseName, items: others.filter(c => !c.ownerId) },
               ...repUsers.filter(u => u.id !== myUid).map(u => ({ key: u.id, label: u.group_name || u.name, items: others.filter(c => c.ownerId === u.id) }))];
-            return rGroups.filter(g => g.items.length).map(g => (
+            return withPaused(rGroups.filter(g => g.items.length).map(g => (
               <div key={g.key || "house"} className="space-y-3">
                 <h4 className="font-semibold text-gray-700 flex items-center gap-1.5 pt-1 border-b border-gray-100 pb-1"><Icon name={g.key === "" ? "home" : "user"} size={15} />{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
                 {g.items.map(card)}
               </div>
-            ));
+            )));
           }
           // Админ/директор: разделы по группам с переименованием
           const groups = [{ key: "", label: houseName, items: shown.filter(c => !c.ownerId) }, ...repUsers.map(u => ({ key: u.id, label: u.group_name || u.name, items: shown.filter(c => c.ownerId === u.id) }))];
           const orphan = shown.filter(c => c.ownerId && !repUsers.some(u => u.id === c.ownerId));
           if (orphan.length) groups.push({ key: "orphan", label: "Без группы", items: orphan });
-          return groups.filter(g => g.items.length && (groupFilter === "all" || g.key === groupFilter)).map(g => (
+          return withPaused(groups.filter(g => g.items.length && (groupFilter === "all" || g.key === groupFilter)).map(g => (
             <div key={g.key} className="space-y-3">
               <div className="flex items-center justify-between pt-1 border-b border-gray-100 pb-1">
                 <h4 className="font-semibold text-gray-700 flex items-center gap-1.5"><Icon name={g.key === "" ? "home" : "user"} size={15} />{g.label} <span className="text-gray-400 font-normal text-sm">· {g.items.length}</span></h4>
@@ -2957,7 +2991,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               </div>
               {g.items.map(card)}
             </div>
-          ));
+          )));
         })()}
       </div>
 
@@ -3002,7 +3036,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                 const per = from ? `${from.split("-").reverse().join(".")}–${(histPeriod === "month" ? t : to).split("-").reverse().join(".")}` : `на ${t.split("-").reverse().join(".")}`;
                 setStmtBusy(true);
                 try {
-                  await downloadClientsReport({ clients: [historyClient], orders: (orders || []).filter(o => !o.foreign), payments: payments || [], from, to, includeGeneral: false, keepEmpty: true }, `Выписка ${historyClient.name} ${per}`);
+                  await downloadClientsReport({ clients: [historyClient], orders: (orders || []).filter(o => !o.foreign), payments: payments || [], from, to, includeGeneral: false, keepEmpty: true, statement: true }, `Выписка ${historyClient.name} ${per}`);
                 } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
                 setStmtBusy(false);
               }}><Icon name="download" size={14} />{stmtBusy ? "Формирую…" : "Выписка в Excel"}</Btn>
@@ -3522,6 +3556,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   const [xlFrom, setXlFrom] = useState(() => TODAY().slice(0, 8) + "01");
   const [xlTo, setXlTo] = useState(TODAY());
   const [xlGroup, setXlGroup] = useState("all"); // all | _main (наши) | id торгпреда
+  const [xlBy, setXlBy] = useState("day"); // лист «общее»: блоки по дням (как просили) или по месяцам
   const [xlBusy, setXlBusy] = useState(false);
   const [selRep, setSelRep] = useState(""); // директор: подробная аналитика по выбранному торгпреду
   const [openCity, setOpenCity] = useState(""); // раскрытый город в сводке «По городам» (показать что чаще берут)
@@ -3647,7 +3682,8 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   // 🔮 Прогноз: спрос по дням недели за последние 8 недель → ожидание на неделю vs остатки
   const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
   const cutoffD = new Date(now); cutoffD.setDate(cutoffD.getDate() - 56);
-  const recentDel = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && new Date(o.date) >= cutoffD);
+  const pausedIds = new Set((clients || []).filter(c => c.paused).map(c => c.id)); // приостановленные — в прогноз спроса не берём
+  const recentDel = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && new Date(o.date) >= cutoffD && !pausedIds.has(o.clientId));
   const demandWD = {};
   recentDel.forEach(o => { const wd = new Date(o.date).getDay(); const p = `${o.brand} ${o.grade} ${o.bag_kg}кг`; (demandWD[wd] = demandWD[wd] || {})[p] = (demandWD[wd][p] || 0) + o.bags * o.bag_kg; });
   const expectedWk = {};
@@ -3752,7 +3788,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
     const grp = repMode ? "" : xlGroupName(xlGroup);
     setXlBusy(true);
     try {
-      const ok = await downloadClientsReport({ clients: list, orders: (ordersProp || []).filter(o => !o.foreign), payments: paymentsProp || [], from: xlFrom, to: xlTo },
+      const ok = await downloadClientsReport({ clients: list, orders: (ordersProp || []).filter(o => !o.foreign), payments: paymentsProp || [], from: xlFrom, to: xlTo, generalBy: xlBy },
         `Отчёт ${grp ? grp + " " : ""}${xlFrom.split("-").reverse().join(".")}–${xlTo.split("-").reverse().join(".")}`);
       if (!ok) alert("За этот период у выбранных клиентов не было ни отгрузок, ни оплат.");
     } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
@@ -3765,12 +3801,16 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
         <span className="text-xs text-gray-400">{xlOpen ? "скрыть" : "открыть"}</span>
       </button>
       {xlOpen && (<>
-        <p className="text-xs text-gray-500">Лист на каждого клиента (отгрузки, оплаты, остаток долга) и лист «общее» по месяцам — как в отчёте Темирлана. Входят клиенты, у которых за период были отгрузки или оплаты{showCitySel ? "; учитывается выбор городов выше" : ""}.</p>
+        <p className="text-xs text-gray-500">Как в отчёте Темирлана: лист на каждого клиента — вся его история (отгрузки, оплаты, остаток долга) и лист «общее» за выбранный период — по дням или по месяцам. Входят клиенты, у которых за период были отгрузки или оплаты{showCitySel ? "; учитывается выбор городов выше" : ""}.</p>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-gray-500">с</span>
           <Inp type="date" value={xlFrom} onChange={e => setXlFrom(e.target.value)} />
           <span className="text-sm text-gray-500">по</span>
           <Inp type="date" value={xlTo} onChange={e => setXlTo(e.target.value)} />
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-gray-500">Лист «общее»:</span>
+          {[["day", "по дням"], ["month", "по месяцам"]].map(([v, l]) => <button key={v} onClick={() => setXlBy(v)} className={`px-3 py-1.5 rounded-full text-xs font-medium ${xlBy === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{l}</button>)}
         </div>
         {!repMode && <Sel label="Чьи клиенты" value={xlGroup} onChange={e => setXlGroup(e.target.value)} options={[{ value: "all", label: "Все клиенты" }, { value: "_main", label: xlHouse }, ...xlReps.map(u => ({ value: u.id, label: `${u.group_name || u.name} (торгпред ${u.name})` }))]} />}
         <Btn onClick={downloadXl} disabled={xlBusy}>{xlBusy ? "Формирую…" : "Скачать Excel"}</Btn>
@@ -5881,7 +5921,7 @@ function SoftInvoiceTab({ clients, orders }) {
     <div className="space-y-4">
       <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-800 flex items-start gap-2"><span className="mt-0.5 shrink-0"><Icon name="receipt" size={16} /></span><span>Выбери клиента — подставятся все позиции его прайса с ценами за мешок. Проставь <b>только количество мешков</b> у нужных позиций: в накладную попадут именно они, ровно столько строк. Печать — две копии на листе.</span></div>
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
-        <Sel label="Клиент (покупатель)" value={clientId} onChange={e => pickClient(e.target.value)} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
+        <Sel label="Клиент (покупатель)" value={clientId} onChange={e => pickClient(e.target.value)} options={[{ value: "", label: "— выбери клиента —" }, ...clientOptions(clients)]} />
         <div className="grid grid-cols-2 gap-3">
           <Inp label="Покупатель (как в накладной)" value={buyer} onChange={e => setBuyer(e.target.value)} placeholder="можно вписать вручную" />
           <Inp label="Дата составления" type="date" value={date} onChange={e => setDate(e.target.value)} />
@@ -6373,7 +6413,7 @@ function ContractsTab({ clients }) {
       </div>
 
       {source === "client"
-        ? <Sel label="Клиент" value={clientId} onChange={e => { setClientId(e.target.value); setResult(""); }} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
+        ? <Sel label="Клиент" value={clientId} onChange={e => { setClientId(e.target.value); setResult(""); }} options={[{ value: "", label: "— выбери клиента —" }, ...clientOptions(clients)]} />
         : (
           <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
             <div className="text-sm font-medium text-gray-700 mb-1">Вставь данные контрагента</div>
@@ -6418,6 +6458,7 @@ function ReactivateTab({ clients, orders }) {
   const today = Date.now();
   const rows = [];
   clients.forEach(c => {
+    if (c.paused) return; // приостановлен — пока не работаем, не напоминаем
     // клиента с активной заявкой не дёргаем — он уже в работе
     if (orders.some(o => o.clientId === c.id && (o.status === "новая" || o.status === "в пути"))) return;
     const dates = [...new Set(orders.filter(o => o.clientId === c.id && o.status === "отгружена").map(o => o.date))].sort();
@@ -6722,7 +6763,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
       {showAdd && (
         <Modal title="Отгрузка напрямую клиенту" onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
-            <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />
+            <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clientOptions(clients)]} />
             <div className="grid grid-cols-2 gap-3">
               <Inp label="Дата отправки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
               <Inp label="Примечание (фура)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. фура №2, Олжас" />
@@ -7232,7 +7273,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                   {(p.matchOptions || []).length > 1 && <div className="text-xs text-orange-600 mb-1">⚠️ Несколько похожих клиентов — выбери, какая именно организация:</div>}
                   <select value={p.clientId || ""} onChange={e => chooseClient(i, e.target.value)} className={`w-full border rounded-lg px-2 py-1.5 text-xs ${(p.matchOptions || []).length > 1 && !p.clientId ? "border-orange-300 bg-orange-50" : "border-gray-200 text-gray-500"}`}>
                     <option value="">— клиент не выбран —</option>
-                    {[...clients].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru")).map(c => <option key={c.id} value={c.id}>{c.name}{c.org_name ? ` (${c.org_name})` : ""}{c.address ? ` — ${c.address}` : ""}</option>)}
+                    {[...clients].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru")).map(c => <option key={c.id} value={c.id}>{c.name}{c.org_name ? ` (${c.org_name})` : ""}{c.address ? ` — ${c.address}` : ""}{c.paused ? " · ⏸ приостановлен" : ""}</option>)}
                   </select>
                 </div>
                 <div className="text-gray-600 mt-1">{p.brand} · {p.grade} · {p.bag_kg}кг × {p.bags} = {fmt(p.bags * p.bag_kg)} кг</div>
@@ -7445,7 +7486,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           <div className="space-y-3">
             {form.isSample
               ? <Inp label="Кому (название компании)" value={form.sampleName} onChange={e => setForm({ ...form, sampleName: e.target.value })} placeholder="Кафе Достык" />
-              : <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value, pointId: "" })} options={[{ value: "", label: "— выбери клиента —" }, ...clients.map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") }))]} />}
+              : <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value, pointId: "" })} options={[{ value: "", label: "— выбери клиента —" }, ...clientOptions(clients)]} />}
             {!form.isSample && <PointSel client={clients.find(c => c.id === form.clientId)} value={form.pointId} onChange={v => setForm(f => ({ ...f, pointId: v }))} />}
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">{form.trial ? "Что даём на пробу" : "Что везём (по позициям)"}</p>

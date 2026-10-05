@@ -15,10 +15,11 @@ export default async function handler(req, res) {
   if (!u || !["director", "viewer"].includes(u.role)) return res.status(403).json({ error: "Только для администратора и директора" });
 
   try {
-    const [orders, stock] = await Promise.all([dbList("orders"), dbList("stock")]);
+    const [orders, stock, clients] = await Promise.all([dbList("orders"), dbList("stock"), dbList("clients")]);
+    const pausedIds = new Set(clients.filter(c => c.paused).map(c => c.id)); // приостановленные клиенты — пока не работаем, в прогноз не берём
     const now = new Date();
     const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 56);
-    const recent = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && new Date(o.date) >= cutoff);
+    const recent = orders.filter(o => o.status === "отгружена" && !o.fromKaraganda && new Date(o.date) >= cutoff && !pausedIds.has(o.clientId));
     const weeks = 8;
 
     // ВАЖНО: считаем по ПОЗИЦИЯМ (бренд + сорт + фасовка), а не только по продукту —

@@ -73,6 +73,7 @@ function clientText(c, ex) {
   if (ptsKey(ex) !== ptsKey(c)) ch.push("адреса доставки");
   if ((ex.ownerId || "") !== (c.ownerId || "")) ch.push("группа");
   if ((ex.city || "astana") !== (c.city || "astana")) ch.push("город");
+  if (!!ex.paused !== !!c.paused) ch.push(c.paused ? `работа приостановлена${c.paused_note ? ` (${c.paused_note})` : ""}` : "работа возобновлена");
   return ch.length ? `изменил карточку: ${ch.join(", ")}` : null;
 }
 async function logPay(u, p, ex, del = false) {
