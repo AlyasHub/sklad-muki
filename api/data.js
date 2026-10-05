@@ -22,6 +22,69 @@ async function logChange(u, action, table, record) {
   } catch {}
 }
 
+// 🧾 История действий для раздела «Долги»: кто внёс/изменил/удалил оплату, корректировки по акту
+// сверки, правки карточки клиента. Пишем в ту же таблицу changes, но с table:"activity" (в журнал
+// изменений админа эти строки не попадают). Храним последние ~1000, лишние изредка подчищаем.
+const fmtT = n => Math.round(Number(n) || 0).toLocaleString("ru-RU");
+const dmy = d => String(d || "").split("-").reverse().join(".");
+async function logActivity(u, { kind, client, clientName, text }) {
+  if (!text) return;
+  try {
+    await dbUpsert("changes", {
+      id: uid(), at: new Date().toISOString(), table: "activity", kind,
+      userId: u.uid, userName: u.name, role: u.role,
+      clientId: (client && client.id) || "", clientName: (client && client.name) || clientName || "",
+      ownerId: (client && client.ownerId) || "", city: (client && client.city) || "astana",
+      text: String(text).slice(0, 300),
+    });
+    if (Math.random() < 0.05) {
+      const old = await dbSelect("changes", "select=id&data->>table=eq.activity&order=id.desc&offset=1000&limit=1");
+      if (old.length) await dbDeleteWhere("changes", `data->>table=eq.activity&id=lte.${encodeURIComponent(old[0].id)}`);
+    }
+  } catch {}
+}
+// Текст про оплату: новая / что поменяли / удаление. null — ничего важного не изменилось (не пишем).
+function payText(p, ex, del) {
+  const adj = !!(p && p.adjust);
+  if (del) return `${adj ? "удалил корректировку по акту сверки" : "удалил оплату"} ${fmtT(p.amount)} тг${p.date ? ` от ${dmy(p.date)}` : ""}`;
+  if (!ex) return adj
+    ? `корректировка по акту сверки: долг ${Number(p.amount) >= 0 ? "уменьшен" : "увеличен"} на ${fmtT(Math.abs(Number(p.amount) || 0))} тг`
+    : `внёс оплату ${fmtT(p.amount)} тг${p.method ? ` · ${p.method}` : ""}${p.date ? ` · ${dmy(p.date)}` : ""}`;
+  const ch = [];
+  if (Number(ex.amount) !== Number(p.amount)) ch.push(`сумма ${fmtT(ex.amount)} → ${fmtT(p.amount)} тг`);
+  if ((ex.method || "") !== (p.method || "")) ch.push(`способ ${ex.method || "—"} → ${p.method || "—"}`);
+  if ((ex.date || "") !== (p.date || "")) ch.push(`дата ${dmy(ex.date)} → ${dmy(p.date)}`);
+  if ((ex.note || "") !== (p.note || "")) ch.push("комментарий");
+  return ch.length ? `изменил ${adj ? "корректировку" : "оплату"}: ${ch.join(", ")}` : null;
+}
+// Текст про карточку клиента: что именно поменяли (реквизиты, цены, адреса). null — ничего важного.
+function clientText(c, ex) {
+  if (!ex) return "добавил клиента";
+  const F = { name: "название", org_name: "организация", bin: "БИН", director: "директор", bank: "банк", iik: "ИИК", bik: "БИК", legal_address: "юр. адрес", address: "адрес", address_label: "название адреса", contact: "телефон", contact_name: "контакт", gis_link: "2ГИС", access_note: "как заехать", work_hours: "время работы" };
+  const ch = Object.entries(F).filter(([k]) => String(ex[k] || "") !== String(c[k] || "")).map(([, l]) => l);
+  const pk = p => `${p.brand} ${p.grade} ${p.bag_kg}кг`;
+  const oldP = new Map((ex.prices || []).map(p => [pk(p), Number(p.price_per_kg)]));
+  const newP = new Map((c.prices || []).map(p => [pk(p), Number(p.price_per_kg)]));
+  const pr = [];
+  for (const [k, v] of newP) { const o = oldP.get(k); if (o === undefined) pr.push(`${k}: ${v}`); else if (o !== v) pr.push(`${k}: ${o} → ${v}`); }
+  for (const k of oldP.keys()) if (!newP.has(k)) pr.push(`${k}: убрана`);
+  if (pr.length) ch.push(`цены (${pr.slice(0, 4).join("; ")}${pr.length > 4 ? "…" : ""})`);
+  const ptsKey = x => JSON.stringify((x.points || []).map(p => [p.label || "", p.address || ""]));
+  if (ptsKey(ex) !== ptsKey(c)) ch.push("адреса доставки");
+  if ((ex.ownerId || "") !== (c.ownerId || "")) ch.push("группа");
+  if ((ex.city || "astana") !== (c.city || "astana")) ch.push("город");
+  return ch.length ? `изменил карточку: ${ch.join(", ")}` : null;
+}
+async function logPay(u, p, ex, del = false) {
+  const text = payText(p, ex, del);
+  if (!text) return;
+  let cl = null; if (p && p.clientId) { try { cl = await dbGet("clients", p.clientId); } catch {} }
+  await logActivity(u, { kind: p.adjust ? "adjust" : "payment", client: cl, clientName: p.clientName, text });
+}
+async function logClient(u, c, ex, del = false) {
+  await logActivity(u, { kind: "client", client: del ? ex : c, text: del ? "удалил клиента" : clientText(c, ex) });
+}
+
 // Снимок всей базы (для резервной копии)
 export async function makeSnapshot(by) {
   const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses"];
@@ -95,12 +158,23 @@ export default async function handler(req, res) {
       const fresh_token = (u.exp && u.exp - Date.now() < 7 * 864e5) ? signToken({ uid: u.uid, role: u.role, driverId: u.driverId || "", name: u.name, city: u.city || "", cities: u.cities || [], exp: Date.now() + 30 * 864e5 }) : null;
       return res.status(200).json(fresh_token ? { data: out, fresh_token } : { data: out });
     }
+    // 🧾 История действий в «Долгах»: админ/просмотр — всё (просмотр с городами — свои города),
+    // менеджер — свои города, торгпред — только по своим (и открытым ему) клиентам.
+    if (op === "activity") {
+      if (!["director", "viewer", "citymanager", "rep"].includes(u.role)) return res.status(403).json({ error: "Нет доступа" });
+      let rows = [];
+      try { rows = (await dbSelect("changes", "select=data&data->>table=eq.activity&order=id.desc&limit=400")).map(r => r.data); } catch { return res.status(200).json({ rows: [] }); }
+      const myC = (u.cities && u.cities.length) ? u.cities : null;
+      if (u.role === "citymanager" || (u.role === "viewer" && myC)) { const cs = myC || [u.city || "astana"]; rows = rows.filter(r => cs.includes(r.city || "astana")); }
+      if (u.role === "rep") { const ids = new Set((await repVisibleClients(u)).map(c => c.id)); rows = rows.filter(r => r.clientId && ids.has(r.clientId)); }
+      return res.status(200).json({ rows: rows.slice(0, 100) });
+    }
     // Журнал изменений и резервные копии — только администратор
     if (op === "changes" || op === "restoreChange" || op === "backupNow" || op === "backupList" || op === "backupGet") {
       if (u.role !== "director") return res.status(403).json({ error: "Только для администратора" });
       if (op === "changes") {
         let all = []; try { all = await dbList("changes"); } catch { return res.status(200).json({ rows: [], needTable: "changes" }); }
-        const rows = all.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200);
+        const rows = all.filter(r => r.table !== "activity").sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200); // история «Долгов» — отдельно
         // саму запись наружу не отдаём (там могут быть хэши паролей) — только пометку, что откат возможен
         return res.status(200).json({ rows: rows.map(({ data, ...r }) => ({ ...r, canRestore: !!data })) });
       }
@@ -404,6 +478,8 @@ async function upsertFor(u, table, item) {
     }
     const out = await dbUpsert(table, item);
     if (table === "orders") await syncOrderStock(existing, item); // движение склада всегда = заявке (пересчёт при правках)
+    if (table === "payments") await logPay(u, item, existing); // история «Долгов»
+    if (table === "clients") await logClient(u, item, existing);
     if (LOGGED.has(table)) await logChange(u, existing ? "update" : "create", table, item);
     return out;
   }
@@ -414,7 +490,7 @@ async function upsertFor(u, table, item) {
     const inMy = c => myCities.includes(c || "astana");
     const guard = async (t) => { const ex = await dbGet(t, item.id); if (ex && !inMy(ex.city || "astana")) throw new Error("Это запись другого города"); return ex; };
     const cityFor = ex => ex ? (ex.city || myCities[0]) : (inMy(item.city) ? item.city : myCities[0]); // правка — сохраняем город записи; новая — выбранный (из его городов)
-    if (table === "clients") { const ex = await guard("clients"); return dbUpsert("clients", { ...item, city: cityFor(ex) }); }
+    if (table === "clients") { const ex = await guard("clients"); const rec = { ...item, city: cityFor(ex) }; await dbUpsert("clients", rec); await logClient(u, rec, ex); return; }
     if (table === "drivers") { const ex = await guard("drivers"); return dbUpsert("drivers", { ...item, city: cityFor(ex) }); }
     if (table === "expenses") { const ex = await guard("expenses"); return dbUpsert("expenses", { ...item, city: cityFor(ex) }); }
     if (table === "stock") {
@@ -451,7 +527,7 @@ async function upsertFor(u, table, item) {
       await syncOrderStock(existing, { ...item, city: oCity, ...author }); // движение склада = заявке
       return saved;
     }
-    if (table === "payments") { const cli = await dbGet("clients", item.clientId); if (!cli || !inMy(cli.city || "astana")) throw new Error("Клиент другого города"); const ex = await dbGet("payments", item.id); if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!exCli || !inMy(exCli.city || "astana")) throw new Error("Это оплата другого города"); } return dbUpsert("payments", item); }
+    if (table === "payments") { const cli = await dbGet("clients", item.clientId); if (!cli || !inMy(cli.city || "astana")) throw new Error("Клиент другого города"); const ex = await dbGet("payments", item.id); if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!exCli || !inMy(exCli.city || "astana")) throw new Error("Это оплата другого города"); } { await dbUpsert("payments", item); await logPay(u, item, ex); return; } }
     // Касса: менеджер ведёт ТОЛЬКО свою (userId = он сам). Чужую кассу трогать нельзя.
     if (table === "cashbox") { const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса"); return dbUpsert("cashbox", { ...item, userId: u.uid, city: myCities[0], created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name }); }
     // Ревизия склада (заметка revision_<город>): только по своим городам
@@ -542,7 +618,7 @@ async function upsertFor(u, table, item) {
     if (table === "clients") {
       const existing = await dbGet("clients", item.id);
       if (existing && existing.ownerId !== u.uid) throw new Error("Это не ваш клиент");
-      return dbUpsert("clients", { ...item, ownerId: u.uid }); // всегда в его группу — чужую нельзя
+      { const rec = { ...item, ownerId: u.uid }; await dbUpsert("clients", rec); await logClient(u, rec, existing); return; } // всегда в его группу — чужую нельзя
     }
     if (table === "orders") {
       const existing = await dbGet("orders", item.id);
@@ -577,7 +653,7 @@ async function upsertFor(u, table, item) {
       if (!(await repSeesClient(u, cli))) throw new Error("Оплату можно вносить только своим клиентам");
       const ex = await dbGet("payments", item.id); // существующую оплату можно править только по видимому клиенту
       if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!(await repSeesClient(u, exCli))) throw new Error("Это не ваша оплата"); }
-      return dbUpsert("payments", item);
+      { await dbUpsert("payments", item); await logPay(u, item, ex); return; }
     }
     // Касса: торгпред ведёт ТОЛЬКО свою (userId = он сам). Поля санитизируем, чужую кассу трогать нельзя.
     if (table === "cashbox") { const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса"); return dbUpsert("cashbox", { id: item.id, dir: item.dir === "in" ? "in" : "out", date: item.date, amount: Number(item.amount) || 0, note: String(item.note || "").slice(0, 300), userId: u.uid, city: u.city || "astana", created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name }); }
@@ -634,11 +710,11 @@ async function deleteFor(u, table, id) {
     const inMy = c => myCities.includes(c || "astana");
     if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const exCity = ex.city || (ex.clientId ? ((await dbGet("clients", ex.clientId)) || {}).city : null) || "astana"; if (!inMy(exCity)) throw new Error("Заявка другого города"); try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
     if (table === "stock" && String(id).startsWith("tout_")) { const tid = String(id).slice(5).split("_")[0]; const tr = await dbGet("trucks", tid); if (!tr || inMy(tr.city || "astana")) return dbDelete("stock", id); throw new Error("Нет прав на это движение склада"); }
-    if (["clients", "drivers", "expenses", "stock"].includes(table)) { const ex = await dbGet(table, id); if (ex && !inMy(ex.city || "astana")) throw new Error("Запись другого города"); return dbDelete(table, id); }
+    if (["clients", "drivers", "expenses", "stock"].includes(table)) { const ex = await dbGet(table, id); if (ex && !inMy(ex.city || "astana")) throw new Error("Запись другого города"); await dbDelete(table, id); if (table === "clients" && ex) await logClient(u, null, ex, true); return; }
     if (table === "trucks") { const ex = await dbGet("trucks", id); if (ex && !inMy(ex.city || "astana")) throw new Error("Фура другого города"); return dbDelete("trucks", id); }
     if (table === "lab") { const ex = await dbGet("lab", id); if (ex && ex.city && !inMy(ex.city)) throw new Error("Анализ другого города"); return dbDelete("lab", id); }
     if (table === "crm") { const ex = await dbGet("crm", id); if (ex && ex.ownerId && ex.ownerId !== u.uid) throw new Error("Чужая запись CRM"); return dbDelete("crm", id); }
-    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || !inMy(cli.city || "astana")) throw new Error("Оплата другого города"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); return dbDelete("payments", id); }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || !inMy(cli.city || "astana")) throw new Error("Оплата другого города"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
     if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
     if (table === "users") {
       const ex = await dbGet("users", id);
@@ -657,9 +733,9 @@ async function deleteFor(u, table, id) {
   }
   if (u.role === "rep") {
     // Торгпред удаляет только своё
-    if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); return dbDelete("clients", id); }
+    if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); await dbDelete("clients", id); await logClient(u, null, ex, true); return; }
     if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!(await repSeesClient(u, cli))) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
-    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !(await repSeesClient(u, cli))) throw new Error("Это не ваша оплата"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); return dbDelete("payments", id); }
+    if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !(await repSeesClient(u, cli))) throw new Error("Это не ваша оплата"); if (ex.adjust) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
     if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
     throw new Error("Нет прав на удаление");
   }
@@ -667,6 +743,8 @@ async function deleteFor(u, table, id) {
   // Сохраняем удаляемую запись целиком — чтобы удаление можно было откатить одной кнопкой
   const existing = await dbGet(table, id); // точечно по id
   if (existing) await logChange(u, "delete", table, existing);
+  if (existing && table === "payments") await logPay(u, existing, null, true); // история «Долгов»
+  if (existing && table === "clients") await logClient(u, null, existing, true);
 
   // КАСКАД: удаляя заявку/фуру, отменяем и её движения по складу/расходы,
   // чтобы не оставалось «висячих» приходов и расходов. Движения привязаны к записи по id.

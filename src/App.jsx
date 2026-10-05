@@ -2486,7 +2486,7 @@ function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {}, ac
   );
 }
 
-function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [], role = "director", myUid = "", reload, canEdit = true, cities = [], activeCity = DEFAULT_CITY }) {
+function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [], role = "director", myUid = "", reload, canEdit = true, cities = [], activeCity = DEFAULT_CITY, focus = null }) {
   const isRep = role === "rep"; // торгпред видит только своих клиентов (сервер уже отфильтровал)
   const isDirector = role === "director"; // сверка долга по акту — только директор
   const isCityMgr = role === "citymanager"; // менеджер города — его клиенты в его городе (сервер проставит)
@@ -2496,6 +2496,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState("");
   const [historyClient, setHistoryClient] = useState(null);
+  // Переход из «Долгов» (история действий): сразу открыть «История и оплаты» этого клиента
+  useEffect(() => { if (!focus) return; const c = clients.find(x => x.id === focus.id); if (c) setHistoryClient(c); }, [focus && focus.t]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showPayForm, setShowPayForm] = useState(false); // «клиент закинул сумму» — ручная оплата в счёт долга
   const [payForm, setPayForm] = useState({ amount: "", method: "Наличные", date: TODAY(), note: "" });
   const [savingPay, setSavingPay] = useState(false);
@@ -6399,7 +6401,47 @@ function ReactivateTab({ clients, orders }) {
   );
 }
 
-function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false }) {
+// 🧾 История действий (раздел «Долги»): кто, когда и по какому клиенту внёс/изменил/удалил оплату,
+// корректировки по акту сверки, правки карточки клиента. Нажал на строку — «История и оплаты» клиента.
+// Сервер (op "activity") отдаёт только то, что роли положено: торгпреду — по его клиентам.
+function ActivityLog({ payments = [], clients = [], onOpenClient }) {
+  const [rows, setRows] = useState(null);
+  const [shown, setShown] = useState(15);
+  const [open, setOpen] = useState(true);
+  useEffect(() => { // перечитываем, когда меняются оплаты/клиенты (после внесения оплаты строка сразу появится)
+    let alive = true;
+    apiData("activity").then(d => { if (alive) setRows((d && d.rows) || []); }).catch(() => { if (alive) setRows([]); });
+    return () => { alive = false; };
+  }, [payments, clients]);
+  const when = at => { const d = new Date(at); if (isNaN(d)) return ""; const p = n => String(n).padStart(2, "0"); return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const icon = k => k === "client" ? "pencil" : k === "adjust" ? "file" : "coin";
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-3">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="clock" size={16} />История действий</span>
+        <span className="text-xs text-gray-400">{open ? "скрыть" : "показать"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 divide-y divide-gray-100">
+          {rows === null && <div className="text-sm text-gray-400 py-2">Загружаю…</div>}
+          {rows && !rows.length && <div className="text-sm text-gray-400 py-2">Пока пусто. Здесь будет видно, кто и по какому клиенту внёс оплату, сделал корректировку или поменял карточку.</div>}
+          {(rows || []).slice(0, shown).map(r => (
+            <button key={r.id} disabled={!r.clientId} onClick={() => r.clientId && onOpenClient(r.clientId)} className={`w-full text-left py-2 flex items-start gap-2 rounded-lg ${r.clientId ? "hover:bg-gray-50 active:bg-gray-100" : "cursor-default"}`}>
+              <span className="mt-0.5 text-amber-700 flex-shrink-0"><Icon name={icon(r.kind)} size={15} /></span>
+              <span className="min-w-0 flex-1 text-sm break-words">
+                <span className={`font-semibold ${r.clientId ? "text-amber-700" : "text-gray-800"}`}>{r.clientName || "без клиента"}</span>
+                <span className="text-gray-700"> — {r.text}</span>
+                <span className="block text-xs text-gray-400 mt-0.5">{when(r.at)} · {r.userName || "?"}{ROLES[r.role] ? ` (${ROLES[r.role]})` : ""}</span>
+              </span>
+            </button>
+          ))}
+          {rows && rows.length > shown && <button onClick={() => setShown(s => s + 15)} className="w-full text-sm text-amber-700 font-medium py-2">Показать ещё</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false, onOpenClient = () => {} }) {
   const [open, setOpen] = useState({});
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
   const [selected, setSelected] = useState({});
@@ -6466,6 +6508,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
         <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={17} />Общий долг клиентов</div>
         <div className="text-2xl font-display font-semibold text-red-600">{fmt(grand)} тг</div>
       </div>
+      <ActivityLog payments={payments} clients={clients} onOpenClient={onOpenClient} />
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
@@ -7525,6 +7568,7 @@ function CityMenu({ cities, city, notes, onPick }) {
 
 export default function App() {
   const [tab, setTab] = useState("today");
+  const [clientFocus, setClientFocus] = useState(null); // {id, t}: открыть «История и оплаты» клиента (переход из истории в «Долгах»)
   const [city, setCity] = useState(() => { try { return localStorage.getItem("darad_city") || "all"; } catch { return "all"; } }); // выбранный город владельца ("all" = все города)
   const pickCity = v => { setCity(v); try { localStorage.setItem("darad_city", v); } catch {} };
   const [user, setUser] = useState(null);
@@ -7706,6 +7750,13 @@ export default function App() {
   const moreNav = navTabs.filter(id => !primaryNav.includes(id));
   // Считаем новые ЗАЯВКИ (по клиенту+дате), а не отдельные позиции
   const newOrders = new Set(data.orders.filter(o => o.status === "новая").map(o => dropKey(o) + "|" + o.date)).size;
+  // Из истории действий в «Долгах» → вкладка «Клиенты» с открытой «История и оплаты» клиента
+  const openClientHistory = id => {
+    const cl = (data.clients || []).find(c => c.id === id);
+    if (!cl) { alert("Этого клиента уже нет в базе (удалён) или он вам не виден."); return; }
+    if (showCityBar && curCity !== "all" && clientCity(cl) !== curCity) pickCity("all"); // клиент другого города — показываем все города
+    setClientFocus({ id, t: Date.now() }); setTab("clients"); window.scrollTo(0, 0);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -7757,11 +7808,11 @@ export default function App() {
             {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} curCity={curCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
             {tab === "karaganda" && <KaragandaTab orders={view.orders} clients={view.clients} reload={reload} canEdit={isDirector || isCityMgr} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
-            {tab === "debts" && <DebtsTab orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} />}
+            {tab === "debts" && <DebtsTab onOpenClient={openClientHistory} orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} />}
             {tab === "contracts" && <ContractsTab clients={view.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={view.clients} orders={view.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={view.clients} orders={view.orders} />}
-            {tab === "clients" && <ClientsTab clients={view.clients} orders={view.orders} payments={view.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep || isCityMgr} cities={cityList} activeCity={activeCity} />}
+            {tab === "clients" && <ClientsTab focus={clientFocus} clients={view.clients} orders={view.orders} payments={view.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep || isCityMgr} cities={cityList} activeCity={activeCity} />}
             {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
             {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} curCity={curCity} notes={data.notes} />}
