@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { downloadClientsReport } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»)
 
 // Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
 // Прямого ключа к базе в браузере больше нет.
@@ -2496,6 +2497,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState("");
   const [historyClient, setHistoryClient] = useState(null);
+  const [stmtBusy, setStmtBusy] = useState(false); // выписка клиента в Excel формируется
   // Переход из «Долгов» (история действий): сразу открыть «История и оплаты» этого клиента
   useEffect(() => { if (!focus) return; const c = clients.find(x => x.id === focus.id); if (c) setHistoryClient(c); }, [focus && focus.t]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showPayForm, setShowPayForm] = useState(false); // «клиент закинул сумму» — ручная оплата в счёт долга
@@ -2988,6 +2990,22 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
           <Modal title={`${historyClient.name} — история`} onClose={() => setHistoryClient(null)}>
             <div className="flex flex-wrap gap-1 mb-2">
               {periods.map(([v, l]) => <button key={v} onClick={() => setHistPeriod(v)} className={`text-xs px-2.5 py-1 rounded-full font-medium ${histPeriod === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>{l}</button>)}
+            </div>
+            {/* 📊 Выписка клиента в Excel — лист как в «Отчет Темирлан»: отгрузки, оплаты, остаток долга (за выбранный период, с долгом на начало) */}
+            <div className="mb-2">
+              <Btn size="sm" variant="secondary" disabled={stmtBusy} onClick={async () => {
+                const ds = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                const t = TODAY(), now = new Date();
+                const back = (days, months) => { const d = new Date(now); if (days) d.setDate(d.getDate() - days); if (months) d.setMonth(d.getMonth() - months); return ds(d); };
+                const [from, to] = histPeriod === "day" ? [t, t] : histPeriod === "week" ? [back(7), t] : histPeriod === "month" ? [t.slice(0, 8) + "01", t.slice(0, 8) + "31"]
+                  : histPeriod === "3month" ? [back(0, 3), t] : histPeriod === "custom" ? [histFrom, histTo] : ["", ""];
+                const per = from ? `${from.split("-").reverse().join(".")}–${(histPeriod === "month" ? t : to).split("-").reverse().join(".")}` : `на ${t.split("-").reverse().join(".")}`;
+                setStmtBusy(true);
+                try {
+                  await downloadClientsReport({ clients: [historyClient], orders: (orders || []).filter(o => !o.foreign), payments: payments || [], from, to, includeGeneral: false, keepEmpty: true }, `Выписка ${historyClient.name} ${per}`);
+                } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+                setStmtBusy(false);
+              }}><Icon name="download" size={14} />{stmtBusy ? "Формирую…" : "Выписка в Excel"}</Btn>
             </div>
             {histPeriod === "custom" && (
               <div className="flex items-center gap-2 mb-2 text-sm">
@@ -3499,6 +3517,12 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   const payments = (paymentsProp || []).filter(p => { if (!cityScoped) return true; const cl = clients.find(c => c.id === p.clientId); return cityOk(cl ? clientCity(cl) : DEFAULT_CITY); });
   const expenses = (expensesProp || []).filter(x => cityOk(x.city || DEFAULT_CITY));
   const toggleCity = id => setSelCities(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  // 📊 Excel по клиентам (по шаблону «Отчет Темирлан»): период с–по, чьи клиенты
+  const [xlOpen, setXlOpen] = useState(false);
+  const [xlFrom, setXlFrom] = useState(() => TODAY().slice(0, 8) + "01");
+  const [xlTo, setXlTo] = useState(TODAY());
+  const [xlGroup, setXlGroup] = useState("all"); // all | _main (наши) | id торгпреда
+  const [xlBusy, setXlBusy] = useState(false);
   const [selRep, setSelRep] = useState(""); // директор: подробная аналитика по выбранному торгпреду
   const [openCity, setOpenCity] = useState(""); // раскрытый город в сводке «По городам» (показать что чаще берут)
   const [period, setPeriod] = useState("month");
@@ -3718,6 +3742,41 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   const maxT = Math.max(...td.map(d => d.kg), 1);
   const bc2 = ["bg-amber-400", "bg-orange-400", "bg-yellow-400", "bg-amber-600", "bg-orange-300"];
 
+  // 📊 Excel по клиентам: лист на каждого клиента + «общее» по месяцам (как «Отчет Темирлан.xlsx»)
+  const xlReps = (users || []).filter(u => u.role === "rep");
+  const xlHouse = ((notes || []).find(n => n.id === "clientgroups") || {}).houseName || "Наши клиенты";
+  const xlGroupName = id => id === "all" ? "" : id === "_main" ? xlHouse : ((xlReps.find(u => u.id === id) || {}).group_name || (xlReps.find(u => u.id === id) || {}).name || "");
+  const downloadXl = async () => {
+    if (!xlFrom || !xlTo || xlFrom > xlTo) { alert("Проверь период: дата «с» должна быть не позже «по»."); return; }
+    const list = (clients || []).filter(c => cityOk(clientCity(c)) && (repMode || xlGroup === "all" || (xlGroup === "_main" ? !c.ownerId : c.ownerId === xlGroup)));
+    const grp = repMode ? "" : xlGroupName(xlGroup);
+    setXlBusy(true);
+    try {
+      const ok = await downloadClientsReport({ clients: list, orders: (ordersProp || []).filter(o => !o.foreign), payments: paymentsProp || [], from: xlFrom, to: xlTo },
+        `Отчёт ${grp ? grp + " " : ""}${xlFrom.split("-").reverse().join(".")}–${xlTo.split("-").reverse().join(".")}`);
+      if (!ok) alert("За этот период у выбранных клиентов не было ни отгрузок, ни оплат.");
+    } catch (e) { alert("⚠️ " + ((e && e.message) || e)); }
+    setXlBusy(false);
+  };
+  const excelCard = (
+    <div className="bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
+      <button onClick={() => setXlOpen(o => !o)} className="w-full flex items-center justify-between text-left">
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="download" size={16} />Отчёт по клиентам в Excel</span>
+        <span className="text-xs text-gray-400">{xlOpen ? "скрыть" : "открыть"}</span>
+      </button>
+      {xlOpen && (<>
+        <p className="text-xs text-gray-500">Лист на каждого клиента (отгрузки, оплаты, остаток долга) и лист «общее» по месяцам — как в отчёте Темирлана. Входят клиенты, у которых за период были отгрузки или оплаты{showCitySel ? "; учитывается выбор городов выше" : ""}.</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-gray-500">с</span>
+          <Inp type="date" value={xlFrom} onChange={e => setXlFrom(e.target.value)} />
+          <span className="text-sm text-gray-500">по</span>
+          <Inp type="date" value={xlTo} onChange={e => setXlTo(e.target.value)} />
+        </div>
+        {!repMode && <Sel label="Чьи клиенты" value={xlGroup} onChange={e => setXlGroup(e.target.value)} options={[{ value: "all", label: "Все клиенты" }, { value: "_main", label: xlHouse }, ...xlReps.map(u => ({ value: u.id, label: `${u.group_name || u.name} (торгпред ${u.name})` }))]} />}
+        <Btn onClick={downloadXl} disabled={xlBusy}>{xlBusy ? "Формирую…" : "Скачать Excel"}</Btn>
+      </>)}
+    </div>
+  );
   const periodPicker = (
     <div className="space-y-2">
       <div className="flex gap-2 flex-wrap">
@@ -3749,6 +3808,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
       <div className="space-y-5">
         <h3 className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="chart" size={18} />Моя аналитика</h3>
         {periodPicker}
+        {excelCard}
         <RepAnalytics delivered={delivered} allMine={orders} payments={payments} />
       </div>
     );
@@ -3757,6 +3817,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   return (
     <div className="space-y-5">
       {periodPicker}
+      {excelCard}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-4"><div className="text-xs text-emerald-700 font-medium">Отгружено</div><div className="text-2xl font-bold text-emerald-800">{fmt(totalKg)} кг</div></div>
         <div className="bg-gradient-to-br from-amber-50 to-orange-100 rounded-2xl p-4"><div className="text-xs text-amber-700 font-medium">Сумма отгрузок</div><div className="text-2xl font-bold text-amber-800">{fmt(totalRev)} тг</div></div>
