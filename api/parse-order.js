@@ -66,14 +66,17 @@ ${clientInfo}
 Верни JSON массив: [{"clientName":"...","pointId":"","brand":"...","grade":"...","bag_kg":25,"bags":40,"date":"YYYY-MM-DD","trial":false,"note":"","pickup":false,"pickupWatch":false,"worker":""}]
 Только JSON.`;
 
-  // Проверка ответа Haiku: каждая позиция — клиент ровно из списка, его точка доставки, мешки и дата.
-  // Не прошло (или клиента правда нет в базе) — тот же разбор повторяется на Sonnet.
+  // Проверка ответа Haiku: каждая позиция — клиент ровно из списка, его точка доставки, товар из того,
+  // что он обычно берёт (сорт+бренд+фасовка), мешки и дата. Не прошло (новый клиент, необычный товар,
+  // ошибка Haiku) — тот же разбор повторяется на Sonnet: чуть дольше, зато надёжно.
   const norm = v => String(v || "").trim().toLowerCase();
   const byName = new Map(clients.map(c => [norm(c.name), c]));
   const check = arr => Array.isArray(arr) && arr.length > 0 && arr.every(x => {
     const c = byName.get(norm(x && x.clientName));
     if (clients.length && !c) return false;
     if (x.pointId && !(c && (c.points || []).some(p => p && p.id === x.pointId))) return false;
+    const prods = (c && c.products) || [];
+    if (prods.length && !prods.some(p => norm(p.grade) === norm(x.grade) && norm(p.brand) === norm(x.brand) && Number(p.bag_kg) === Number(x.bag_kg))) return false;
     return Number(x.bags) > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(x.date || ""));
   });
 
