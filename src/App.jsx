@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import { downloadClientsReport } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»)
 import { debtAt, reconId, clientCheckpoints, checkpointDrift, saveCheckpoints, resyncCheckpoints, recentMonths, monthFirst, nextMonthFirst, monthLast, monthLabel } from "./recon.js"; // сверки долга по месяцам
+import { dayAfter, osvLines, osvTotalCheck, osvByClient } from "./osv.js"; // оборотно-сальдовая ведомость → сверки
 
 // Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
 // Прямого ключа к базе в браузере больше нет.
@@ -242,6 +243,23 @@ const clientCity = c => (c && c.city) || DEFAULT_CITY; // город клиен�
 // Город заявки = её собственный (у разовых) или города её клиента, иначе — по умолчанию.
 const orderCity = (o, clients) => o.city || (clients.find(c => c.id === o.clientId)?.city) || DEFAULT_CITY;
 const stockCity = s => (s && s.city) || DEFAULT_CITY; // склад: движение без города = город по умолчанию (Астана)
+// 📦 Позиция на складе города: сколько мешков есть, сколько уже в заявках (новые + в пути, как в «Складе») и сколько свободно
+function stockAvail(stock, orders, clients, city, { brand, grade, bag_kg }) {
+  const same = x => x.brand === brand && x.grade === grade && Number(x.bag_kg) === Number(bag_kg);
+  const have = (stock || []).filter(s => stockCity(s) === city && same(s)).reduce((n, s) => n + (Number(s.bags) || 0), 0);
+  const inOrders = (orders || []).filter(o => (o.status === "новая" || o.status === "в пути") && !o.fromKaraganda && same(o) && orderCity(o, clients || []) === city).reduce((n, o) => n + (Number(o.bags) || 0), 0);
+  return { have, inOrders, free: have - inOrders };
+}
+function StockHint({ have, inOrders = 0, free = 0, need = 0 }) {
+  if (have === undefined) return null;
+  const avail = Math.max(0, free), lack = need > avail;
+  return (
+    <div className={`mt-2 text-xs rounded-lg px-2 py-1 flex items-center gap-1.5 flex-wrap ${lack ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-500"}`}>
+      <Icon name="box" size={13} />Склад: {fmt(have)} меш. · в заявках {fmt(inOrders)} · свободно <b className={avail > 0 ? "text-emerald-700" : "text-red-600"}>{fmt(avail)}</b>
+      {lack && <b>— не хватает {fmt(need - avail)} меш.</b>}
+    </div>
+  );
+}
 const DELIVERY_TIMES = ["В течение дня", "Утром (8–12)", "Днём (12–17)", "Вечером (17–21)"];
 const WRITEOFF_REASONS = ["Брак", "Порча", "Пересортица", "Возврат", "Ревизия", "Прочее"];
 const EXPENSE_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
@@ -4257,7 +4275,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   );
 }
 
-function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], notes = [], multiCity = false, activeCity = DEFAULT_CITY, curCity = "all", toCities = null, fromCities = null }) {
+function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, cities = [], notes = [], multiCity = false, activeCity = DEFAULT_CITY, curCity = "all", toCities = null, fromCities = null }) {
   const [showAdd, setShowAdd] = useState(false);
   const [expMonth, setExpMonth] = useState(TODAY().slice(0, 7)); // месяц для выгрузки в Excel (YYYY-MM)
   const [editId, setEditId] = useState(null);
@@ -4265,6 +4283,9 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
   const [saving, setSaving] = useState(false);
   const millCity = cities.find(c => c.kind === "mill")?.id || ""; // источник по умолчанию — мельница (Караганда)
   const acceptedEdit = !!editId && trucks.find(t => t.id === editId)?.status === "принята"; // принятую поставку по маршруту менять нельзя (движения уже записаны)
+  // Фуры, принятые до 19.07.2026, писали приход/расход строками со случайным id (не tin_/texp_) — их движения не
+  // пересчитать автоматически (задвоили бы склад). Для них правим только дату/фуриста, состав и цену — нет.
+  const legacyAccepted = acceptedEdit && !stock.some(s => s.id === `tin_${editId}_0`);
   const [f, setF] = useState({ date: TODAY(), driver_name: "", car_number: "", whatsapp: "", logist_phone: "", price: "", note: "", city: activeCity, fromCity: "", transport: "фура" });
   const [items, setItems] = useState([]);
   const [it, setIt] = useState({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" });
@@ -4309,15 +4330,39 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
   const editItem = i => { const p = items[i]; setIt({ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, kg: itemKg(p) }); setEditItemIdx(i); };
   const removeItem = i => { setItems(items.filter((_, j) => j !== i)); if (editItemIdx === i) setEditItemIdx(null); };
   const openNew = () => { setEditId(null); reset(); setShowAdd(true); };
-  const openEdit = t => { setEditId(t.id); setEditItemIdx(null); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "", city: t.city || DEFAULT_CITY, fromCity: t.fromCity ?? millCity, transport: t.transport || "фура" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
+  const openEdit = t => { setEditId(t.id); setEditItemIdx(null); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "", city: t.city || DEFAULT_CITY, fromCity: t.status === "принята" ? (t.fromCity || "") : (t.fromCity ?? millCity) /* у принятой — как была: не выдумываем списание на мельнице */, transport: t.transport || "фура" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
+
+  // Движения склада по принятой фуре: приход в городе назначения (tin_), списание у источника (tout_) и расход
+  // за фуру (texp_). id привязаны к фуре и номеру позиции — повторная запись перезаписывает те же строки.
+  // oldCount — сколько позиций было раньше: если стало меньше, движения лишних позиций убираем.
+  const writeTruckMoves = async (t, date, oldCount = 0) => {
+    const toC = t.city || DEFAULT_CITY, from = t.fromCity || "";
+    const moves = t.items.map(item => { const weight_kg = itemKg(item); return { item, weight_kg, bags: item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0 }; });
+    // Сначала списание в городе-источнике (видно движение; мельница безлимитна — минус там нормален). Если на него
+    // нет прав (чужой склад) — ошибка вылетит ДО прихода, и склад не разъедется наполовину.
+    if (from && from !== toC) for (let i = 0; i < moves.length; i++) { const { item, weight_kg, bags } = moves[i]; await dbUpsert("stock", { id: `tout_${t.id}_${i}`, date, brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags: -bags, weight_kg: -weight_kg, price_per_kg: 0, note: `Отправка → ${cityName(notes, toC)}`, city: from, toCity: toC, transport: t.transport || "фура" }); }
+    for (let i = 0; i < moves.length; i++) { const { item, weight_kg, bags } = moves[i]; await dbUpsert("stock", { id: `tin_${t.id}_${i}`, date, brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (${t.transport === "вагон" ? "вагон" : "фура"} от ${t.date}${from ? ", из " + cityName(notes, from) : ""}${t.car_number ? ", " + t.car_number : ""})`, city: toC }); }
+    for (let i = t.items.length; i < oldCount; i++) { try { await dbDelete("stock", `tin_${t.id}_${i}`); } catch {} try { await dbDelete("stock", `tout_${t.id}_${i}`); } catch {} }
+    if (t.price) await dbUpsert("expenses", { id: "texp_" + t.id, date, category: "Фура/Поставка", amount: Number(t.price), note: `${t.transport === "вагон" ? "Вагон" : "Фура"} от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}`, city: toC });
+    else if (oldCount) { try { await dbDelete("expenses", `texp_${t.id}`); } catch {} } // цену убрали при правке — убираем и расход
+  };
 
   const saveTruck = async () => {
     if (items.length === 0) return;
     setSaving(true);
     try {
       const existing = trucks.find(t => t.id === editId);
-      await dbUpsert("trucks", { ...(existing || {}), id: editId || uid(), ...f, price: Number(f.price) || 0, items, status: existing?.status || "запланирована" });
+      const next = { ...(existing || {}), id: editId || uid(), ...f, price: Number(f.price) || 0, items, status: existing?.status || "запланирована" };
+      const wasAccepted = existing?.status === "принята";
+      if (wasAccepted && legacyAccepted) { next.items = existing.items; next.price = existing.price; } // принята по-старому: склад не пересчитываем (см. предупреждение в окне)
+      else if (wasAccepted) {
+        // Принятая фура: переписываем приход/списание/расход под новые позиции. Дату поменяли — приход на склад тоже этим днём.
+        next.accepted_date = f.date !== existing.date ? f.date : (existing.accepted_date || f.date);
+        await writeTruckMoves(next, next.accepted_date, (existing.items || []).length);
+      }
+      await dbUpsert("trucks", next);
       setShowAdd(false); setEditId(null); reset(); await reload("trucks");
+      if (wasAccepted && !legacyAccepted) { await reload("stock"); await reload("expenses"); }
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
   };
@@ -4328,12 +4373,8 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
     setSaving(true);
     try {
       if (status === "принята" && t.status !== "принята") {
-        const toC = t.city || DEFAULT_CITY, from = t.fromCity || "";
         // id прихода привязан к фуре и позиции — двойное нажатие «Принять» перезапишет те же строки, а не задвоит их
-        for (let i = 0; i < t.items.length; i++) { const item = t.items[i]; const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: `tin_${t.id}_${i}`, date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (${t.transport === "вагон" ? "вагон" : "фура"} от ${t.date}${from ? ", из " + cityName(notes, from) : ""}${t.car_number ? ", " + t.car_number : ""})`, city: toC }); }
-        // Списание в городе-источнике (видно движение). Мельница безлимитна — минус там нормален (в StockTab не считается ошибкой).
-        if (from && from !== toC) { for (let i = 0; i < t.items.length; i++) { const item = t.items[i]; const weight_kg = itemKg(item); const bags = item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0; await dbUpsert("stock", { id: `tout_${t.id}_${i}`, date: TODAY(), brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags: -bags, weight_kg: -weight_kg, price_per_kg: 0, note: `Отправка → ${cityName(notes, toC)}`, city: from, toCity: toC, transport: t.transport || "фура" }); } }
-        if (t.price) await dbUpsert("expenses", { id: "texp_" + t.id, date: TODAY(), category: "Фура/Поставка", amount: Number(t.price), note: `${t.transport === "вагон" ? "Вагон" : "Фура"} от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}`, city: toC });
+        await writeTruckMoves(t, TODAY());
         await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
         await reload("stock"); await reload("expenses");
       } else {
@@ -4436,6 +4477,8 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
               </div>
             )}
             <Inp label="Дата прихода" type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} />
+            {legacyAccepted && <p className="text-xs text-amber-800 bg-amber-50 rounded-lg px-2 py-1 -mt-1">Эта фура принята на склад по старой схеме (до 19.07) — здесь можно поправить дату и данные фуриста, а состав и цену нет: склад не пересчитается. Ошибку в количестве поправь в «Складе» операцией «Приход» или «Списание».</p>}
+            {acceptedEdit && !legacyAccepted && <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-2 py-1 -mt-1">Фура уже принята на склад. При сохранении приход на склад{f.fromCity && f.fromCity !== f.city ? ", списание у источника" : ""} и расход за фуру пересчитаются под новые позиции{f.date !== (trucks.find(t => t.id === editId) || {}).date ? " и новую дату" : ""}.</p>}
             {multiCity && (
               <div className="grid grid-cols-2 gap-2">
                 <Sel label="Откуда (источник)" value={f.fromCity || ""} onChange={e => setF({ ...f, fromCity: e.target.value })} disabled={acceptedEdit} options={[{ value: "", label: "— не указывать —" }, ...(fromCities || cities).filter(c => c.id !== f.city).map(c => ({ value: c.id, label: c.name + (c.kind === "mill" ? " (мельница)" : "") }))]} />
@@ -4451,9 +4494,10 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
               <Inp label="WhatsApp фуриста" value={f.whatsapp} onChange={e => setF({ ...f, whatsapp: e.target.value })} placeholder="+7..." />
               <Inp label="Телефон логиста" value={f.logist_phone} onChange={e => setF({ ...f, logist_phone: e.target.value })} placeholder="+7..." />
             </div>
-            <Inp label="Цена за фуру, тг (пойдёт в расходы)" type="number" value={f.price} onChange={e => setF({ ...f, price: e.target.value })} />
+            <Inp label="Цена за фуру, тг (пойдёт в расходы)" type="number" value={f.price} onChange={e => setF({ ...f, price: e.target.value })} disabled={legacyAccepted} />
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">Что в фуре (по позициям)</p>
+              {!legacyAccepted && <>
               <div className="grid grid-cols-2 gap-2 mb-2">
                 <Sel value={it.brand} onChange={e => setIt({ ...it, brand: e.target.value })} options={BRANDS} />
                 <Sel value={it.grade} onChange={e => setIt({ ...it, grade: e.target.value })} options={GRADES} />
@@ -4461,7 +4505,8 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
                 <Inp type="number" placeholder="кг" value={it.kg} onChange={e => setIt({ ...it, kg: e.target.value })} />
               </div>
               <Btn size="sm" variant={editItemIdx != null ? "primary" : "secondary"} onClick={saveItem}>{editItemIdx != null ? "✓ Сохранить позицию" : "+ Добавить позицию"}</Btn>
-              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm gap-2 ${editItemIdx === i ? "bg-amber-100" : "bg-gray-50"}`}><span className="min-w-0">{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium ml-auto whitespace-nowrap">{fmt(itemKg(p))} кг</span><button className="text-gray-400 hover:text-amber-600 flex-shrink-0" title="Изменить" onClick={() => editItem(i)}><Icon name="pencil" size={15} /></button><button className="text-red-400 hover:text-red-600 flex-shrink-0" title="Удалить" onClick={() => removeItem(i)}><Icon name="trash" size={15} /></button></div>)}</div>}
+              </>}
+              {items.length > 0 && <div className="mt-2 space-y-1">{items.map((p, i) => <div key={i} className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm gap-2 ${editItemIdx === i ? "bg-amber-100" : "bg-gray-50"}`}><span className="min-w-0">{p.brand} · {p.grade} · {p.bag_kg}кг</span><span className="font-medium ml-auto whitespace-nowrap">{fmt(itemKg(p))} кг</span>{!legacyAccepted && <><button className="text-gray-400 hover:text-amber-600 flex-shrink-0" title="Изменить" onClick={() => editItem(i)}><Icon name="pencil" size={15} /></button><button className="text-red-400 hover:text-red-600 flex-shrink-0" title="Удалить" onClick={() => removeItem(i)}><Icon name="trash" size={15} /></button></>}</div>)}</div>}
             </div>
             <Inp label="Примечание" value={f.note} onChange={e => setF({ ...f, note: e.target.value })} />
           </div>
@@ -4506,7 +4551,7 @@ function TrucksTab({ trucks, orders = [], reload, canEdit = true, cities = [], n
             )}
             {canEdit && (
               <div className="mt-2 flex gap-2">
-                {t.status !== "принята" && <Btn size="sm" variant="secondary" onClick={() => openEdit(t)}><Icon name="pencil" size={15} />Изменить</Btn>}
+<Btn size="sm" variant="secondary" onClick={() => openEdit(t)}><Icon name="pencil" size={15} />Изменить</Btn>
                 <Btn size="sm" variant="danger" onClick={() => deleteTruck(t.id)}>Удалить</Btn>
               </div>
             )}
@@ -6508,15 +6553,21 @@ function ReactivateTab({ clients, orders }) {
 // 🧾 История действий (раздел «Долги»): кто, когда и по какому клиенту внёс/изменил/удалил оплату,
 // корректировки по акту сверки, правки карточки клиента. Нажал на строку — «История и оплаты» клиента.
 // Сервер (op "activity") отдаёт только то, что роли положено: торгпреду — по его клиентам.
+// Храним за год. Без даты — последние действия; выбрал день — всё за этот день (по времени Астаны).
+const ACT_KINDS = [{ id: "all", label: "Все" }, { id: "payment", label: "Оплаты" }, { id: "adjust", label: "Сверки/корректировки" }, { id: "client", label: "Карточки" }];
 function ActivityLog({ payments = [], clients = [], onOpenClient }) {
-  const [rows, setRows] = useState(null);
+  const [all, setAll] = useState(null);
   const [shown, setShown] = useState(15);
   const [open, setOpen] = useState(true);
+  const [day, setDay] = useState(""); // "" — последние; "YYYY-MM-DD" — за этот день
+  const [kind, setKind] = useState("all");
   useEffect(() => { // перечитываем, когда меняются оплаты/клиенты (после внесения оплаты строка сразу появится)
     let alive = true;
-    apiData("activity").then(d => { if (alive) setRows((d && d.rows) || []); }).catch(() => { if (alive) setRows([]); });
+    apiData("activity", null, day ? { day } : {}).then(d => { if (alive) setAll((d && d.rows) || []); }).catch(() => { if (alive) setAll([]); });
     return () => { alive = false; };
-  }, [payments, clients]);
+  }, [payments, clients, day]);
+  const pickDay = d => { setDay(d); setAll(null); setShown(15); };
+  const rows = all && (kind === "all" ? all : all.filter(r => (r.kind || "payment") === kind));
   const when = at => { const d = new Date(at); if (isNaN(d)) return ""; const p = n => String(n).padStart(2, "0"); return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`; };
   const icon = k => k === "client" ? "pencil" : k === "adjust" ? "file" : "coin";
   return (
@@ -6526,9 +6577,19 @@ function ActivityLog({ payments = [], clients = [], onOpenClient }) {
         <span className="text-xs text-gray-400">{open ? "скрыть" : "показать"}</span>
       </button>
       {open && (
-        <div className="mt-2 divide-y divide-gray-100">
+        <div className="mt-2 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <input type="date" value={day} max={TODAY()} onChange={e => pickDay(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" aria-label="День" />
+            <button onClick={() => pickDay(TODAY())} className={`text-xs px-2.5 py-1.5 rounded-lg ${day === TODAY() ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Сегодня</button>
+            <button onClick={() => pickDay("")} className={`text-xs px-2.5 py-1.5 rounded-lg ${!day ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600"}`}>Последние</button>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {ACT_KINDS.map(k => <button key={k.id} onClick={() => { setKind(k.id); setShown(15); }} className={`text-xs px-2.5 py-1 rounded-full border ${kind === k.id ? "bg-amber-50 border-amber-300 text-amber-800 font-medium" : "border-gray-200 text-gray-500"}`}>{k.label}</button>)}
+          </div>
+          {day && rows && <div className="text-xs text-gray-500">За {day.split("-").reverse().join(".")}: {rows.length ? `${rows.length} действ.` : "ничего"}</div>}
+        <div className="divide-y divide-gray-100">
           {rows === null && <div className="text-sm text-gray-400 py-2">Загружаю…</div>}
-          {rows && !rows.length && <div className="text-sm text-gray-400 py-2">Пока пусто. Здесь будет видно, кто и по какому клиенту внёс оплату, сделал корректировку или поменял карточку.</div>}
+          {rows && !rows.length && !day && <div className="text-sm text-gray-400 py-2">Пока пусто. Здесь будет видно, кто и по какому клиенту внёс оплату, сделал корректировку или поменял карточку.</div>}
           {(rows || []).slice(0, shown).map(r => (
             <button key={r.id} disabled={!r.clientId} onClick={() => r.clientId && onOpenClient(r.clientId)} className={`w-full text-left py-2 flex items-start gap-2 rounded-lg ${r.clientId ? "hover:bg-gray-50 active:bg-gray-100" : "cursor-default"}`}>
               <span className="mt-0.5 text-amber-700 flex-shrink-0"><Icon name={icon(r.kind)} size={15} /></span>
@@ -6539,7 +6600,8 @@ function ActivityLog({ payments = [], clients = [], onOpenClient }) {
               </span>
             </button>
           ))}
-          {rows && rows.length > shown && <button onClick={() => setShown(s => s + 15)} className="w-full text-sm text-amber-700 font-medium py-2">Показать ещё</button>}
+          {rows && rows.length > shown && <button onClick={() => setShown(s => s + 30)} className="w-full text-sm text-amber-700 font-medium py-2">Показать ещё ({rows.length - shown})</button>}
+        </div>
         </div>
       )}
     </div>
@@ -6683,7 +6745,204 @@ function ReconMonthTable({ clients = [], orders = [], payments = [], reload, onC
   );
 }
 
-function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false, onOpenClient = () => {} }) {
+// 📒 Оборотно-сальдовая ведомость (фото/PDF из 1С): ИИ читает долг каждого клиента на начало и конец периода,
+// мы показываем таблицу для проверки, по «Записать» — сверки клиентам (как «Сверка за месяц»). Клиентов,
+// которых нет в ведомости, не трогаем. Расчёты — в osv.js, сверки — в recon.js.
+const blobToB64 = b => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1] || ""); r.onerror = () => bad(new Error("не удалось прочитать файл")); r.readAsDataURL(b); });
+async function osvFilePayload(file) {
+  if (file.type === "application/pdf") { // запрос на сервер — не больше 4,5 МБ, а base64 тяжелее файла на треть
+    if (file.size > 2.9e6) throw new Error(`«${file.name}» больше 2,9 МБ — сохрани PDF поменьше или сфотографируй страницы`);
+    return { name: file.name, type: file.type, data: await blobToB64(file) };
+  }
+  const img = await compressImage(file, 2200, 0.85); // цифры должны читаться — сжимаем мягче, чем фото накладных
+  const type = img.type || file.type;
+  if (!["image/jpeg", "image/png", "image/webp"].includes(type)) throw new Error(`«${file.name}»: такой формат не читается — сделай скриншот или сохрани фото как JPEG`);
+  return { name: file.name, type, data: await blobToB64(img) };
+}
+function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }) {
+  const prevMonth = recentMonths(TODAY(), 2)[1];
+  const [from, setFrom] = useState(monthFirst(prevMonth));
+  const [to, setTo] = useState(monthLast(prevMonth));
+  const [files, setFiles] = useState([]); // [{ name, type, data }]
+  const [busy, setBusy] = useState(""); // текст «что сейчас делаю»
+  const [err, setErr] = useState("");
+  const [res, setRes] = useState(null); // { lines, total, truncated, docFrom, docTo, parts } — строки всех разобранных частей
+  const [pick, setPick] = useState({}); // номер строки → клиент (если ИИ не узнал или узнал не того)
+  const [edit, setEdit] = useState({}); // клиент → { s, e } — поправленные цифры
+  const [skip, setSkip] = useState({}); // клиент → не записывать
+  const [done, setDone] = useState("");
+  const [showMissing, setShowMissing] = useState(false);
+  const D2 = to ? dayAfter(to) : "";
+  const byId = new Map(clients.map(c => [c.id, c]));
+  const addFiles = async list => {
+    setErr(""); setBusy("Готовлю файлы…");
+    try { const out = []; for (const f of list) out.push(await osvFilePayload(f)); setFiles(fs => [...fs, ...out].slice(0, 8)); }
+    catch (e) { setErr(errText(e)); }
+    setBusy("");
+  };
+  // Длинную ведомость можно разбирать частями (по 1–2 фото): строки каждой части добавляются к уже разобранным
+  const parse = async () => {
+    const body = { files: files.map(({ type, data }) => ({ type, data })), clients: clients.map(c => ({ id: c.id, name: c.name, org_name: c.org_name || "", bin: c.bin || "" })) };
+    if (JSON.stringify(body).length > 4.0e6) { setErr("Файлы слишком тяжёлые для одного раза — оставь 1–2 фото, разбери, потом добавь остальные."); return; }
+    setBusy("Читаю ведомость… обычно до минуты, не закрывай окно"); setErr(""); setDone("");
+    try {
+      const d = await apiData("parseOsv", null, body);
+      const base = res ? res.lines.length ? Math.max(...res.lines.map(l => l.i)) + 1 : 0 : 0;
+      const lines = osvLines(d.rows, clients).map(l => ({ ...l, i: base + l.i }));
+      if (!lines.length) throw new Error("В файле не нашёл строк ведомости — проверь, что это ОСВ по покупателям.");
+      const okDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || "");
+      const partHas = okDate(d.from) && okDate(d.to) && d.from <= d.to; // период нашёлся в этой части
+      const docFrom = partHas ? d.from : ((res && res.docFrom) || ""), docTo = partHas ? d.to : ((res && res.docTo) || "");
+      if (docFrom && !res) { setFrom(docFrom); setTo(docTo); }
+      const all = [...(res ? res.lines : []), ...lines];
+      const rawTotal = Array.isArray(d.total) && d.total.length >= 6 ? d.total : (res && res.rawTotal) || []; // «Итого» обычно на последней странице
+      setRes({ lines: all, rawTotal, total: osvTotalCheck(all, rawTotal), truncated: !!d.truncated || !!(res && res.truncated), docFrom, docTo, parts: (res ? res.parts : 0) + 1 });
+      setFiles([]); // эти файлы разобраны — дальше можно добавить следующую часть
+    } catch (e) { setErr(errText(e)); }
+    setBusy("");
+  };
+  const restart = () => { setRes(null); setFiles([]); setPick({}); setEdit({}); setSkip({}); setErr(""); setDone(""); };
+  // Тяжёлое (долг в приложении по каждому клиенту) считаем только когда меняется ведомость/период/данные, а не на каждую цифру
+  const base = useMemo(() => {
+    if (!res) return { lines: [], groups: [], missing: [] };
+    const lines = res.lines.map(l => ({ ...l, clientId: pick[l.i] !== undefined ? pick[l.i] : l.clientId }));
+    const groups = [...osvByClient(lines).values()].filter(g => byId.has(g.clientId)).map(g => ({ ...g, c: byId.get(g.clientId), appS: from ? debtAt(g.clientId, from, orders, payments) : 0, appE: D2 ? debtAt(g.clientId, D2, orders, payments) : 0 }));
+    const inOsv = new Set(groups.map(g => g.clientId));
+    const missing = D2 ? clients.filter(c => !inOsv.has(c.id)).map(c => ({ c, debt: debtAt(c.id, D2, orders, payments) })).filter(x => Math.abs(x.debt) >= 1) : [];
+    return { lines, groups, missing };
+  }, [res, pick, from, D2, orders, payments, clients]); // eslint-disable-line react-hooks/exhaustive-deps
+  const lines = base.lines;
+  const groups = base.groups.map(g => {
+    const ed = edit[g.clientId] || {};
+    const s = ed.s !== undefined ? ed.s : String(g.start), e = ed.e !== undefined ? ed.e : String(g.end);
+    return { ...g, s, e, same: Math.abs(Number(s) - g.appS) < 1 && Math.abs(Number(e) - g.appE) < 1 };
+  }).sort((a, b) => (a.same ? 1 : 0) - (b.same ? 1 : 0) || (a.c.name || "").localeCompare(b.c.name || "", "ru"));
+  const unmatched = lines.filter(l => !l.clientId);
+  const missing = base.missing;
+  const toSave = groups.filter(g => !skip[g.clientId] && g.s !== "" && g.e !== "" && Number.isFinite(Number(g.s)) && Number.isFinite(Number(g.e)));
+  const save = async () => {
+    if (!from || !to || from > to) { setErr("Проверь период: «с» должно быть не позже «по»."); return; }
+    if (!toSave.length) return;
+    if (to >= TODAY() && !confirm("Период ещё не закончился — долг на конец может измениться. Всё равно записать?")) return;
+    if (res && res.total && !res.total.ok && !confirm("Сумма строк не сходится с «Итого» ведомости — возможно, строка пропущена или цифра прочиталась неверно. Всё равно записать?")) return;
+    if (!confirm(`Записать сверку по ведомости для ${toSave.length} клиент.?\nДолг на ${dmyR(from)} и на ${dmyR(to)} станет как в ведомости.`)) return;
+    setErr(""); setDone("");
+    let n = 0; const fails = [];
+    const queue = [...toSave];
+    const worker = async () => {
+      for (let g = queue.shift(); g; g = queue.shift()) {
+        try { await saveCheckpoints({ client: g.c, entries: [{ D: from, A: Number(g.s) }, { D: D2, A: Number(g.e) }], orders, payments, dbUpsert, dbDelete }); }
+        catch (e) { fails.push(`${g.c.name}: ${errText(e)}`); }
+        n++; setBusy(`Записываю… ${n} из ${toSave.length}`);
+      }
+    };
+    setBusy(`Записываю… 0 из ${toSave.length}`);
+    await Promise.all([worker(), worker(), worker()]); // по 3 клиента параллельно: у каждого свои сверки, друг другу не мешают
+    await reload("payments");
+    setBusy("");
+    if (fails.length) setErr(`Не записалось (${fails.length}): ${fails.slice(0, 5).join("; ")}${fails.length > 5 ? "…" : ""}`);
+    setDone(`✓ Сверка записана: ${toSave.length - fails.length} клиент. Долги, история клиентов и Excel-отчёт теперь как в ведомости.`);
+  };
+  const box = "w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm mt-0.5 focus:outline-none focus:ring-2 focus:ring-violet-300";
+  const money = v => `${fmt(Math.round(Number(v) || 0))} тг`;
+  return (
+    <div className="bg-white border-2 border-violet-200 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="file" size={16} />Оборотно-сальдовая ведомость</span>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600" title="Закрыть"><Icon name="close" size={18} /></button>
+      </div>
+      <p className="text-xs text-gray-500">Сфотографируй ведомость из 1С (можно несколько фото) или загрузи PDF. ИИ прочитает долг каждого клиента на начало и конец периода — ты проверишь и нажмёшь «Записать». Клиентов, которых нет в ведомости, не трогаем.</p>
+      <div className="grid grid-cols-2 gap-2">
+        <Inp label="Период с" type="date" value={from} onChange={e => setFrom(e.target.value)} />
+        <Inp label="по" type="date" value={to} onChange={e => setTo(e.target.value)} />
+      </div>
+      {res && res.docFrom && res.docTo && <div className="text-xs text-gray-500">Период из ведомости: {dmyR(res.docFrom)} — {dmyR(res.docTo)}{(res.docFrom !== from || res.docTo !== to) ? " · ты поменял период, запишем на выбранные даты" : ""}</div>}
+      <div className="space-y-1.5">
+        <label className="w-full border-2 border-dashed border-violet-200 hover:bg-violet-50 rounded-xl py-3 text-sm font-medium text-violet-700 inline-flex items-center justify-center gap-1.5 cursor-pointer">
+          <Icon name="camera" size={16} />{files.length ? "Добавить ещё фото / PDF" : "Выбрать фото или PDF"}
+          <input type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={e => { const l = [...(e.target.files || [])]; e.target.value = ""; if (l.length) addFiles(l); }} />
+        </label>
+        {files.map((f, i) => (
+          <div key={i} className="flex items-center gap-2 text-sm bg-gray-50 rounded-lg px-3 py-1.5">
+            <Icon name={f.type === "application/pdf" ? "file" : "camera"} size={14} className="text-gray-400 flex-shrink-0" />
+            <span className="truncate flex-1">{f.name}</span>
+            <span className="text-xs text-gray-400 whitespace-nowrap">{fmt(Math.round(f.data.length * 0.75 / 1024))} КБ</span>
+            <button onClick={() => setFiles(fs => fs.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600" title="Убрать"><Icon name="trash" size={14} /></button>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        <Btn onClick={parse} disabled={!!busy || !files.length}>{busy && busy.startsWith("Читаю") ? busy : res ? "Разобрать и добавить к таблице" : "Разобрать ведомость"}</Btn>
+        {res && <Btn variant="secondary" onClick={restart} disabled={!!busy}>Начать заново</Btn>}
+      </div>
+      {res && !files.length && !done && <div className="text-xs text-gray-500">Разобрано частей: {res.parts}. Ведомость на нескольких страницах — добавь следующие фото и нажми «Разобрать и добавить».</div>}
+      {res && !res.docFrom && <div className="text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2">В ведомости не нашёл период — проверь даты «с» и «по» сверху.</div>}
+      {err && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</div>}
+      {busy && res && <div className="text-sm text-violet-700">{busy}</div>}
+      {done && <div className="text-sm text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2">{done}</div>}
+      {res && (
+        <div className="space-y-3">
+          {res.truncated && <div className="text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2">Ведомость длинная — прочиталась не до конца. Загрузи её по частям (по 1–2 фото).</div>}
+          {res.total && (res.total.ok
+            ? <div className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2">✓ Сумма строк сходится с «Итого» ведомости: начало {money(res.total.tStart)}, конец {money(res.total.tEnd)}.</div>
+            : <div className="text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2">⚠️ Сумма строк не сходится с «Итого»: строки — начало {money(res.total.start)}, конец {money(res.total.end)}; в ведомости — {money(res.total.tStart)} и {money(res.total.tEnd)}. Возможно, строка пропущена или цифра прочиталась неверно — сверь с ведомостью.</div>)}
+          <div className="text-xs text-gray-500">Найдено клиентов: <b>{groups.length}</b>{groups.filter(g => !g.same).length ? <> · отличаются от приложения: <b className="text-red-600">{groups.filter(g => !g.same).length}</b></> : null}{unmatched.length ? <> · не узнал: <b className="text-amber-700">{unmatched.length}</b></> : null}</div>
+          {unmatched.length > 0 && (
+            <div className="border border-amber-200 bg-amber-50 rounded-xl p-3 space-y-2">
+              <div className="text-sm font-semibold text-amber-800">Не узнал клиента — выбери вручную (или оставь, не запишем)</div>
+              {unmatched.map(l => (
+                <div key={l.i} className="text-sm">
+                  <div className="text-gray-800">{l.name} <span className="text-xs text-gray-500">· начало {money(l.start)} · конец {money(l.end)}</span></div>
+                  <Sel value={pick[l.i] || ""} onChange={e => setPick(p => ({ ...p, [l.i]: e.target.value }))} options={[{ value: "", label: "— не записывать —" }, ...clientOptions(clients)]} />
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="divide-y divide-gray-100">
+            {groups.map(g => {
+              const ed = (k, v) => setEdit(m => ({ ...m, [g.clientId]: { ...(m[g.clientId] || {}), [k]: v } }));
+              const diffS = Math.abs(Number(g.s) - g.appS) >= 1, diffE = Math.abs(Number(g.e) - g.appE) >= 1;
+              const lineIdx = lines.filter(l => l.clientId === g.clientId).map(l => l.i);
+              return (
+                <div key={g.clientId} className={`py-2 ${skip[g.clientId] ? "opacity-50" : ""}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-gray-800">{g.c.name}{g.same && <span className="ml-1.5 text-xs font-normal text-emerald-600">✓ совпадает</span>}</div>
+                      <div className="text-xs text-gray-400 truncate">в ведомости: {g.names.join(" + ")}</div>
+                    </div>
+                    <label className="text-xs text-gray-600 inline-flex items-center gap-1 whitespace-nowrap"><input type="checkbox" checked={!skip[g.clientId]} onChange={e => setSkip(m => ({ ...m, [g.clientId]: !e.target.checked }))} className="accent-violet-500" />записать</label>
+                  </div>
+                  {!g.ok && <div className="text-xs text-amber-700 mt-0.5">⚠️ В строке не сходится: начало + обороты ≠ конец. Сверь цифры с ведомостью.</div>}
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <label className="text-xs text-gray-500">на {dmyR(from)}
+                      <input type="number" inputMode="decimal" value={g.s} onChange={e => ed("s", e.target.value)} className={box} />
+                      <span className={diffS ? "text-red-600" : "text-gray-400"}>в прил.: {fmt(Math.round(g.appS))}</span>
+                    </label>
+                    <label className="text-xs text-gray-500">на {dmyR(to)}
+                      <input type="number" inputMode="decimal" value={g.e} onChange={e => ed("e", e.target.value)} className={box} />
+                      <span className={diffE ? "text-red-600" : "text-gray-400"}>в прил.: {fmt(Math.round(g.appE))}</span>
+                    </label>
+                  </div>
+                  {lineIdx.length === 1 && pick[lineIdx[0]] === undefined && <button onClick={() => setPick(p => ({ ...p, [lineIdx[0]]: "" }))} className="text-xs text-gray-400 hover:text-amber-700 mt-0.5">не тот клиент?</button>}
+                </div>
+              );
+            })}
+          </div>
+          {missing.length > 0 && (
+            <div className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
+              <button onClick={() => setShowMissing(v => !v)} className="font-medium text-gray-700">Нет в ведомости, но в приложении есть долг: {missing.length} {showMissing ? "▲" : "▼"}</button>
+              {showMissing && <div className="mt-1">{missing.map(x => `${x.c.name} (${fmt(Math.round(x.debt))} тг)`).join(", ")}</div>}
+              <div className="text-gray-400 mt-0.5">Их не трогаем.</div>
+            </div>
+          )}
+          <Btn onClick={save} disabled={!!busy || !toSave.length}>{busy && res ? busy : `Записать сверку (${toSave.length} клиент.)`}</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false, canOsv = false, onOpenClient = () => {} }) {
   const [open, setOpen] = useState({});
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
   const [selected, setSelected] = useState({});
@@ -6691,6 +6950,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
   const [payForm, setPayForm] = useState({ amount: "", method: "Наличные", date: TODAY(), note: "" });
   const [savingPay, setSavingPay] = useState(false);
   const [showRecon, setShowRecon] = useState(false); // «Сверка за месяц» — долг на начало и конец месяца по всем клиентам
+  const [showOsv, setShowOsv] = useState(false); // загрузка оборотно-сальдовой ведомости (фото/PDF)
   // долг = отгружено и не оплачено (новые/в пути в долг НЕ идут)
   const unpaid = orders.filter(o => o.status === "отгружена" && !o.paid && o.bags * o.bag_kg * (o.price_per_kg || 0) > 0);
   const byClient = {};
@@ -6755,6 +7015,9 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
       {canEdit && (showRecon
         ? <ReconMonthTable clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowRecon(false)} />
         : <button onClick={() => setShowRecon(true)} className="w-full bg-white border border-sky-200 hover:bg-sky-50 text-sky-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="receipt" size={15} />Сверка за месяц (долг на начало и конец)</button>)}
+      {canEdit && canOsv && (showOsv
+        ? <OsvImport clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowOsv(false)} />
+        : <button onClick={() => setShowOsv(true)} className="w-full bg-white border border-violet-200 hover:bg-violet-50 text-violet-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Оборотно-сальдовая ведомость — загрузить фото/PDF</button>)}
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
@@ -6858,6 +7121,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
 
 function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editGroup, setEditGroup] = useState(null); // отгрузка клиенту (клиент+дата) — поправить дату/позиции
   const [saving, setSaving] = useState(false);
   const blankPos = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
   const [form, setForm] = useState({ clientId: "", date: TODAY(), note: "", positions: [{ ...blankPos }] });
@@ -6934,6 +7198,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
         </Modal>
       )}
 
+      {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} dateLabel="Дата отправки" noteLabel="Примечание (фура)" />}
       {dates.length === 0 ? (
         <div className="text-center py-12 text-gray-400">Отгрузок из Караганды пока нет.</div>
       ) : dates.map(date => {
@@ -6970,10 +7235,11 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
                     </div>
                     {g.orders[0].note && <div className="text-xs text-gray-400 mt-1 flex items-center gap-1"><Icon name="note" size={12} />{g.orders[0].note}</div>}
                     {canEdit && (
-                      <div className="mt-2">
+                      <div className="mt-2 flex gap-2 flex-wrap">
                         {shipped
                           ? <Btn size="sm" variant="secondary" onClick={() => setGroupStatus(g.orders, "в пути")}>↩ Вернуть в путь</Btn>
                           : <Btn size="sm" onClick={() => setGroupStatus(g.orders, "отгружена")}>✓ Отгружено (в долг клиенту)</Btn>}
+                        <Btn size="sm" variant="secondary" onClick={() => setEditGroup({ key: `${date}|${gi}`, clientName: g.clientName, orders: g.orders })}><Icon name="pencil" size={15} />Изменить</Btn>
                       </div>
                     )}
                   </div>
@@ -6988,7 +7254,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
 }
 
 // Форма редактирования позиций заявки (клиент+дата). Меняем сорт/кол-во/цену, удаляем и добавляем позиции.
-function EditGroupModal({ group, clients, reload, onClose }) {
+function EditGroupModal({ group, clients, reload, onClose, dateLabel = "Дата доставки", noteLabel = "Заметка (видит водитель)" }) {
   const base = group.orders[0];
   const [positions, setPositions] = useState(group.orders.map(o => ({ id: o.id, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags, price_per_kg: o.price_per_kg ?? "", trial: !!o.trial })));
   const [note, setNote] = useState(group.orders.map(o => o.note).find(Boolean) || "");
@@ -7032,7 +7298,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
     <Modal title={`${group.clientName || "Заявка"} — изменить`} onClose={onClose}>
       <div className="space-y-3">
         <div className="text-xs text-gray-500">Измени дату, сорт/количество/цену, удали лишнюю позицию (✕) или добавь новую.</div>
-        <Inp label="Дата доставки" type="date" value={date} onChange={e => setDate(e.target.value)} />
+        <Inp label={dateLabel} type="date" value={date} onChange={e => setDate(e.target.value)} />
         <PointSel client={clients.find(c => c.id === base.clientId)} value={pointId} onChange={setPointId} />
         {positions.map((p, i) => (
           <div key={i} className="border border-gray-200 rounded-xl p-3 relative">
@@ -7049,7 +7315,7 @@ function EditGroupModal({ group, clients, reload, onClose }) {
           </div>
         ))}
         <button onClick={add} className="w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm font-medium text-gray-500 hover:bg-gray-50">+ ещё позиция</button>
-        <Inp label="Заметка (видит водитель)" value={note} onChange={e => setNote(e.target.value)} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" />
+        <Inp label={noteLabel} value={note} onChange={e => setNote(e.target.value)} placeholder="напр. с отлёжкой (лежать месяц), оставить у охраны" />
       </div>
       <div className="flex gap-2 mt-4">
         <Btn onClick={save} disabled={saving}>{saving ? "Сохраняю..." : "Сохранить"}</Btn>
@@ -7157,6 +7423,12 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const manBlank = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
   const [manPos, setManPos] = useState([{ ...manBlank }]);
   const updMan = (i, k, v) => setManPos(ps => ps.map((p, j) => j === i ? { ...p, [k]: v } : p));
+  // Остаток позиции на складе города заявки (город клиента, без клиента — текущий): видно, брать ли заявку
+  const posAvail = p => {
+    const city = form.clientId ? clientCity(clients.find(c => c.id === form.clientId)) : activeCity;
+    if (citiesOf(notes).find(c => c.id === city)?.kind === "mill") return null; // мельница — безлимитный источник
+    return stockAvail(stock, orders, clients, city, p);
+  };
   const ooResolve = async () => {
     setOoResolving(true); setOoErr("");
     try {
@@ -7644,6 +7916,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                     <Inp label="Мешков" type="number" value={p.bags} onChange={e => updMan(i, "bags", e.target.value)} />
                     {!form.trial && <div className="col-span-2"><Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" min="0" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={p.price_per_kg || ""} onChange={e => updMan(i, "price_per_kg", e.target.value)} /></div>}
                   </div>
+                  <StockHint {...posAvail(p)} need={Number(p.bags) || 0} />
                 </div>
               ))}
               <button onClick={() => setManPos(ps => [...ps, { ...manBlank }])} className="w-full border-2 border-dashed border-gray-200 rounded-xl py-2.5 text-sm font-medium text-gray-500 hover:bg-gray-50">+ ещё сорт / позиция</button>
@@ -8048,13 +8321,13 @@ export default function App() {
             {tab === "today" && <TodayTab orders={view.orders} clients={view.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep || isCityMgr} openSignal={openOrderSignal} activeCity={activeCity} />}
             {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={calStock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} />}
             {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
-            {tab === "stock" && <div className="space-y-4">{canCity && <WarehouseSettings notes={data.notes} reload={reload} city={activeCity} multiCity={multiCity} cityLabel={cityName(data.notes, activeCity)} />}<StockTab stock={stockView} orders={stockOrdersView} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={canCity} activeCity={activeCity} curCity={curCity} notes={data.notes} multiCity={multiCity} allStock={data.stock} allOrderIds={allOrderIdSet} cities={cityList} /></div>}
+            {tab === "stock" && <div className="space-y-4">{canCity && <WarehouseSettings notes={data.notes} reload={reload} city={activeCity} multiCity={multiCity} cityLabel={cityName(data.notes, activeCity)} />}<StockTab stock={stockView} orders={stockOrdersView} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={canCity} activeCity={activeCity} curCity={isRep ? activeCity : curCity /* у торгпреда нет переключателя городов — сразу склад его города, а не сводка «выбери город» */} notes={data.notes} multiCity={multiCity} allStock={data.stock} allOrderIds={allOrderIdSet} cities={cityList} /></div>}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {tab === "revision" && (isDev || isCityMgr) && <RevisionTab stock={stockView} notes={data.notes} reload={reload} applyLocal={applyLocal} activeCity={activeCity} multiCity={multiCity} />}
-            {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} curCity={curCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
+            {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} stock={data.stock} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} curCity={curCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
             {tab === "karaganda" && <KaragandaTab orders={view.orders} clients={view.clients} reload={reload} canEdit={isDirector || isCityMgr} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
-            {tab === "debts" && <DebtsTab onOpenClient={openClientHistory} orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} />}
+            {tab === "debts" && <DebtsTab onOpenClient={openClientHistory} orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} canOsv={isDirector || isCityMgr} />}
             {tab === "contracts" && <ContractsTab clients={view.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={view.clients} orders={view.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={view.clients} orders={view.orders} />}

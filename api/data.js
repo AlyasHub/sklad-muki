@@ -24,7 +24,7 @@ async function logChange(u, action, table, record) {
 
 // 🧾 История действий для раздела «Долги»: кто внёс/изменил/удалил оплату, корректировки по акту
 // сверки, правки карточки клиента. Пишем в ту же таблицу changes, но с table:"activity" (в журнал
-// изменений админа эти строки не попадают). Храним последние ~1000, лишние изредка подчищаем.
+// изменений админа эти строки не попадают). Храним за последний год (~400 дней), старше — изредка подчищаем.
 const fmtT = n => Math.round(Number(n) || 0).toLocaleString("ru-RU");
 const dmy = d => String(d || "").split("-").reverse().join(".");
 async function logActivity(u, { kind, client, clientName, text }) {
@@ -37,9 +37,9 @@ async function logActivity(u, { kind, client, clientName, text }) {
       ownerId: (client && client.ownerId) || "", city: (client && client.city) || "astana",
       text: String(text).slice(0, 300),
     });
-    if (Math.random() < 0.05) {
-      const old = await dbSelect("changes", "select=id&data->>table=eq.activity&order=id.desc&offset=1000&limit=1");
-      if (old.length) await dbDeleteWhere("changes", `data->>table=eq.activity&id=lte.${encodeURIComponent(old[0].id)}`);
+    if (Math.random() < 0.02) {
+      const cut = new Date(Date.now() - 400 * 864e5).toISOString();
+      await dbDeleteWhere("changes", `data->>table=eq.activity&data->>at=lt.${encodeURIComponent(cut)}`);
     }
   } catch {}
 }
@@ -168,19 +168,28 @@ export default async function handler(req, res) {
     // менеджер — свои города, торгпред — только по своим (и открытым ему) клиентам.
     if (op === "activity") {
       if (!["director", "viewer", "citymanager", "rep"].includes(u.role)) return res.status(403).json({ error: "Нет доступа" });
+      // day = "YYYY-MM-DD" — все действия за этот день (по времени Астаны, UTC+5); без дня — последние
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(String((req.body || {}).day || "")) ? req.body.day : "";
+      // 1000 — потолок одного запроса Supabase; торгпред/менеджер потом видят только своё, поэтому берём с запасом
+      let q = "select=data&data->>table=eq.activity&order=id.desc&limit=1000";
+      if (day) {
+        const a = new Date(day + "T00:00:00+05:00"), b = new Date(a.getTime() + 864e5);
+        q = `select=data&data->>table=eq.activity&data->>at=gte.${encodeURIComponent(a.toISOString())}&data->>at=lt.${encodeURIComponent(b.toISOString())}&order=id.desc&limit=1000`;
+      }
       let rows = [];
-      try { rows = (await dbSelect("changes", "select=data&data->>table=eq.activity&order=id.desc&limit=400")).map(r => r.data); } catch { return res.status(200).json({ rows: [] }); }
+      try { rows = (await dbSelect("changes", q)).map(r => r.data); } catch { return res.status(200).json({ rows: [] }); }
       const myC = (u.cities && u.cities.length) ? u.cities : null;
       if (u.role === "citymanager" || (u.role === "viewer" && myC)) { const cs = myC || [u.city || "astana"]; rows = rows.filter(r => cs.includes(r.city || "astana")); }
       if (u.role === "rep") { const ids = new Set((await repVisibleClients(u)).map(c => c.id)); rows = rows.filter(r => r.clientId && ids.has(r.clientId)); }
-      return res.status(200).json({ rows: rows.slice(0, 100) });
+      return res.status(200).json({ rows: day ? rows : rows.slice(0, 300) });
     }
     // Журнал изменений и резервные копии — только администратор
     if (op === "changes" || op === "restoreChange" || op === "backupNow" || op === "backupList" || op === "backupGet") {
       if (u.role !== "director") return res.status(403).json({ error: "Только для администратора" });
       if (op === "changes") {
-        let all = []; try { all = await dbList("changes"); } catch { return res.status(200).json({ rows: [], needTable: "changes" }); }
-        const rows = all.filter(r => r.table !== "activity").sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200); // история «Долгов» — отдельно
+        // история «Долгов» (table:"activity") — отдельно и её много (храним год), поэтому берём только нужное, а не всю таблицу
+        let all = []; try { all = (await dbSelect("changes", "select=data&data->>table=neq.activity&order=id.desc&limit=400")).map(r => r.data); } catch { return res.status(200).json({ rows: [], needTable: "changes" }); }
+        const rows = all.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 200);
         // саму запись наружу не отдаём (там могут быть хэши паролей) — только пометку, что откат возможен
         return res.status(200).json({ rows: rows.map(({ data, ...r }) => ({ ...r, canRestore: !!data })) });
       }
@@ -245,8 +254,59 @@ export default async function handler(req, res) {
 Только JSON.`;
       // Haiku; если ответ не объект анализа — повтор на Sonnet
       const out = await claudeJson(key, prompt, { max_tokens: 2000, check: o => o && typeof o === "object" && !Array.isArray(o) && "moisture" in o });
-      if (out.error) return res.status(out.status || 500).json({ error: out.error });
+      if (out.error) return res.status(502).json({ error: out.error }); // 502, а не код Anthropic: их 401 приложение приняло бы за «войдите заново»
       return res.status(200).json({ raw: out.raw });
+    }
+    // 📒 Оборотно-сальдовая ведомость (фото/PDF из 1С) → долг каждого клиента на начало и конец периода.
+    // Здесь только разбор: сохраняет браузер обычными записями-сверками (upsert с проверкой роли).
+    // Админ и менеджер города. Живёт в data.js — лимит 12 функций Vercel.
+    if (op === "parseOsv") {
+      if (u.role !== "director" && u.role !== "citymanager") return res.status(403).json({ error: "Только для администратора и менеджера города" });
+      const key = process.env.ANTHROPIC_API_KEY;
+      if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY не настроен на сервере" });
+      const { files = [], clients: cl = [] } = req.body || {};
+      const MEDIA = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+      const docs = (Array.isArray(files) ? files : []).filter(f => f && MEDIA.includes(f.type) && typeof f.data === "string" && f.data.length > 100).slice(0, 8);
+      if (!docs.length) return res.status(400).json({ error: "Прикрепи фото или PDF ведомости" });
+      const list = (Array.isArray(cl) ? cl : []).slice(0, 2000).map(c => `${String(c.id || "").slice(0, 40)} | ${String(c.name || "").slice(0, 80)}${c.org_name ? ` | ${String(c.org_name).slice(0, 120)}` : ""}${c.bin ? ` | БИН ${String(c.bin).slice(0, 12)}` : ""}`).join("\n");
+      const prompt = `Ты бухгалтер оптовой компании (мука) в Казахстане. Во вложении — оборотно-сальдовая ведомость (ОСВ) из 1С по расчётам с покупателями (обычно счёт 1210, бывает и 3510 — авансы полученные). Колонки: Контрагент; Сальдо на начало периода (Дебет, Кредит); Обороты за период (Дебет, Кредит); Сальдо на конец периода (Дебет, Кредит). Фото/страниц может быть несколько — это одна ведомость, собери строки со всех.
+
+Задача:
+1. Найди период ведомости («Период: 01.09.2026 - 30.09.2026», «за сентябрь 2026 г.» и т.п.) → from и to в формате YYYY-MM-DD. Не видно — пустые строки "".
+2. Выпиши КАЖДОГО контрагента. Строки итогов («Итого», «Всего», «Оборот»), заголовки счетов и групп НЕ включай. Если под контрагентом идёт разбивка (договоры, документы расчётов) — бери ТОЛЬКО строку самого контрагента, строки договоров и документов не выписывай, иначе суммы задвоятся. Один и тот же контрагент на разных счетах (например 1210 и 3510) — выпиши по строке на каждый счёт.
+3. Числа: пробел или точка — разделитель тысяч, запятая — копейки. Пустая клетка = 0. Пиши числа без пробелов, копейки через точку. Цифры переписывай очень внимательно, ничего не округляй и не придумывай.
+4. Сопоставь контрагента с клиентом из нашего списка (id | короткое название | юр. название | БИН): по юр. названию (ИП Фамилия, ТОО «Название»), БИН, похожему написанию, кириллица/латиница. Уверен — верни его id. Не уверен или нет в списке — "".
+5. Итоговую строку ведомости («Итого») верни отдельно в total. Нет её — [].
+
+Наш список клиентов:
+${list || "(пусто)"}
+
+Верни ТОЛЬКО JSON без markdown. Строки — компактными массивами:
+{"from":"YYYY-MM-DD","to":"YYYY-MM-DD","rows":[["Контрагент как в ведомости","id или пусто",нач_дебет,нач_кредит,оборот_дебет,оборот_кредит,кон_дебет,кон_кредит,"счёт"]],"total":[нач_дебет,нач_кредит,оборот_дебет,оборот_кредит,кон_дебет,кон_кредит]}`;
+      const content = [...docs.map(f => f.type === "application/pdf"
+        ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data } }
+        : { type: "image", source: { type: "base64", media_type: f.type, data: f.data } }), { type: "text", text: prompt }];
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 16000, messages: [{ role: "user", content }] }),
+      });
+      const adata = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(502).json({ error: adata?.error?.message || "Ошибка Anthropic API" }); // не их код: 401 Anthropic приложение приняло бы за «войдите заново»
+      let raw = (adata.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+      const truncated = adata.stop_reason === "max_tokens";
+      const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
+      if (a >= 0) raw = raw.slice(a, !truncated && b > a ? b + 1 : undefined);
+      let out;
+      try { out = JSON.parse(raw); } catch {
+        // Ответ оборвался на середине (длинная ведомость) — отрезаем по последней целой строке и закрываем скобки
+        const k = truncated ? raw.lastIndexOf("],") : -1;
+        out = null;
+        for (const tail of ["]}", "}"]) { if (out || k < 0) break; try { out = JSON.parse(raw.slice(0, k + 1) + tail); } catch {} } // "}" — оборвалось уже в «Итого»
+        if (!out) return res.status(422).json({ error: "Не получилось прочитать ведомость. Сфотографируй ровнее и крупнее (или загрузи PDF) и попробуй ещё раз." });
+      }
+      if (!out || !Array.isArray(out.rows)) return res.status(422).json({ error: "В файле не нашёл строк ведомости." });
+      return res.status(200).json({ from: out.from || "", to: out.to || "", rows: out.rows, total: Array.isArray(out.total) ? out.total : [], truncated });
     }
     if (op === "list") return res.status(200).json({ rows: await listFor(u, table) });
     if (op === "upsert") { await upsertFor(u, table, item); return res.status(200).json({ ok: true }); }
@@ -445,6 +505,7 @@ async function listFor(u, table) {
         const { price_per_kg, ...rest } = o;
         return {
           ...rest, price_per_kg: 0, foreign: true,
+          city: o.city || (cl && cl.city) || "astana", // клиента он не видит — город берём здесь, иначе бронь склада уедет «в Астану»
           address: o.address || (c && c.address) || "",
           gis_link: o.gis_link || (c && c.gis_link) || "",
           coords: o.coords || (c && c.coords) || null,
