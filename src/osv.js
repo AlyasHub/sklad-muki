@@ -56,8 +56,10 @@ export function osvTotalCheck(lines, total) {
   return { ok: Math.abs(start - tStart) < 1 && Math.abs(end - tEnd) < 1, start, end, tStart, tEnd };
 }
 
-// 📊 Ведомость из Excel/CSV → текст для ИИ: строки через перенос, ячейки через табуляцию. Числа — как в ячейке
-// (без форматирования), поэтому точнее фото. sheets = [{ name, rows: [[значение ячейки, ...], ...] }].
+// 📊 Ведомость из Excel/CSV → текст для ИИ: таблица с разделителем « | », в каждой строке одинаковое число
+// колонок (пустая ячейка — пусто между чертами). Подряд идущие табуляции ИИ пересчитывал неверно и сдвигал
+// суммы в соседнюю колонку. Числа — как в ячейке (без форматирования), поэтому точнее фото.
+// sheets = [{ name, rows: [[значение ячейки, ...], ...] }].
 export function cellText(v) {
   if (v === null || v === undefined) return "";
   if (v instanceof Date) return isNaN(v) ? "" : v.toISOString().slice(0, 10);
@@ -73,13 +75,16 @@ export function cellText(v) {
 export function sheetsToText(sheets, maxChars = 250000) {
   const parts = [];
   for (const sh of sheets || []) {
-    const lines = [];
+    const rows = [];
     for (const row of sh.rows || []) {
-      const cells = (row || []).map(cellText);
+      const cells = Array.from(row || [], cellText).map(c => c.replace(/\|/g, "/"));
       while (cells.length && !cells[cells.length - 1]) cells.pop(); // пустой хвост строки
-      if (cells.some(Boolean)) lines.push(cells.join("\t"));
+      if (cells.some(Boolean)) rows.push(cells);
     }
-    if (lines.length) parts.push(`Лист «${sh.name || ""}»:\n${lines.join("\n")}`);
+    if (!rows.length) continue;
+    const width = Math.max(...rows.map(r => r.length));
+    const lines = rows.map(r => `| ${[...r, ...Array(width - r.length).fill("")].join(" | ")} |`);
+    parts.push(`Лист «${sh.name || ""}» (колонок: ${width}):\n${lines.join("\n")}`);
   }
   const text = parts.join("\n\n");
   if (!text) throw new Error("В файле пустые листы — нет таблицы ведомости.");

@@ -6928,7 +6928,7 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
               <div className="text-sm font-semibold text-amber-800">Не узнал клиента — выбери вручную (или оставь, не запишем)</div>
               {unmatched.map(l => (
                 <div key={l.i} className="text-sm">
-                  <div className="text-gray-800">{l.name} <span className="text-xs text-gray-500">· начало {money(l.start)} · конец {money(l.end)}</span></div>
+                  <div className="text-gray-800">{l.name} <span className="text-xs text-gray-500">· начало {money(l.start)} · конец {money(l.end)}</span>{!l.ok && <span className="text-xs text-amber-700"> · ⚠️ начало + обороты ≠ конец, сверь цифры</span>}</div>
                   <Sel value={pick[l.i] || ""} onChange={e => setPick(p => ({ ...p, [l.i]: e.target.value }))} options={[{ value: "", label: "— не записывать —" }, ...clientOptions(clients)]} />
                 </div>
               ))}
