@@ -1,9 +1,9 @@
-// Серверная функция Vercel: разбирает заявку из WhatsApp через Claude.
+// Серверная функция Vercel: разбирает заявку из WhatsApp через Claude (Haiku, при сомнении — Sonnet).
 // Ключ Anthropic хранится в переменной окружения ANTHROPIC_API_KEY (настраивается в Vercel),
 // чтобы он никогда не попадал в браузерный код. Промпт строится здесь, на сервере,
 // поэтому этот endpoint умеет только разбирать заявки на муку — его нельзя использовать для чего-то ещё.
 
-import { verifyToken } from "./_lib.js";
+import { verifyToken, claudeJson } from "./_lib.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Только POST" });
@@ -66,25 +66,22 @@ ${clientInfo}
 Верни JSON массив: [{"clientName":"...","pointId":"","brand":"...","grade":"...","bag_kg":25,"bags":40,"date":"YYYY-MM-DD","trial":false,"note":"","pickup":false,"pickupWatch":false,"worker":""}]
 Только JSON.`;
 
+  // Проверка ответа Haiku: каждая позиция — клиент ровно из списка, его точка доставки, мешки и дата.
+  // Не прошло (или клиента правда нет в базе) — тот же разбор повторяется на Sonnet.
+  const norm = v => String(v || "").trim().toLowerCase();
+  const byName = new Map(clients.map(c => [norm(c.name), c]));
+  const check = arr => Array.isArray(arr) && arr.length > 0 && arr.every(x => {
+    const c = byName.get(norm(x && x.clientName));
+    if (clients.length && !c) return false;
+    if (x.pointId && !(c && (c.points || []).some(p => p && p.id === x.pointId))) return false;
+    return Number(x.bags) > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(x.date || ""));
+  });
+
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-5",
-        max_tokens: 4000,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Ошибка Anthropic API" });
-    const raw = (data.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
-    if ((req.body || {}).debug) return res.status(200).json({ raw, model: data.model, stop_reason: data.stop_reason });
-    return res.status(200).json({ raw });
+    const out = await claudeJson(key, prompt, { max_tokens: 4000, check });
+    if (out.error) return res.status(out.status || 500).json({ error: out.error });
+    if ((req.body || {}).debug) return res.status(200).json({ raw: out.raw, model: out.model, stop_reason: out.stop_reason, fallback: !!out.fallback });
+    return res.status(200).json({ raw: out.raw });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });
   }

@@ -1,6 +1,6 @@
 // Разбор данных клиента из свободного текста через Claude (для карточки клиента и договоров).
 // Ключ Anthropic — в переменной окружения ANTHROPIC_API_KEY (на сервере, не в браузере).
-import { verifyToken } from "./_lib.js";
+import { verifyToken, claudeJson } from "./_lib.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Только POST" });
@@ -31,15 +31,10 @@ export default async function handler(req, res) {
 Только JSON.`;
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
-    });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Ошибка Anthropic API" });
-    const raw = (data.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
-    return res.status(200).json({ raw });
+    // Haiku; если ответ не объект клиента — повтор на Sonnet
+    const out = await claudeJson(key, prompt, { max_tokens: 4000, check: o => o && typeof o === "object" && !Array.isArray(o) && ("name" in o || "org_name" in o) });
+    if (out.error) return res.status(out.status || 500).json({ error: out.error });
+    return res.status(200).json({ raw: out.raw });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });
   }

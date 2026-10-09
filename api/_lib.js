@@ -101,3 +101,37 @@ export const SERVICE_KEY_RAW = SERVICE_KEY; // для загрузки фото
 export function orderLinkSig(clientId) {
   return crypto.createHmac("sha256", AUTH_SECRET).update("order-link:" + clientId).digest("base64url").slice(0, 20);
 }
+
+// 🤖 Claude для простого разбора текста в JSON (заявки, клиенты, фуры, анализы).
+// Сначала быстрая и дешёвая Haiku; если её ответ не JSON, не прошёл проверку check (клиент не из
+// списка и т.п.), обрезан или она недоступна — тот же запрос повторяем на Sonnet.
+// Возвращает { raw, model, stop_reason } (raw — чистый JSON-текст) или { error, status }.
+export const FAST_MODEL = "claude-haiku-4-5-20251001";
+export const SMART_MODEL = "claude-sonnet-5";
+
+async function claudeCall(key, model, prompt, max_tokens) {
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model, max_tokens, messages: [{ role: "user", content: prompt }] }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { error: data?.error?.message || "Ошибка Anthropic API", status: r.status };
+    let raw = (data.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+    // модель иногда добавляет фразу до/после JSON — оставляем только сам JSON
+    const a = raw.search(/[[{]/), b = Math.max(raw.lastIndexOf("}"), raw.lastIndexOf("]"));
+    if (a > 0 || (b >= 0 && b < raw.length - 1)) raw = raw.slice(Math.max(a, 0), b + 1);
+    return { raw, model: data.model || model, stop_reason: data.stop_reason };
+  } catch (e) {
+    return { error: String(e.message || e), status: 500 };
+  }
+}
+
+export async function claudeJson(key, prompt, { max_tokens = 4000, check } = {}) {
+  const fast = await claudeCall(key, FAST_MODEL, prompt, max_tokens);
+  if (!fast.error && fast.stop_reason !== "max_tokens") {
+    try { if (!check || check(JSON.parse(fast.raw))) return fast; } catch { /* не JSON — повторим на Sonnet */ }
+  }
+  return { ...(await claudeCall(key, SMART_MODEL, prompt, max_tokens)), fallback: true };
+}

@@ -1,6 +1,6 @@
 // Привратник базы. Все чтения/записи идут сюда. Проверяет токен и роль,
 // отдаёт только то, что роли положено. Водитель НЕ может прочитать клиентов/цены/чужие отгрузки.
-import { verifyToken, signToken, dbList, dbSelect, dbDeleteWhere, dbGet, dbFindBy, dbUpsert, dbDelete, configured, orderLinkSig } from "./_lib.js";
+import { verifyToken, signToken, dbList, dbSelect, dbDeleteWhere, dbGet, dbFindBy, dbUpsert, dbDelete, configured, orderLinkSig, claudeJson } from "./_lib.js";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -243,15 +243,10 @@ export default async function handler(req, res) {
 - extra: доп. показатель — любой дополнительный показатель с названием и значением, как в тексте (например «зольность 0.55%»). Если нет — пусто.
 Верни строго JSON: {"brand":"","grade":"","prod_date":"","moisture":"","whiteness":"","gluten":"","idk_group":"","idk":"","falling_number":"","extra":""}
 Только JSON.`;
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 2000, messages: [{ role: "user", content: prompt }] }),
-      });
-      const adata = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: adata?.error?.message || "Ошибка Anthropic API" });
-      const raw = (adata.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
-      return res.status(200).json({ raw });
+      // Haiku; если ответ не объект анализа — повтор на Sonnet
+      const out = await claudeJson(key, prompt, { max_tokens: 2000, check: o => o && typeof o === "object" && !Array.isArray(o) && "moisture" in o });
+      if (out.error) return res.status(out.status || 500).json({ error: out.error });
+      return res.status(200).json({ raw: out.raw });
     }
     if (op === "list") return res.status(200).json({ rows: await listFor(u, table) });
     if (op === "upsert") { await upsertFor(u, table, item); return res.status(200).json({ ok: true }); }

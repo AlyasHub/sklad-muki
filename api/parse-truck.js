@@ -2,7 +2,7 @@
 // Ключ Anthropic — в переменной окружения ANTHROPIC_API_KEY (на сервере, не в браузере).
 // Промпт строится здесь, поэтому endpoint умеет только разбирать состав фуры на муку.
 
-import { verifyToken } from "./_lib.js";
+import { verifyToken, claudeJson } from "./_lib.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Только POST" });
@@ -34,16 +34,12 @@ export default async function handler(req, res) {
 Только JSON.`;
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
-    });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Ошибка Anthropic API" });
-    const raw = (data.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
-    if ((req.body || {}).debug) return res.status(200).json({ raw, model: data.model, stop_reason: data.stop_reason });
-    return res.status(200).json({ raw });
+    // Haiku; если ответ не фура с датой и списком позиций — повтор на Sonnet
+    const check = o => o && !Array.isArray(o) && Array.isArray(o.items) && /^\d{4}-\d{2}-\d{2}$/.test(String(o.date || "")) && o.items.every(i => Number(i && i.kg) >= 0);
+    const out = await claudeJson(key, prompt, { max_tokens: 4000, check });
+    if (out.error) return res.status(out.status || 500).json({ error: out.error });
+    if ((req.body || {}).debug) return res.status(200).json({ raw: out.raw, model: out.model, stop_reason: out.stop_reason, fallback: !!out.fallback });
+    return res.status(200).json({ raw: out.raw });
   } catch (e) {
     return res.status(500).json({ error: String(e.message || e) });
   }
