@@ -67,9 +67,13 @@ ${clientInfo}
 Только JSON.`;
 
   // Проверка ответа Haiku: каждая позиция — клиент ровно из списка, его точка доставки, товар из того,
-  // что он обычно берёт (сорт+бренд+фасовка), мешки и дата. Не прошло (новый клиент, необычный товар,
-  // ошибка Haiku) — тот же разбор повторяется на Sonnet: чуть дольше, зато надёжно.
+  // что он обычно берёт (сорт+бренд+фасовка), дата, а количество есть в тексте заявки числом (мешки,
+  // кг или тонны). Не прошло (новый клиент, необычный товар, «тонну» словами, ошибка Haiku) — тот же
+  // разбор повторяется на Sonnet: чуть дольше, зато надёжно.
   const norm = v => String(v || "").trim().toLowerCase();
+  const nums = new Set((String(text).replace(/(\d)[\s ](?=\d{3}(?!\d))/g, "$1").match(/\d+(?:[.,]\d+)?/g) || []).map(n => Number(n.replace(",", "."))));
+  const r3 = v => Math.round(v * 1000) / 1000;
+  const qtyInText = x => { const b = Number(x.bags), kg = b * Number(x.bag_kg); return [b, kg, kg / 1000].some(v => nums.has(r3(v))); };
   const byName = new Map(clients.map(c => [norm(c.name), c]));
   const check = arr => Array.isArray(arr) && arr.length > 0 && arr.every(x => {
     const c = byName.get(norm(x && x.clientName));
@@ -77,7 +81,7 @@ ${clientInfo}
     if (x.pointId && !(c && (c.points || []).some(p => p && p.id === x.pointId))) return false;
     const prods = (c && c.products) || [];
     if (prods.length && !prods.some(p => norm(p.grade) === norm(x.grade) && norm(p.brand) === norm(x.brand) && Number(p.bag_kg) === Number(x.bag_kg))) return false;
-    return Number(x.bags) > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(x.date || ""));
+    return Number(x.bags) > 0 && qtyInText(x) && /^\d{4}-\d{2}-\d{2}$/.test(String(x.date || ""));
   });
 
   try {
