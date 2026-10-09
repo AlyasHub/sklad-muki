@@ -266,10 +266,12 @@ export default async function handler(req, res) {
       if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY не настроен на сервере" });
       const { files = [], clients: cl = [] } = req.body || {};
       const MEDIA = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-      const docs = (Array.isArray(files) ? files : []).filter(f => f && MEDIA.includes(f.type) && typeof f.data === "string" && f.data.length > 100).slice(0, 8);
-      if (!docs.length) return res.status(400).json({ error: "Прикрепи фото или PDF ведомости" });
+      // Excel/CSV браузер присылает уже текстом таблицы (type "text/plain", text) — цифры из ячеек как есть
+      const docs = (Array.isArray(files) ? files : []).filter(f => f && ((MEDIA.includes(f.type) && typeof f.data === "string" && f.data.length > 100) || (f.type === "text/plain" && typeof f.text === "string" && f.text.trim()))).slice(0, 8);
+      if (!docs.length) return res.status(400).json({ error: "Прикрепи Excel, PDF или фото ведомости" });
+      if (docs.reduce((s, f) => s + (f.text || "").length, 0) > 300000) return res.status(413).json({ error: "Таблица слишком большая — оставь в файле только ведомость по покупателям." });
       const list = (Array.isArray(cl) ? cl : []).slice(0, 2000).map(c => `${String(c.id || "").slice(0, 40)} | ${String(c.name || "").slice(0, 80)}${c.org_name ? ` | ${String(c.org_name).slice(0, 120)}` : ""}${c.bin ? ` | БИН ${String(c.bin).slice(0, 12)}` : ""}`).join("\n");
-      const prompt = `Ты бухгалтер оптовой компании (мука) в Казахстане. Во вложении — оборотно-сальдовая ведомость (ОСВ) из 1С по расчётам с покупателями (обычно счёт 1210, бывает и 3510 — авансы полученные). Колонки: Контрагент; Сальдо на начало периода (Дебет, Кредит); Обороты за период (Дебет, Кредит); Сальдо на конец периода (Дебет, Кредит). Фото/страниц может быть несколько — это одна ведомость, собери строки со всех.
+      const prompt = `Ты бухгалтер оптовой компании (мука) в Казахстане. Во вложении (фото, PDF или таблица из Excel) — оборотно-сальдовая ведомость (ОСВ) из 1С по расчётам с покупателями (обычно счёт 1210, бывает и 3510 — авансы полученные). Колонки: Контрагент; Сальдо на начало периода (Дебет, Кредит); Обороты за период (Дебет, Кредит); Сальдо на конец периода (Дебет, Кредит). Фото/страниц может быть несколько — это одна ведомость, собери строки со всех.
 
 Задача:
 1. Найди период ведомости («Период: 01.09.2026 - 30.09.2026», «за сентябрь 2026 г.» и т.п.) → from и to в формате YYYY-MM-DD. Не видно — пустые строки "".
@@ -283,7 +285,9 @@ ${list || "(пусто)"}
 
 Верни ТОЛЬКО JSON без markdown. Строки — компактными массивами:
 {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","rows":[["Контрагент как в ведомости","id или пусто",нач_дебет,нач_кредит,оборот_дебет,оборот_кредит,кон_дебет,кон_кредит,"счёт"]],"total":[нач_дебет,нач_кредит,оборот_дебет,оборот_кредит,кон_дебет,кон_кредит]}`;
-      const content = [...docs.map(f => f.type === "application/pdf"
+      const content = [...docs.map(f => f.type === "text/plain"
+        ? { type: "text", text: `Ведомость из Excel (строки таблицы, ячейки через табуляцию, числа без форматирования):\n${f.text}` }
+        : f.type === "application/pdf"
         ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data } }
         : { type: "image", source: { type: "base64", media_type: f.type, data: f.data } }), { type: "text", text: prompt }];
       const r = await fetch("https://api.anthropic.com/v1/messages", {

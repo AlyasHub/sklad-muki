@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
-import { downloadClientsReport } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»)
+import { downloadClientsReport, loadExcelJS } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»); чтение Excel-ведомости
 import { debtAt, reconId, clientCheckpoints, checkpointDrift, saveCheckpoints, resyncCheckpoints, recentMonths, monthFirst, nextMonthFirst, monthLast, monthLabel } from "./recon.js"; // сверки долга по месяцам
-import { dayAfter, osvLines, osvTotalCheck, osvByClient } from "./osv.js"; // оборотно-сальдовая ведомость → сверки
+import { dayAfter, osvLines, osvTotalCheck, osvByClient, sheetsToText } from "./osv.js"; // оборотно-сальдовая ведомость → сверки
 
 // Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
 // Прямого ключа к базе в браузере больше нет.
@@ -6749,7 +6749,43 @@ function ReconMonthTable({ clients = [], orders = [], payments = [], reload, onC
 // мы показываем таблицу для проверки, по «Записать» — сверки клиентам (как «Сверка за месяц»). Клиентов,
 // которых нет в ведомости, не трогаем. Расчёты — в osv.js, сверки — в recon.js.
 const blobToB64 = b => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1] || ""); r.onerror = () => bad(new Error("не удалось прочитать файл")); r.readAsDataURL(b); });
+// Старый формат Excel (.xls) читает только SheetJS — грузим его с cdnjs, лишь когда выбрали такой файл
+let sheetJsPromise = null;
+function loadSheetJS() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!sheetJsPromise) sheetJsPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = () => (window.XLSX ? resolve(window.XLSX) : reject(new Error("Модуль Excel не загрузился")));
+    s.onerror = () => { sheetJsPromise = null; reject(new Error("Нет интернета — не удалось загрузить модуль Excel. Попробуй ещё раз.")); };
+    document.head.appendChild(s);
+  });
+  return sheetJsPromise;
+}
+// Excel / CSV → текст таблицы (уходит ИИ текстом: цифры из ячеек как есть, точнее фото)
+async function osvSheetPayload(file) {
+  const ext = (file.name.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || "";
+  const buf = await file.arrayBuffer();
+  let text;
+  if (ext === "csv") { // 1С может сохранить CSV в Windows-1251
+    let s; try { s = new TextDecoder("utf-8", { fatal: true }).decode(buf); } catch { s = new TextDecoder("windows-1251").decode(buf); }
+    const sep = (s.split("\n")[0].match(/;/g) || []).length >= (s.split("\n")[0].match(/,/g) || []).length ? ";" : ",";
+    text = sheetsToText([{ name: file.name, rows: s.split(/\r?\n/).map(l => l.split(sep).map(c => c.replace(/^"|"$/g, ""))) }]);
+  } else if (ext === "xls") {
+    const XLSX = await loadSheetJS();
+    const wb = XLSX.read(buf, { type: "array" });
+    text = sheetsToText(wb.SheetNames.map(n => ({ name: n, rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, blankrows: false }) })));
+  } else { // .xlsx — ExcelJS (он уже есть в приложении для Excel-отчётов)
+    const ExcelJS = await loadExcelJS();
+    const wb = new ExcelJS.Workbook();
+    try { await wb.xlsx.load(buf); } catch { throw new Error(`«${file.name}» не открылся как Excel. Сохрани ведомость из 1С как .xlsx и попробуй ещё раз.`); }
+    text = sheetsToText(wb.worksheets.map(ws => { const rows = []; ws.eachRow({ includeEmpty: false }, r => rows.push((r.values || []).slice(1))); return { name: ws.name, rows }; }));
+  }
+  return { name: file.name, type: "text/plain", text };
+}
+const isSheetFile = f => /\.(xlsx|xls|csv)$/i.test(f.name || "") || /spreadsheet|ms-excel|text\/csv/.test(f.type || "");
 async function osvFilePayload(file) {
+  if (isSheetFile(file)) return osvSheetPayload(file);
   if (file.type === "application/pdf") { // запрос на сервер — не больше 4,5 МБ, а base64 тяжелее файла на треть
     if (file.size > 2.9e6) throw new Error(`«${file.name}» больше 2,9 МБ — сохрани PDF поменьше или сфотографируй страницы`);
     return { name: file.name, type: file.type, data: await blobToB64(file) };
@@ -6782,7 +6818,7 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
   };
   // Длинную ведомость можно разбирать частями (по 1–2 фото): строки каждой части добавляются к уже разобранным
   const parse = async () => {
-    const body = { files: files.map(({ type, data }) => ({ type, data })), clients: clients.map(c => ({ id: c.id, name: c.name, org_name: c.org_name || "", bin: c.bin || "" })) };
+    const body = { files: files.map(({ type, data, text }) => (text ? { type, text } : { type, data })), clients: clients.map(c => ({ id: c.id, name: c.name, org_name: c.org_name || "", bin: c.bin || "" })) };
     if (JSON.stringify(body).length > 4.0e6) { setErr("Файлы слишком тяжёлые для одного раза — оставь 1–2 фото, разбери, потом добавь остальные."); return; }
     setBusy("Читаю ведомость… обычно до минуты, не закрывай окно"); setErr(""); setDone("");
     try {
@@ -6851,7 +6887,7 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
         <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="file" size={16} />Оборотно-сальдовая ведомость</span>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600" title="Закрыть"><Icon name="close" size={18} /></button>
       </div>
-      <p className="text-xs text-gray-500">Сфотографируй ведомость из 1С (можно несколько фото) или загрузи PDF. ИИ прочитает долг каждого клиента на начало и конец периода — ты проверишь и нажмёшь «Записать». Клиентов, которых нет в ведомости, не трогаем.</p>
+      <p className="text-xs text-gray-500">Загрузи ведомость из 1С: Excel (точнее всего), PDF или фото (можно несколько). ИИ прочитает долг каждого клиента на начало и конец периода — ты проверишь и нажмёшь «Записать». Клиентов, которых нет в ведомости, не трогаем.</p>
       <div className="grid grid-cols-2 gap-2">
         <Inp label="Период с" type="date" value={from} onChange={e => setFrom(e.target.value)} />
         <Inp label="по" type="date" value={to} onChange={e => setTo(e.target.value)} />
@@ -6859,14 +6895,14 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
       {res && res.docFrom && res.docTo && <div className="text-xs text-gray-500">Период из ведомости: {dmyR(res.docFrom)} — {dmyR(res.docTo)}{(res.docFrom !== from || res.docTo !== to) ? " · ты поменял период, запишем на выбранные даты" : ""}</div>}
       <div className="space-y-1.5">
         <label className="w-full border-2 border-dashed border-violet-200 hover:bg-violet-50 rounded-xl py-3 text-sm font-medium text-violet-700 inline-flex items-center justify-center gap-1.5 cursor-pointer">
-          <Icon name="camera" size={16} />{files.length ? "Добавить ещё фото / PDF" : "Выбрать фото или PDF"}
-          <input type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={e => { const l = [...(e.target.files || [])]; e.target.value = ""; if (l.length) addFiles(l); }} />
+          <Icon name="camera" size={16} />{files.length ? "Добавить ещё файл" : "Выбрать Excel, PDF или фото"}
+          <input type="file" accept="image/*,application/pdf,.xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" multiple className="hidden" onChange={e => { const l = [...(e.target.files || [])]; e.target.value = ""; if (l.length) addFiles(l); }} />
         </label>
         {files.map((f, i) => (
           <div key={i} className="flex items-center gap-2 text-sm bg-gray-50 rounded-lg px-3 py-1.5">
-            <Icon name={f.type === "application/pdf" ? "file" : "camera"} size={14} className="text-gray-400 flex-shrink-0" />
+            <Icon name={f.type.startsWith("image/") ? "camera" : "file"} size={14} className="text-gray-400 flex-shrink-0" />
             <span className="truncate flex-1">{f.name}</span>
-            <span className="text-xs text-gray-400 whitespace-nowrap">{fmt(Math.round(f.data.length * 0.75 / 1024))} КБ</span>
+            <span className="text-xs text-gray-400 whitespace-nowrap">{f.text ? `таблица, ${fmt(f.text.split("\n").length)} строк` : `${fmt(Math.round(f.data.length * 0.75 / 1024))} КБ`}</span>
             <button onClick={() => setFiles(fs => fs.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600" title="Убрать"><Icon name="trash" size={14} /></button>
           </div>
         ))}
@@ -7017,7 +7053,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
         : <button onClick={() => setShowRecon(true)} className="w-full bg-white border border-sky-200 hover:bg-sky-50 text-sky-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="receipt" size={15} />Сверка за месяц (долг на начало и конец)</button>)}
       {canEdit && canOsv && (showOsv
         ? <OsvImport clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowOsv(false)} />
-        : <button onClick={() => setShowOsv(true)} className="w-full bg-white border border-violet-200 hover:bg-violet-50 text-violet-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Оборотно-сальдовая ведомость — загрузить фото/PDF</button>)}
+        : <button onClick={() => setShowOsv(true)} className="w-full bg-white border border-violet-200 hover:bg-violet-50 text-violet-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Оборотно-сальдовая ведомость — загрузить Excel, PDF или фото</button>)}
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
