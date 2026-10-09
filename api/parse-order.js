@@ -71,7 +71,7 @@ ${clientInfo}
   // кг или тонны). Не прошло (новый клиент, необычный товар, «тонну» словами, ошибка Haiku) — тот же
   // разбор повторяется на Sonnet: чуть дольше, зато надёжно.
   const norm = v => String(v || "").trim().toLowerCase();
-  const nums = new Set((String(text).replace(/(\d)[\s ](?=\d{3}(?!\d))/g, "$1").match(/\d+(?:[.,]\d+)?/g) || []).map(n => Number(n.replace(",", "."))));
+  const nums = new Set((String(text).replace(/(\d)[\s\u00a0](?=\d{3}(?!\d))/g, "$1").match(/\d+(?:[.,]\d+)?/g) || []).map(n => Number(n.replace(",", "."))));
   const r3 = v => Math.round(v * 1000) / 1000;
   const qtyInText = x => { const b = Number(x.bags), kg = b * Number(x.bag_kg); return [b, kg, kg / 1000].some(v => nums.has(r3(v))); };
   const byName = new Map(clients.map(c => [norm(c.name), c]));
