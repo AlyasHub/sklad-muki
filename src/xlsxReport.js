@@ -5,8 +5,11 @@
 //  • лист «общее»: блоки по дням (или по месяцам) — №, организация, долг на начало, отгрузка (наименование, кг, цена,
 //    сумма, «Итого»), оплата, долг на конец; внизу «ИТОГО». В блок попадают клиенты с движением за этот день/месяц.
 //  • листы клиентов в отчёте — со всей истории клиента (как в шаблоне: начало = 0), «общее» — за выбранный период.
-// Долг считаем так же, как раздел «Долги»: отгружено (без проб) − оплачено при доставке − внесённые оплаты
-// (вкл. корректировки по акту сверки). Разовые продажи без карточки клиента в отчёт не входят.
+// Долг: отгружено (без проб) − оплачено при доставке − внесённые оплаты (и «акт сверки»). Сверки по месяцам
+// (долг на начало дня) — «якоря»: с них остаток продолжается ровно со сверенной цифры, а сами корректировки
+// строками не выводим. За период, по которому загружена оборотно-сальдовая ведомость, оплаты берём из 1С
+// (кредит оборотов) — одной строкой в последний день периода; оплаты из приложения за эти дни не показываем
+// (они уже в сумме 1С). Разовые продажи без карточки клиента в отчёт не входят.
 // ExcelJS подгружаем с cdnjs при первой выгрузке (как pdfmake для накладных) — основной бандл не растёт,
 // дальше он берётся из кэша service worker (работает и офлайн).
 
@@ -49,9 +52,19 @@ const pointName = (c, pointId) => {
   return p ? (p.label || p.address || "") : (c.address_label || c.address || "");
 };
 
+// Периоды клиента, по которым загружена ведомость: [{ from, to, paid }] (хранятся в сверке на конец периода)
+function osvPeriods(clientId, payments) {
+  const m = new Map();
+  for (const p of payments || []) if (p.clientId === clientId) for (const x of p.osv_pays || []) if (x && x.from && x.to) m.set(x.from + "|" + x.to, { from: x.from, to: x.to, paid: Number(x.paid) || 0 });
+  return [...m.values()];
+}
+
 // Все движения клиента: отгрузки (одна доставка = дата + точка, позиции одинакового товара по одной цене — одной
-// строкой) и оплаты (внесённые + «оплачено при доставке» по отметке в заявке).
+// строкой), оплаты (внесённые + «оплачено при доставке» по отметке в заявке; за периоды ведомости — сумма из 1С)
+// и сверки-«якоря» (долг на начало дня D).
 export function clientMoves(client, orders, payments) {
+  const osv = osvPeriods(client.id, payments);
+  const by1C = d => osv.some(x => d >= x.from && d <= x.to); // оплаты за эти дни — из ведомости
   const groups = new Map();
   for (const o of orders || []) {
     if (o.clientId !== client.id || !isSale(o)) continue;
@@ -71,19 +84,31 @@ export function clientMoves(client, orders, payments) {
     return {
       kind: "ship", date: g.date, pointId: g.pointId, lines: [...lines.values()],
       total: g.orders.reduce((s, o) => s + sumOf(o), 0),
-      paidNow: paidSum ? { date: g.date, amount: paidSum, label: payLabel((paid.find(o => o.pay_method) || {}).pay_method) } : null,
+      paidNow: paidSum && !by1C(g.date) ? { date: g.date, amount: paidSum, label: payLabel((paid.find(o => o.pay_method) || {}).pay_method) } : null,
     };
   });
-  // corr — корректировка долга (сверка по месяцам или «акт сверки»): не деньги, показываем отдельно от оплат
-  const pays = (payments || []).filter(p => p.clientId === client.id && Number(p.amount))
+  const mine = (payments || []).filter(p => p.clientId === client.id);
+  // Сверки по месяцам — не строки отчёта, а «якоря»: долг на начало дня D = сверенная сумма
+  const anchors = mine.filter(p => p.recon && p.recon_amount !== undefined && p.recon_amount !== null)
+    .map(p => ({ D: p.recon, value: Number(p.recon_amount) || 0 })).sort((a, b) => a.D.localeCompare(b.D));
+  // corr — «акт сверки» (не деньги): строкой на листе клиента, в «Оплату» листа «общее» не идёт
+  const pays = mine.filter(p => Number(p.amount) && !p.recon && (p.adjust || !by1C(p.date || "")))
     .map(p => ({ date: p.date || "", amount: Number(p.amount) || 0, corr: !!p.adjust,
-      label: p.adjust ? (p.recon ? `сверка на ${dmy(p.recon)}` : "акт сверки") : payLabel(p.method, String(p.note || "").trim()) }));
-  return { ships, pays };
+      label: p.adjust ? "акт сверки" : payLabel(p.method, String(p.note || "").trim()) }));
+  for (const x of osv) if (x.paid) pays.push({ date: x.to, amount: x.paid, corr: false, label: "по 1С" });
+  return { ships, pays, anchors };
 }
-// Долг на начало дня `from` (всё, что было раньше)
-export const balanceBefore = (mv, from) => !from ? 0 :
-  mv.ships.filter(s => s.date < from).reduce((a, s) => a + s.total - (s.paidNow ? s.paidNow.amount : 0), 0)
-  - mv.pays.filter(p => p.date < from).reduce((a, p) => a + p.amount, 0);
+// Долг на начало дня `from`: от последней сверки не позже этого дня (или с самого начала) + движения после неё
+export function balanceBefore(mv, from) {
+  if (!from) return 0;
+  const a = [...(mv.anchors || [])].reverse().find(x => x.D <= from);
+  const since = a ? a.D : "";
+  return (a ? a.value : 0)
+    + mv.ships.filter(s => s.date >= since && s.date < from).reduce((t, s) => t + s.total - (s.paidNow ? s.paidNow.amount : 0), 0)
+    - mv.pays.filter(p => p.date >= since && p.date < from).reduce((t, p) => t + p.amount, 0);
+}
+// Последняя сверка в промежутке (после дня a, не позже дня b) — с неё остаток на листе клиента продолжается
+const anchorBetween = (mv, a, b) => [...(mv.anchors || [])].reverse().find(x => x.D > a && x.D <= b) || null;
 const inRange = (d, from, to) => (!from || d >= from) && (!to || d <= to);
 const hasMoves = (mv, from, to) => mv.ships.some(s => inRange(s.date, from, to)) || mv.pays.some(p => inRange(p.date, from, to));
 
@@ -132,26 +157,30 @@ function addClientSheet(wb, client, mv, from, to, sheetName, statement = false) 
   const L = colL;
   const thinTB = bd(null, null, "thin", "thin");
 
-  // Строка 1: название клиента (на всю ширину) и долг на начало — в последней колонке
-  const opening = round2(balanceBefore(mv, from));
+  // Строка 1: название клиента (на всю ширину) и долг на начало — в последней колонке.
+  // Вся история: начало = долг перед первой записью (0, если клиент начинал с нуля; если раньше была сверка — её цифра).
+  const events = sheetEvents(mv, from, to);
+  const openFrom = from || (events[0] && events[0].date) || "";
+  const opening = round2(balanceBefore(mv, openFrom));
   for (let c = 1; c < C.bal; c++) set(1, c, null, { border: thinTB });
   set(1, 1, clientTitle(client), { font: { bold: true }, alignment: { horizontal: "center" }, fill: FILL.title, border: thinTB });
   ws.mergeCells(1, 1, 1, C.bal - 1);
   set(1, C.bal, opening, { numFmt: NF.bal, fill: FILL.title, border: thinTB });
 
   let bal = opening; // остаток — для готовых значений формул (видно сразу, даже без пересчёта)
-  const balRow = (r, sumVal, payVal) => {
+  // anchor — сверка между записями: остаток в этой строке = сверенный долг (числом, без строки «сверка на …»)
+  const balRow = (r, sumVal, payVal, anchor = null) => {
     bal = bal + sumVal - payVal;
+    if (anchor && Math.abs(anchor.value - bal) >= 0.005) { bal = anchor.value; set(r, C.bal, round2(bal), { numFmt: NF.bal }); return; }
     set(r, C.bal, { formula: `${L(C.bal)}${r - 1}+${L(C.sum)}${r}-${L(C.pamt)}${r}`, result: round2(bal) }, { numFmt: NF.bal });
   };
-  if (statement && from && opening) { // выписка за период: подпись, откуда цифра в начале
-    set(2, C.date, toDate(from), { numFmt: NF.date, alignment: { horizontal: "left" } });
-    set(2, C.prod, "Долг на начало периода", { font: { italic: true } });
+  if (openFrom && opening) { // подпись, откуда цифра в начале (выписка за период или сверка до первой записи)
+    set(2, C.date, toDate(openFrom), { numFmt: NF.date, alignment: { horizontal: "left" } });
+    set(2, C.prod, statement ? "Долг на начало периода" : "Долг на начало", { font: { italic: true } });
   }
   balRow(2, 0, 0);
 
   let r = 3;
-  const events = sheetEvents(mv, from, to);
   events.forEach((ev, i) => {
     const n = ev.kind === "ship" ? Math.max(ev.lines.length, ev.pays.length, 1) : 1;
     const vAlign = n > 1 ? "middle" : undefined;
@@ -193,7 +222,7 @@ function addClientSheet(wb, client, mv, from, to, sheetName, statement = false) 
     const band = !!next && next.date.slice(0, 7) !== ev.date.slice(0, 7);
     if (!next) return; // после последней записи — ничего: без «хвоста» из повторяющегося остатка
     if (band) for (let c = 1; c <= C.bal; c++) set(r, c, null, { fill: FILL.band, border: thinTB });
-    balRow(r, 0, 0);
+    balRow(r, 0, 0, anchorBetween(mv, ev.date, next.date)); // была сверка — остаток продолжается с её цифры
     r++;
   });
   return ws;
@@ -218,7 +247,7 @@ function generalPeriods(items, from, to, by) {
   const days = new Set();
   for (const { mv } of items) {
     for (const s of mv.ships) if (inRange(s.date, from, to)) days.add(s.date);
-    for (const p of mv.pays) if (p.date && inRange(p.date, from, to)) days.add(p.date);
+    for (const p of mv.pays) if (p.date && !p.corr && inRange(p.date, from, to)) days.add(p.date);
   }
   return [...days].sort().map(d => ({ first: d, last: d, title: d, fmt: NF.date }));
 }
@@ -233,7 +262,7 @@ function addGeneralSheet(wb, items, from, to, by = "day") {
     const mFrom = mo.first, mTo = mo.last;
     const rows = items.map(({ client, mv }) => {
       const ships = mv.ships.filter(s => inRange(s.date, mFrom, mTo));
-      const pays = mv.pays.filter(p => inRange(p.date, mFrom, mTo));
+      const pays = mv.pays.filter(p => !p.corr && inRange(p.date, mFrom, mTo)); // «акт сверки» — не оплата, в «общее» не идёт
       if (!ships.length && !pays.length) return null; // в блок — только клиенты с движением
       const lines = new Map(); // за месяц: один товар по одной цене — одной строкой
       for (const s of ships) for (const ln of s.lines) {
@@ -241,12 +270,11 @@ function addGeneralSheet(wb, items, from, to, by = "day") {
         if (!lines.has(k)) lines.set(k, { name: ln.name, price: ln.price, kg: 0 });
         lines.get(k).kg += ln.kg;
       }
-      // «Оплата» — только реальные деньги; корректировки по сверке — отдельной строкой в отгрузке (с минусом,
-      // если долг уменьшили), чтобы «Долг на конец» = долг на начало + отгрузка − оплата сходился со сверкой
-      const pay = ships.reduce((a, s) => a + (s.paidNow ? s.paidNow.amount : 0), 0) + pays.filter(p => !p.corr).reduce((a, p) => a + p.amount, 0);
-      const corr = pays.filter(p => p.corr).reduce((a, p) => a + p.amount, 0);
+      // «Оплата» — деньги: при доставке + внесённые, а за период ведомости — сумма из 1С (кредит оборотов).
+      // Корректировок по сверке строкой нет: долг на начало блока уже берётся со сверки.
+      const pay = ships.reduce((a, s) => a + (s.paidNow ? s.paidNow.amount : 0), 0) + pays.reduce((a, p) => a + p.amount, 0);
       const first = [...ships.map(s => s.date), ...pays.map(p => p.date)].sort()[0];
-      return { client, opening: round2(balanceBefore(mv, mFrom)), lines: [...lines.values()], corr: round2(corr), pay: round2(pay), first };
+      return { client, opening: round2(balanceBefore(mv, mFrom)), lines: [...lines.values()], pay: round2(pay), first };
     }).filter(Boolean).sort((a, b) => a.first.localeCompare(b.first) || clientTitle(a.client).localeCompare(clientTitle(b.client), "ru"));
     if (!rows.length) continue; // месяц без движения — блок не рисуем
 
@@ -276,21 +304,18 @@ function addGeneralSheet(wb, items, from, to, by = "day") {
     const firstRow = s, itogoRows = [];
     let sumC = 0, sumE = 0, sumG = 0, sumH = 0, sumI = 0;
     rows.forEach((it, idx) => {
-      // строки отгрузки + (если была) корректировка по сверке: сумма с минусом, если долг уменьшили
-      const disp = [...it.lines, ...(it.corr ? [{ corr: true, name: "Корректировка по сверке", sum: -it.corr }] : [])];
+      const disp = it.lines; // строки отгрузки
       const nLines = Math.max(1, disp.length);
       const itogo = s + nLines;
       let kg = 0, money = 0;
       for (let k = 0; k < nLines; k++) {
         const row = s + k, ln = disp[k], t = "thin";
-        const isCorr = !!(ln && ln.corr);
         set(row, 4, ln ? ln.name : null, { font: { italic: true }, numFmt: NF.text, alignment: { wrapText: true }, border: bd("thin", "thin", t, "thin") });
-        set(row, 5, ln && !isCorr ? round2(ln.kg) : null, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
-        set(row, 6, ln && !isCorr ? round2(ln.price) : null, { font: { italic: true }, numFmt: NF.price, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
-        const v = !ln ? 0 : isCorr ? ln.sum : ln.kg * ln.price;
-        const g = !ln ? null : isCorr ? round2(v) : { formula: `F${row}*E${row}`, result: round2(v) };
-        set(row, 7, g, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "right", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
-        if (ln) { if (!isCorr) kg += ln.kg; money += v; }
+        set(row, 5, ln ? round2(ln.kg) : null, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
+        set(row, 6, ln ? round2(ln.price) : null, { font: { italic: true }, numFmt: NF.price, alignment: { horizontal: "center", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
+        const v = ln ? ln.kg * ln.price : 0;
+        set(row, 7, ln ? { formula: `F${row}*E${row}`, result: round2(v) } : null, { font: { italic: true }, numFmt: NF.int, alignment: { horizontal: "right", wrapText: true }, fill: FILL.white, border: bd("thin", "thin", t, "thin") });
+        if (ln) { kg += ln.kg; money += v; }
       }
       // «Итого» по клиенту
       set(itogo, 4, "Итого", { font: BI, alignment: { wrapText: true }, fill: FILL.white, border: bd("thin", "thin", "thin", "thick") });

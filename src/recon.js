@@ -41,30 +41,38 @@ export const clientCheckpoints = (clientId, payments) => (payments || []).filter
 // Разошлась ли сверка (задним числом внесли отгрузку/оплату): долг в приложении на эту дату ≠ сверенному
 export const checkpointDrift = (p, orders, payments) => r2(debtAt(p.clientId, p.recon, orders, payments) - (Number(p.recon_amount) || 0));
 
-function checkpointRecord(client, D, A, orders, payments) {
+// osv_pays — оплаты клиента за период по оборотно-сальдовой ведомости ([{ from, to, paid }]): хранятся в сверке
+// на конец периода, Excel-отчёт показывает их вместо оплат из приложения. Та же запись бывает сверкой «на начало»
+// следующего месяца — поэтому при перезаписи сохраняем то, что уже было, и только обновляем свой период.
+function checkpointRecord(client, D, A, orders, payments, osv = null) {
   const id = reconId(client.id, D);
   const cur = debtAt(client.id, D, orders, payments, id);
+  const prev = (payments || []).find(p => p.id === id);
+  let osvPays = (prev && Array.isArray(prev.osv_pays)) ? prev.osv_pays : [];
+  if (osv) osvPays = [...osvPays.filter(x => !(x.from === osv.from && x.to === osv.to)), { from: osv.from, to: osv.to, paid: r2(osv.paid) }];
   return {
     id, clientId: client.id, clientName: client.name, date: dayBefore(D),
     amount: r2(cur - A), method: "Сверка", adjust: true, recon: D, recon_amount: r2(A),
     note: `Сверка: долг на ${dmy(D)} = ${money(A)} тг (в приложении было ${money(cur)} тг)`,
+    ...(osvPays.length ? { osv_pays: osvPays } : {}),
   };
 }
 
-// Сохранить сверки клиента: entries = [{ D, A }] (A = null — удалить эту сверку). Потом пересчитать все более
-// поздние сверки клиента, чтобы каждая держала свою цифру. Возвращает число записанных изменений.
+// Сохранить сверки клиента: entries = [{ D, A, osv? }] (A = null — удалить эту сверку; osv = { from, to, paid } —
+// оплаты за период из ведомости). Потом пересчитать все более поздние сверки клиента, чтобы каждая держала свою
+// цифру. Возвращает число записанных изменений.
 export async function saveCheckpoints({ client, entries, orders, payments, dbUpsert, dbDelete }) {
   let pays = [...(payments || [])];
   let changed = 0;
   const list = [...entries].sort((a, b) => a.D.localeCompare(b.D));
   if (!list.length) return 0;
-  for (const { D, A } of list) {
+  for (const { D, A, osv } of list) {
     const id = reconId(client.id, D);
     if (A === null || A === undefined || A === "") {
       if (pays.some(p => p.id === id)) { await dbDelete("payments", id); pays = pays.filter(p => p.id !== id); changed++; }
       continue;
     }
-    const rec = checkpointRecord(client, D, Number(A), orders, pays);
+    const rec = checkpointRecord(client, D, Number(A), orders, pays, osv || null);
     await dbUpsert("payments", rec);
     pays = pays.filter(p => p.id !== id).concat(rec);
     changed++;

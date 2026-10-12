@@ -92,13 +92,17 @@ export function sheetsToText(sheets, maxChars = 250000) {
   return text;
 }
 
+// Оплаты за период по строке ведомости = кредит оборотов (поступившие нам деньги). На счёте авансов (35xx) кредит —
+// полученный аванс, а дебет — его зачёт в долг (он уже есть в кредите 1210), поэтому там кредит − дебет: без двойного счёта.
+export const osvPaid = l => r2(/^35/.test(l.acc || "") ? l.turnC - l.turnD : l.turnC);
+
 // Несколько строк одного клиента (разные договоры/счета) складываем. lines — уже с выбранным клиентом.
 export function osvByClient(lines) {
   const m = new Map();
   for (const l of lines) {
     if (!l.clientId) continue;
-    const g = m.get(l.clientId) || { clientId: l.clientId, start: 0, end: 0, names: [], ok: true };
-    g.start = r2(g.start + l.start); g.end = r2(g.end + l.end); g.names.push(l.name); g.ok = g.ok && l.ok;
+    const g = m.get(l.clientId) || { clientId: l.clientId, start: 0, end: 0, paid: 0, names: [], ok: true };
+    g.start = r2(g.start + l.start); g.end = r2(g.end + l.end); g.paid = r2(g.paid + osvPaid(l)); g.names.push(l.name); g.ok = g.ok && l.ok;
     m.set(l.clientId, g);
   }
   return m;

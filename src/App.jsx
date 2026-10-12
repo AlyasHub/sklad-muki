@@ -6867,7 +6867,8 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
     const queue = [...toSave];
     const worker = async () => {
       for (let g = queue.shift(); g; g = queue.shift()) {
-        try { await saveCheckpoints({ client: g.c, entries: [{ D: from, A: Number(g.s) }, { D: D2, A: Number(g.e) }], orders, payments, dbUpsert, dbDelete }); }
+        // оплаты за период из ведомости (кредит оборотов) — к сверке на конец периода: их покажет Excel-отчёт
+        try { await saveCheckpoints({ client: g.c, entries: [{ D: from, A: Number(g.s) }, { D: D2, A: Number(g.e), osv: { from, to, paid: g.paid } }], orders, payments, dbUpsert, dbDelete }); }
         catch (e) { fails.push(`${g.c.name}: ${errText(e)}`); }
         n++; setBusy(`Записываю… ${n} из ${toSave.length}`);
       }
@@ -6959,6 +6960,7 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
                       <span className={diffE ? "text-red-600" : "text-gray-400"}>в прил.: {fmt(Math.round(g.appE))}</span>
                     </label>
                   </div>
+                  <div className="text-xs text-gray-500 mt-0.5">Оплаты за период по ведомости: <b className="text-gray-700">{money(g.paid)}</b> <span className="text-gray-400">— пойдут в Excel-отчёт</span></div>
                   {lineIdx.length === 1 && pick[lineIdx[0]] === undefined && <button onClick={() => setPick(p => ({ ...p, [lineIdx[0]]: "" }))} className="text-xs text-gray-400 hover:text-amber-700 mt-0.5">не тот клиент?</button>}
                 </div>
               );
