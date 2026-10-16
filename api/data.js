@@ -171,10 +171,17 @@ export default async function handler(req, res) {
       let coreFailed = false;
       await Promise.all([touchP, ...tables.map(async t => {
         let rows;
-        try { rows = await listFor(u, t); } catch { if (proto2) meta[t] = { err: 1 }; else { out[t] = []; if (CORE.includes(t)) coreFailed = true; } return; }
+        try { rows = await listFor(u, t); } catch (e) {
+          // таблицы ещё нет в базе (kgd_docs, crm…) — это просто пусто, не ошибка
+          if (/PGRST205|does not exist|Could not find the table/i.test(String((e && e.message) || e))) { out[t] = []; return; }
+          if (proto2) meta[t] = { err: 1 }; else { out[t] = []; if (CORE.includes(t)) coreFailed = true; }
+          return;
+        }
         if (!since || !(t in since)) { out[t] = rows; return; } // таблица целиком
         const from = (Number(since[t]) || 0) - SYNC_OVERLAP;
-        out[t] = rows.filter(r => r && (Number(r._v) || 0) > from);
+        // только записанные с отметкой _v и новее; старые записи (без _v) не менялись с полной загрузки — они у
+        // телефона уже есть, а если какой-то нет — это поймает отпечаток id ниже (тогда полная загрузка)
+        out[t] = rows.filter(r => r && r._v && Number(r._v) > from);
         const ids = rows.map(r => r && r.id), h = idsHash(ids);
         meta[t] = h === known[t] ? { h } : { h, ids };
       })]);
