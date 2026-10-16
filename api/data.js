@@ -1,6 +1,6 @@
 // Привратник базы. Все чтения/записи идут сюда. Проверяет токен и роль,
 // отдаёт только то, что роли положено. Водитель НЕ может прочитать клиентов/цены/чужие отгрузки.
-import { verifyToken, signToken, dbList, dbSelect, dbDeleteWhere, dbGet, dbFindBy, dbUpsert, dbDelete, configured, orderLinkSig, claudeJson } from "./_lib.js";
+import { verifyToken, signToken, dbList, dbSelect, dbDeleteWhere, dbGet, dbFindBy, dbUpsert, dbDelete, configured, orderLinkSig, claudeJson, SYNC_OVERLAP, idsHash } from "./_lib.js";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -135,7 +135,9 @@ export default async function handler(req, res) {
     // «Заход» в журнал пишем РАЗ В ДЕНЬ на человека (по календарю Астаны, UTC+5) — иначе журнал
     // «молчал»: приложение (PWA) висит открытым и фоном обновляется, поэтому 30-минутный простой
     // почти не наступает и новые записи не появлялись. Плюс отмечаем возвращение после >30 минут.
-    {
+    // Запускаем сразу, а ждём ниже: при загрузке данных (loadAll) — одновременно с чтением таблиц (быстрее вход),
+    // при остальных операциях — до их выполнения, как раньше. В любом случае до ответа (Vercel замораживает после).
+    const touchP = (async () => {
       const nowMs = Date.now();
       const todayAstana = new Date(nowMs + 5 * 3600000).toISOString().slice(0, 10);
       const gap5 = !me.last_seen || nowMs - Date.parse(me.last_seen) > 5 * 60000;
@@ -153,17 +155,38 @@ export default async function handler(req, res) {
         }
         try { await dbUpsert("users", { ...me, last_seen: new Date().toISOString(), last_open_day: todayAstana }); } catch {}
       }
-    }
+    })().catch(() => {});
     if (op === "loadAll") {
-      // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов
+      // Все таблицы за один запрос — быстрее, чем 7 отдельных вызовов.
+      // proto 2 (новое приложение): не прочитанная таблица — meta[t].err (приложение оставит то, что было, а не
+      // «сотрёт» заявки); since/ids — частичное обновление (только изменённые строки, см. src/sync.js).
+      // Без proto — как раньше (старые версии приложения на телефонах, пока не обновились).
       const tables = ["clients", "stock", "orders", "drivers", "trucks", "users", "expenses", "logins", "notes", "kgd_clients", "kgd_docs", "cashbox", "payments", "crm", "lab"];
-      const out = {};
-      await Promise.all(tables.map(async t => { try { out[t] = await listFor(u, t); } catch { out[t] = []; } }));
+      const body = req.body || {};
+      const proto2 = body.proto === 2;
+      const since = proto2 && body.since && typeof body.since === "object" ? body.since : null;
+      const known = (proto2 && body.ids && typeof body.ids === "object") ? body.ids : {};
+      const out = {}, meta = {};
+      const CORE = ["orders", "clients", "stock", "payments"]; // без них старое приложение показало бы пустоту
+      let coreFailed = false;
+      await Promise.all([touchP, ...tables.map(async t => {
+        let rows;
+        try { rows = await listFor(u, t); } catch { if (proto2) meta[t] = { err: 1 }; else { out[t] = []; if (CORE.includes(t)) coreFailed = true; } return; }
+        if (!since || !(t in since)) { out[t] = rows; return; } // таблица целиком
+        const from = (Number(since[t]) || 0) - SYNC_OVERLAP;
+        out[t] = rows.filter(r => r && (Number(r._v) || 0) > from);
+        const ids = rows.map(r => r && r.id), h = idsHash(ids);
+        meta[t] = h === known[t] ? { h } : { h, ids };
+      })]);
+      // Старая версия приложения (без proto 2) при пустой таблице стёрла бы у себя заявки — пусть лучше получит
+      // ошибку: тогда она оставит то, что уже показывает, и напишет «Нет связи с базой».
+      if (coreFailed) return res.status(503).json({ error: "База временно недоступна — попробуйте через минуту" });
       // Автопродление входа: токену осталось меньше 7 дней — выдаём свежий, клиент тихо подхватит.
       // Пока человек пользуется приложением, его больше не выкинет на вход.
       const fresh_token = (u.exp && u.exp - Date.now() < 7 * 864e5) ? signToken({ uid: u.uid, role: u.role, driverId: u.driverId || "", name: u.name, city: u.city || "", cities: u.cities || [], exp: Date.now() + 30 * 864e5 }) : null;
-      return res.status(200).json(fresh_token ? { data: out, fresh_token } : { data: out });
+      return res.status(200).json({ data: out, ...(proto2 ? { meta, delta: !!since } : {}), ...(fresh_token ? { fresh_token } : {}) });
     }
+    await touchP;
     // 🧾 История действий в «Долгах»: админ/просмотр — всё (просмотр с городами — свои города),
     // менеджер — свои города, торгпред — только по своим (и открытым ему) клиентам.
     if (op === "activity") {
@@ -484,7 +507,7 @@ async function listFor(u, table) {
     if (table === "users") { // своя карточка (город, касса) + имена торгпредов, чьих клиентов ему открыли (для названий групп)
       const sg = u.seeGroups || [];
       return (await dbList("users")).filter(x => x.id === u.uid || (x.role === "rep" && sg.includes(x.id)))
-        .map(x => x.id === u.uid ? (({ passhash, ...r }) => r)(x) : { id: x.id, name: x.name, role: x.role, group_name: x.group_name || "" });
+        .map(x => x.id === u.uid ? (({ passhash, ...r }) => r)(x) : { id: x.id, name: x.name, role: x.role, group_name: x.group_name || "", _v: x._v }); // _v — для частичного обновления
     }
     if (table === "cashbox") return (await dbList("cashbox")).filter(x => x.userId === u.uid); // только СВОЯ касса
     if (table === "stock") { // склад ТОЛЬКО своего города (не видит Караганду/другие) и без закупочных цен

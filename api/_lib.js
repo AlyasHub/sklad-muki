@@ -43,17 +43,19 @@ export function verifyToken(token) {
 // постраничности — большие таблицы (журнал входов, склад, заявки) молча ОБРЕЗАЛИСЬ до 1000,
 // причём в порядке вставки (сначала старые) → терялись свежие данные и «плыл» баланс склада.
 // Теперь тянем ВСЕ строки постранично (по 1000), по стабильному порядку id.
+// Страницы — «после последнего id», а не «пропустить N»: если между страницами строку удалили или добавили,
+// со смещением одна строка выпала бы или повторилась; так — нет.
 export async function dbList(table) {
   const PAGE = 1000;
-  let out = [], from = 0;
-  for (;;) {
-    const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=data&order=id.asc&limit=${PAGE}&offset=${from}`, { headers: svc() });
+  let out = [], last = null;
+  for (let guard = 0; guard < 500; guard++) { // предохранитель от бесконечного цикла (500 000 строк)
+    const after = last === null ? "" : `&id=gt.${encodeURIComponent(last)}`;
+    const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=id,data&order=id.asc&limit=${PAGE}${after}`, { headers: svc() });
     if (!r.ok) throw new Error(await r.text());
     const rows = await r.json();
     for (const row of rows) out.push(row.data);
     if (rows.length < PAGE) break;
-    from += PAGE;
-    if (from > 500000) break; // предохранитель от бесконечного цикла
+    last = rows[rows.length - 1].id;
   }
   return out;
 }
@@ -82,13 +84,25 @@ export async function dbFindBy(table, field, value) {
   if (!r.ok) throw new Error(await r.text());
   return (await r.json()).map(row => row.data);
 }
+// _v — время записи (на сервере): по нему приложение раз в минуту забирает только изменённые строки (src/sync.js).
+// Ставим здесь, на КАЖДУЮ запись, — поэтому любые записи (и восстановление из копии) доходят до телефонов.
 export async function dbUpsert(table, item) {
   const r = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
     method: "POST",
     headers: { ...svc(), Prefer: "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify({ id: item.id, data: item }),
+    body: JSON.stringify({ id: item.id, data: { ...item, _v: Date.now() } }),
   });
   if (!r.ok) throw new Error(await r.text());
+}
+// Частичное обновление: запас по времени (разница часов серверов, долгие записи) — строки за последние
+// 5 минут до «самой свежей у клиента» шлём ещё раз; повтор безвреден (заменяются по id).
+export const SYNC_OVERLAP = 5 * 60000;
+// Отпечаток набора id таблицы — ТОТ ЖЕ, что в src/sync.js (FNV-1a по отсортированным id + количество)
+export function idsHash(ids) {
+  const s = [...ids].map(String).sort().join(",");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36) + ":" + ids.length;
 }
 export async function dbDelete(table, id) {
   const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: svc() });

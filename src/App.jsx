@@ -2,6 +2,21 @@ import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "rea
 import { downloadClientsReport, loadExcelJS } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»); чтение Excel-ведомости
 import { debtAt, reconId, clientCheckpoints, checkpointDrift, saveCheckpoints, resyncCheckpoints, recentMonths, monthFirst, nextMonthFirst, monthLast, monthLabel } from "./recon.js"; // сверки долга по месяцам
 import { dayAfter, osvLines, osvTotalCheck, osvByClient, sheetsToText } from "./osv.js"; // оборотно-сальдовая ведомость → сверки
+import { syncState, mergeLoad } from "./sync.js"; // частичное обновление данных раз в минуту
+
+// Копия данных на телефоне (мгновенный вход и работа без сети) — своя у каждого человека: другой вход на этом
+// телефоне чужую копию не увидит; при выходе и окончании сессии копия стирается. Ключ новый: старая копия
+// («sklad_cache», без привязки к человеку) удаляется при запуске.
+const CACHE_KEY = "sklad_cache2";
+try { localStorage.removeItem("sklad_cache"); } catch {}
+function readCache(uid) { try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); return uid && c && c.uid === uid && c.data ? c.data : null; } catch { return null; } }
+function writeCache(uid, data) {
+  if (!uid) return;
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ uid, at: Date.now(), data })); }
+  catch { try { localStorage.removeItem(CACHE_KEY); } catch {} } // не влезло — лучше без копии, чем со старой
+}
+function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch {} }
+const EMPTY_DATA = () => ({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [], crm: [], lab: [] });
 
 // Всё общение с базой идёт через защищённый сервер /api/data с токеном входа.
 // Прямого ключа к базе в браузере больше нет.
@@ -8146,51 +8161,78 @@ export default function App() {
   const [openExpenseSignal, setOpenExpenseSignal] = useState(0);
   const goTab = id => { setTab(id); setMoreOpen(false); setFabOpen(false); };
 
+  // verRef растёт при каждом локальном изменении данных (сохранили, перечитали таблицу): общий ответ сервера,
+  // запрошенный ДО этого, устарел — его не применяем (иначе только что сохранённое «откатилось» бы на экране).
+  const verRef = useRef(0);
   const reload = useCallback(async (table) => {
-    try { const rows = await dbGetAll(table); setData(prev => ({ ...prev, [table]: rows })); setLastSync(new Date().toLocaleTimeString("ru-RU")); }
+    try { const rows = await dbGetAll(table); verRef.current++; setData(prev => ({ ...prev, [table]: rows })); setLastSync(new Date().toLocaleTimeString("ru-RU")); }
     catch (e) { setError("Ошибка: " + e.message); }
   }, []);
   // Мгновенное локальное обновление (оптимистично) — экран меняется сразу, не дожидаясь сервера
-  const applyLocal = useCallback((table, fn) => setData(prev => ({ ...prev, [table]: fn(prev[table] || []) })), []);
+  const applyLocal = useCallback((table, fn) => { verRef.current++; setData(prev => ({ ...prev, [table]: fn(prev[table] || []) })); }, []);
 
-  const reloadAll = useCallback(async (showSpinner = false) => {
+  // Загрузка данных. Полная — при входе, раз в 10 минут и по кнопке «Обновить»; между ними раз в минуту —
+  // частичная: сервер отдаёт только изменённые строки (src/sync.js). Если частичная хоть в чём-то не сошлась
+  // с сервером (не тот набор записей) — сразу полная. Таблица, которую сервер не смог прочитать, не стирается.
+  const dataRef = useRef(data); // последние данные — для расчёта «что у нас уже есть» перед запросом
+  useEffect(() => { dataRef.current = data; }, [data]);
+  const uidRef = useRef(""); // чья копия данных на телефоне
+  const lastFullRef = useRef(0);
+  // Сессия кончилась (401) или выход: стереть всё — следующий человек на этом телефоне не увидит чужого
+  const resetSession = useCallback(() => {
+    clearCache(); uidRef.current = ""; lastFullRef.current = 0; verRef.current++;
+    const e = EMPTY_DATA(); dataRef.current = e; setData(e); setUser(null);
+  }, []);
+  const reloadAll = useCallback(async (showSpinner = false, forceFull = false, attempt = 0) => {
     if (!authToken) { if (showSpinner) setLoading(false); return; }
     if (showSpinner) setLoading(true);
     setError("");
+    const full = forceFull || !lastFullRef.current || Date.now() - lastFullRef.current > 10 * 60000;
+    const uid0 = uidRef.current, v0 = verRef.current; // чей запрос и какие данные были на момент отправки
     try {
-      // Все таблицы одним запросом (быстрее, особенно на «холодном» старте)
-      const d = (await apiData("loadAll")).data || {};
-      if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
+      const st = full ? null : syncState(dataRef.current);
+      const resp = await apiData("loadAll", null, st ? { proto: 2, since: st.since, ids: st.ids } : { proto: 2 });
+      if (!authToken) { resetSession(); if (showSpinner) setLoading(false); return; } // сессия истекла во время загрузки → на вход
+      if (uidRef.current !== uid0) { if (showSpinner) setLoading(false); return; } // пока ждали, вошёл другой человек — ответ не его
+      if (verRef.current !== v0) { // пока ждали, на телефоне что-то сохранили — ответ устарел
+        if (full && attempt < 2) { await reloadAll(showSpinner, true, attempt + 1); return; } // полную — запросить заново
+        if (showSpinner) setLoading(false);
+        return; // частичная — подождёт следующей минуты
+      }
+      if (!full && mergeLoad(dataRef.current, resp).needFull) { // частичная не сошлась — перекачиваем всё
+        await reloadAll(showSpinner, true, attempt);
+        return;
+      }
+      const failed = Object.keys((resp && resp.meta) || {}).filter(t => resp.meta[t] && resp.meta[t].err);
+      if (failed.length) setError("Часть данных не обновилась — повторю через минуту."); // остальное применяем, недочитанное не трогаем
+      else if (full) lastFullRef.current = Date.now();
       setData(prev => {
-        const next = { clients: d.clients || [], stock: d.stock || [], orders: d.orders || [], drivers: d.drivers || [], trucks: d.trucks || [], users: d.users || [], expenses: d.expenses || [], logins: d.logins || [], notes: d.notes || [], kgd_clients: d.kgd_clients || [], kgd_docs: d.kgd_docs || [], cashbox: d.cashbox || [], payments: d.payments || [], crm: d.crm || [], lab: d.lab || [] };
-        applyWarehouse(next.notes); // подхватываем сохранённый адрес склада
-        // Если данные не изменились — не трогаем экран (иначе телефон перерисовывает всё каждые полминуты и подтормаживает)
-        const same = Object.keys(next).every(k => JSON.stringify(prev[k]) === JSON.stringify(next[k]));
-        // Сохраняем копию для офлайна (нужно менеджерам Караганды в поле)
-        try { localStorage.setItem("sklad_cache", JSON.stringify(next)); } catch {}
-        return same ? prev : next;
+        const r = mergeLoad(prev, resp); // ничего не изменилось — тот же объект, экран не перерисовывается
+        if (r.changed) {
+          applyWarehouse(r.next.notes); // подхватываем сохранённый адрес склада
+          writeCache(uidRef.current, r.next); // копия на телефоне: мгновенный вход и работа без сети
+        }
+        return r.next;
       });
       setOffline(false);
       setLastSync(new Date().toLocaleTimeString("ru-RU"));
     } catch (e) {
-      // apiData сбрасывает токен на 401 (сессия истекла / доступ закрыт) → выкидываем на экран входа
-      if (!authToken) { setUser(null); if (showSpinner) setLoading(false); return; }
-      // Нет сети — поднимаем последние сохранённые данные и работаем офлайн
+      // apiData сбрасывает токен на 401 (сессия истекла / доступ закрыт) → стираем данные и на экран входа
+      if (!authToken) { resetSession(); if (showSpinner) setLoading(false); return; }
+      if (uidRef.current !== uid0) { if (showSpinner) setLoading(false); return; }
+      // Нет сети — поднимаем последние сохранённые данные (только свои) и работаем офлайн
       const isOffline = /offline|Failed to fetch|NetworkError|Сервер не/i.test(String(e.message || e)) || !navigator.onLine;
       if (isOffline) {
         setOffline(true);
-        try { const c = JSON.parse(localStorage.getItem("sklad_cache") || "null"); if (c) setData(prev => (prev.kgd_clients?.length || prev.orders?.length) ? prev : c); } catch {}
+        const c = readCache(uidRef.current);
+        if (c) setData(prev => (prev.kgd_clients?.length || prev.orders?.length) ? prev : c);
       } else setError("Нет связи с базой: " + e.message);
     }
     if (showSpinner) setLoading(false);
   }, []);
 
-  // На старте: поднять сохранённые данные (чтобы офлайн сразу было что показать)
-  useEffect(() => {
-    try { const c = JSON.parse(localStorage.getItem("sklad_cache") || "null"); if (c) { setData(c); applyWarehouse(c.notes); } } catch {}
-  }, []);
-
-  // На старте: восстановить сессию из токена (без обращения к базе)
+  // На старте: восстановить сессию из токена (без обращения к базе) и сразу показать сохранённые данные этого
+  // человека — экран открывается мгновенно, свежие данные подтягиваются в фоне.
   useEffect(() => {
     const t = localStorage.getItem("sklad_token");
     const p = t ? decodeToken(t) : null;
@@ -8200,8 +8242,25 @@ export default function App() {
     } else { setAuthToken(null); setLoading(false); }
   }, []);
 
-  // Когда вошли — грузим данные и обновляем раз в 30 сек
-  useEffect(() => { if (user) reloadAll(true); }, [user]);
+  // Когда вошли — показать копию с телефона (если есть) и загрузить свежие данные целиком.
+  // Пока свежие не пришли (warming), экран только для просмотра: нажатия выключены, сверху «Обновляю данные…» —
+  // чтобы никто не сохранил изменения поверх устаревшей копии.
+  const [warming, setWarming] = useState(false);
+  useEffect(() => {
+    if (!user) return;
+    uidRef.current = user.id;
+    lastFullRef.current = 0;
+    verRef.current++;
+    const c = readCache(user.id);
+    if (c) {
+      setData(c); dataRef.current = c; applyWarehouse(c.notes); setLoading(false);
+      setWarming(true); setSyncing(true); // крутится значок «обновить», пока подтягиваем свежее
+      reloadAll(false, true).finally(() => { setWarming(false); setSyncing(false); });
+    } else {
+      const e = EMPTY_DATA(); dataRef.current = e; setData(e); // ничего от прошлого входа
+      reloadAll(true, true);
+    }
+  }, [user]);
   useEffect(() => {
     if (!user) return;
     // обновляем только когда вкладка открыта — экономим трафик/лимиты, когда сайт свёрнут
@@ -8246,12 +8305,12 @@ export default function App() {
   const manualRefresh = async () => {
     if (syncing) return;
     setSyncing(true); setSyncDone(false);
-    await reloadAll(false);
+    await reloadAll(false, true); // по кнопке — всегда полная загрузка
     setSyncing(false); setSyncDone(true);
     setTimeout(() => setSyncDone(false), 2000);
   };
 
-  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); setData({ clients: [], stock: [], orders: [], drivers: [], trucks: [], users: [], expenses: [], logins: [], notes: [], kgd_clients: [], kgd_docs: [], cashbox: [], payments: [], crm: [] }); setUser(null); setLoading(false); };
+  const logout = () => { setAuthToken(null); localStorage.removeItem("sklad_uid"); resetSession(); setLoading(false); };
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><Spinner /></div>;
   if (!user) return <LoginScreen onLogin={setUser} />;
@@ -8353,7 +8412,13 @@ export default function App() {
         </div>
       )}
       {error && <div className="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-600 text-center">{error}</div>}
-      <div className="max-w-2xl mx-auto px-4 py-5 pb-28">
+      {warming && !offline && (
+        <div className="bg-amber-50 border-b border-amber-100 px-4 py-1.5 text-xs text-amber-800 text-center flex items-center justify-center gap-1.5">
+          <Icon name="refresh" size={13} className="animate-spin" />Обновляю данные… через пару секунд можно работать
+        </div>
+      )}
+      {/* Пока подтягиваем свежие данные поверх копии с телефона — только просмотр (листать можно, нажатия выключены) */}
+      <div className={`max-w-2xl mx-auto px-4 py-5 pb-28 ${warming && !offline ? "pointer-events-none select-none opacity-80" : ""}`} aria-busy={warming || undefined}>
         {allowedTabs.includes(tab) && (
           <>
             {tab === "today" && <TodayTab orders={view.orders} clients={view.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep || isCityMgr} openSignal={openOrderSignal} activeCity={activeCity} />}
@@ -8382,7 +8447,7 @@ export default function App() {
         )}
       </div>
 
-      {(isDirector || isRep || isCityMgr) && (
+      {(isDirector || isRep || isCityMgr) && !(warming && !offline) && (
         <>
           {fabOpen && (
             <div className="fixed inset-0 z-40" onClick={() => setFabOpen(false)} style={{ background: "rgba(0,0,0,0.35)" }}>
