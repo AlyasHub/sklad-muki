@@ -476,7 +476,11 @@ async function listFor(u, table) {
     // Торговый представитель: СВОИ клиенты (по ownerId), свои оплаты, общий склад (без цен закупа),
     // водители (без ставок). ВСЕ заявки видит как расписание (куда/кого/что/адрес/2ГИС/водитель),
     // но чужие — ТОЛЬКО ДЛЯ ЧТЕНИЯ и БЕЗ цен. Нужно, чтобы он видел маршруты и не уводил водителя.
-    if (!["clients", "orders", "stock", "drivers", "payments", "notes", "users", "cashbox"].includes(table)) return [];
+    if (!["clients", "orders", "stock", "drivers", "payments", "notes", "users", "cashbox", "lab"].includes(table)) return [];
+    if (table === "lab") { // анализы муки — только своих городов (старые без города — Астана), только просмотр
+      const myC = (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+      return (await dbList("lab")).filter(x => myC.includes((x && x.city) || "astana"));
+    }
     if (table === "users") { // своя карточка (город, касса) + имена торгпредов, чьих клиентов ему открыли (для названий групп)
       const sg = u.seeGroups || [];
       return (await dbList("users")).filter(x => x.id === u.uid || (x.role === "rep" && sg.includes(x.id)))
@@ -666,7 +670,8 @@ async function upsertFor(u, table, item) {
     if (!existing) throw new Error("Заявка не найдена");
     const allDrivers = await dbList("drivers");
     const brigade = new Set([u.driverId, ...allDrivers.filter(d => d.foremanId === u.driverId).map(d => d.id)]);
-    if (!brigade.has(existing.driverId)) throw new Error("Эта заявка не в вашей бригаде");
+    // своя бригада везёт — или самовывоз, который грузил кто-то из бригады (его бригадир тоже видит и отмечает)
+    if (!brigade.has(existing.driverId) && !(existing.pickup && brigade.has(existing.loaderId))) throw new Error("Эта заявка не в вашей бригаде");
     const newDriver = typeof item.driverId === "string" ? item.driverId : existing.driverId;
     if (newDriver && !brigade.has(newDriver)) throw new Error("Передать можно только своему водителю");
     return dbUpsert("orders", {

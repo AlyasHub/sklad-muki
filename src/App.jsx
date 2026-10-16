@@ -205,7 +205,7 @@ const TABS_BY_ROLE = {
   accountant: ["today", "calendar", "reports"],
   brigadir: ["calendar", "mysalary"], // бригадир: заявки бригады + своя зарплата (объём и сумма)
   driver: ["calendar", "mysalary"],
-  rep: ["today", "calendar", "clients", "debts", "reports", "invoice", "stock", "cashbox"], // торгпред: свои клиенты/заявки/долги + СВОЯ аналитика + накладная + расписание и остатки + СВОЯ касса (если заведена)
+  rep: ["today", "calendar", "clients", "debts", "reports", "invoice", "stock", "lab", "cashbox"], // торгпред: свои клиенты/заявки/долги + СВОЯ аналитика + накладная + расписание и остатки + анализы муки своего города (просмотр) + СВОЯ касса (если заведена)
   kgdmanager: ["kgdm"], // младший менеджер Караганды: только свой раздел
   kgdsenior: ["kgdm"], // старший менеджер Караганды: тот же раздел + история всех
 };
