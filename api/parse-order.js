@@ -50,6 +50,7 @@ ${clientInfo}
 Правила количества:
 - Если клиент упомянул только кг — используй его фасовку по умолчанию и раздели кг на фасовку чтобы получить число мешков.
 ВАЖНО — сорт и бренд:
+- Если сорт или бренд НАЗВАН в заявке — ставь ИМЕННО его, даже если клиент обычно берёт другой: «первый», «1 сорт», «1с» = «Первый сорт»; «высший», «в/с» = «Высший сорт»; «отруби» = «Отруби»; «дарад» = «ДАРАД»; «дала», «дала нан» = «ДАЛА НАН».
 - Если сорт или бренд НЕ указаны явно в заявке — бери те, что этот клиент ОБЫЧНО БЕРЁТ (из списка выше). Если у него там один сорт — используй именно его. НЕ ставь наугад «Высший сорт», если клиент обычно берёт «Первый сорт».
 - Бренд аналогично: если не указан — бренд по умолчанию клиента или тот, что он обычно берёт.
 Правило «на пробу»:
@@ -75,9 +76,16 @@ ${clientInfo}
   const r3 = v => Math.round(v * 1000) / 1000;
   const qtyInText = x => { const b = Number(x.bags), kg = b * Number(x.bag_kg); return [b, kg, kg / 1000].some(v => nums.has(r3(v))); };
   const byName = new Map(clients.map(c => [norm(c.name), c]));
+  // Сорт/бренд, названные в тексте: если назван — в разборе должен стоять именно он (Haiku однажды поставила
+  // «Высший» на «Первый сорт 10 мешков Сания»: высший у клиента в прайсе тоже есть, проверка выше его пропускала)
+  const said = (pairs) => new Set(pairs.filter(([re]) => re.test(String(text))).map(([, v]) => v));
+  const gradesSaid = said([[/перв|(^|[^\d])1\s*-?\s*(?:й\s*)?(?:сорт|с)(?![а-яё])/i, "первый сорт"], [/высш|в\s*\/\s*с(?![а-яё])/i, "высший сорт"], [/отруб/i, "отруби"]]);
+  const brandsSaid = said([[/дарад|darad/i, "дарад"], [/дала|dala/i, "дала нан"]]);
   const check = arr => Array.isArray(arr) && arr.length > 0 && arr.every(x => {
     const c = byName.get(norm(x && x.clientName));
     if (clients.length && !c) return false;
+    if (gradesSaid.size && !gradesSaid.has(norm(x.grade))) return false;
+    if (brandsSaid.size && !brandsSaid.has(norm(x.brand))) return false;
     if (x.pointId && !(c && (c.points || []).some(p => p && p.id === x.pointId))) return false;
     const prods = (c && c.products) || [];
     if (prods.length && !prods.some(p => norm(p.grade) === norm(x.grade) && norm(p.brand) === norm(x.brand) && Number(p.bag_kg) === Number(x.bag_kg))) return false;
