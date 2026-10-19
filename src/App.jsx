@@ -7014,7 +7014,7 @@ function SegmentLists({ clients = [], reload, canEdit = false }) {
     return org ? (name && !org.toLowerCase().includes(name.toLowerCase()) ? `${org} (${name})` : org) : name;
   };
   // по алфавиту — без «ИП / ТОО» и кавычек в начале, иначе они сбивают порядок
-  const sortKey = c => title(c).replace(/^\s*(ип|тоо|ао|чп)\b\.?\s*/i, "").replace(/^[\s«»"'‘’“”„.]+/, "").toLowerCase();
+  const sortKey = c => title(c).replace(/^\s*(ип|тоо|ао|чп)(?=[\s«»"'‘’“”„.]|$)\.?\s*/i, "").replace(/^[\s«»"'‘’“”„.]+/, "").toLowerCase(); // \b не работает с кириллицей
   const list = inSeg(seg).sort((a, b) => sortKey(a).localeCompare(sortKey(b), "ru"));
   const line = (c, i) => `${i + 1}. ${title(c)} — БИН ${String(c.bin || "").trim() || "не указан"}`;
   const copy = () => {
