@@ -7000,29 +7000,24 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
 }
 
 // 📋 Списки клиентов по типу (B2B / Open market): выбрать группу и скопировать всех её клиентов —
-// юр. название, БИН и текущий долг. Режим «Расставить типы» — быстро отметить клиентов кнопками.
-function SegmentLists({ clients = [], orders = [], payments = [], reload, canEdit = false }) {
+// юр. название и БИН (без долгов), по алфавиту. Режим «Расставить типы» — быстро отметить клиентов кнопками.
+function SegmentLists({ clients = [], reload, canEdit = false }) {
   const [seg, setSeg] = useState("b2b");
   const [open, setOpen] = useState(false);
   const [assign, setAssign] = useState(false);
   const [onlyUnset, setOnlyUnset] = useState(true);
   const [busyId, setBusyId] = useState("");
-  const debtOf = useMemo(() => { const m = new Map(); for (const c of clients) m.set(c.id, Math.round(debtAt(c.id, "9999-12-31", orders, payments))); return m; }, [clients, orders, payments]);
   const groups = [...SEGMENTS, { id: "", label: "Без типа" }];
   const inSeg = s => clients.filter(c => (c.segment || "") === s);
-  const list = inSeg(seg).sort((a, b) => (debtOf.get(b.id) || 0) - (debtOf.get(a.id) || 0) || (a.org_name || a.name || "").localeCompare(b.org_name || b.name || "", "ru"));
-  // долг и переплаты — отдельно (иначе переплата одного «съедает» долги остальных в итоге)
-  const total = list.reduce((s, c) => s + Math.max(0, debtOf.get(c.id) || 0), 0);
-  const over = list.reduce((s, c) => s + Math.min(0, debtOf.get(c.id) || 0), 0);
-  const money = n => `${fmt(n)} тг${n < 0 ? " (переплата)" : ""}`;
-  const line = (c, i) => {
+  const title = c => {
     const org = String(c.org_name || "").trim(), name = String(c.name || "").trim();
-    const title = org ? (name && !org.toLowerCase().includes(name.toLowerCase()) ? `${org} (${name})` : org) : name;
-    return `${i + 1}. ${title} — БИН ${String(c.bin || "").trim() || "не указан"} — долг ${money(debtOf.get(c.id) || 0)}`;
+    return org ? (name && !org.toLowerCase().includes(name.toLowerCase()) ? `${org} (${name})` : org) : name;
   };
+  const list = inSeg(seg).sort((a, b) => title(a).localeCompare(title(b), "ru"));
+  const line = (c, i) => `${i + 1}. ${title(c)} — БИН ${String(c.bin || "").trim() || "не указан"}`;
   const copy = () => {
     const head = `${seg ? segLabel(seg) : "Клиенты без типа"} — ${TODAY().split("-").reverse().join(".")}`;
-    copyToClipboard([head, "", ...list.map(line), "", `Итого: ${list.length} клиент., долг ${fmt(total)} тг${over ? `, переплаты ${fmt(-over)} тг` : ""}`].join("\n"));
+    copyToClipboard([head, "", ...list.map(line), "", `Итого: ${list.length} клиент.`].join("\n"));
   };
   const setType = async (c, s) => {
     setBusyId(c.id);
@@ -7042,7 +7037,7 @@ function SegmentLists({ clients = [], orders = [], payments = [], reload, canEdi
           <div className="flex gap-1.5 flex-wrap">
             {groups.map(g => <button key={g.id || "none"} onClick={() => setSeg(g.id)} className={`text-sm px-3 py-1.5 rounded-lg border ${seg === g.id ? "bg-amber-500 border-amber-500 text-white" : "border-gray-200 text-gray-600"}`}>{g.label} <span className={seg === g.id ? "text-amber-100" : "text-gray-400"}>{inSeg(g.id).length}</span></button>)}
           </div>
-          <div className="text-sm text-gray-600">{list.length} клиент. · долг всего: <b className="text-gray-900">{fmt(total)} тг</b>{over ? <> · переплаты: <b className="text-emerald-700">{fmt(-over)} тг</b></> : null}</div>
+          <div className="text-sm text-gray-600">{list.length} клиент. · юр. название и БИН</div>
           <Btn onClick={copy} disabled={!list.length}><Icon name="copy" size={15} />Скопировать список ({list.length})</Btn>
           {list.length > 0 && (
             <div className="text-xs text-gray-600 bg-gray-50 rounded-lg p-2 max-h-60 overflow-y-auto space-y-0.5">
@@ -7150,7 +7145,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
         ? <OsvImport clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowOsv(false)} />
         : <button onClick={() => setShowOsv(true)} className="w-full bg-white border border-violet-200 hover:bg-violet-50 text-violet-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Оборотно-сальдовая ведомость — загрузить Excel, PDF или фото</button>)}
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
-      <SegmentLists clients={clients} orders={orders} payments={payments} reload={reload} canEdit={canEdit} />
+      <SegmentLists clients={clients} reload={reload} canEdit={canEdit} />
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
       )}
