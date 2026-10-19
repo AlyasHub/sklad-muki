@@ -77,6 +77,7 @@ function clientText(c, ex) {
   const ptsKey = x => JSON.stringify((x.points || []).map(p => [p.label || "", p.address || ""]));
   if (ptsKey(ex) !== ptsKey(c)) ch.push("адреса доставки");
   if ((ex.ownerId || "") !== (c.ownerId || "")) ch.push("группа");
+  if ((ex.segment || "") !== (c.segment || "")) ch.push(`тип: ${({ b2b: "B2B", market: "Open market" })[c.segment] || "не указан"}`);
   if ((ex.city || "astana") !== (c.city || "astana")) ch.push("город");
   if (!!ex.paused !== !!c.paused) ch.push(c.paused ? `работа приостановлена${c.paused_note ? ` (${c.paused_note})` : ""}` : "работа возобновлена");
   return ch.length ? `изменил карточку: ${ch.join(", ")}` : null;

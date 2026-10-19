@@ -483,6 +483,9 @@ function PointSel({ client, value, onChange }) {
     options={[{ value: "", label: (client.address_label ? client.address_label + " — " : "Основной: ") + (client.address || "—") }, ...pts.map(p => ({ value: p.id, label: (p.label ? p.label + " — " : "") + (p.address || "без адреса") }))]} />;
 }
 // Клиенты для выпадающих списков: приостановленные — в конце и с пометкой
+// Тип клиента — для списков в «Долгах»: B2B (заведения, компании) и Open market (рынок)
+const SEGMENTS = [{ id: "b2b", label: "B2B" }, { id: "market", label: "Open market" }];
+const segLabel = s => (SEGMENTS.find(x => x.id === s) || {}).label || "";
 const clientOptions = list => [...(list || [])].sort((a, b) => (a.paused ? 1 : 0) - (b.paused ? 1 : 0)).map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") + (c.paused ? " · ⏸ приостановлен" : "") }));
 // pointId только если такая точка есть у этого клиента (защита от «чужой» точки после смены клиента)
 const validPoint = (client, pid) => (pid && client && (client.points || []).some(p => p.id === pid)) ? pid : "";
@@ -2683,8 +2686,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY, points: c.points || [], address_label: c.address_label || "" }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity, points: [], address_label: "" }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY, points: c.points || [], address_label: c.address_label || "", segment: c.segment || "" }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity, points: [], address_label: "", segment: "" }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -2861,6 +2864,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <Inp label="Название заведения" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Мамыр" />
             {!isRep && !isCityMgr && cities.length > 1 && <Sel label="Город" value={form.city || DEFAULT_CITY} onChange={e => setForm({ ...form, city: e.target.value })} options={cities.map(c => ({ value: c.id, label: c.name }))} />}
             {!isRep && repUsers.length > 0 && <Sel label="Группа клиента" value={form.ownerId || ""} onChange={e => setForm({ ...form, ownerId: e.target.value })} options={[{ value: "", label: houseName }, ...repUsers.map(u => ({ value: u.id, label: u.group_name || u.name }))]} />}
+            <Sel label="Тип клиента (для списков в «Долгах»)" value={form.segment || ""} onChange={e => setForm({ ...form, segment: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...SEGMENTS.map(s => ({ value: s.id, label: s.label }))]} />
             <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
             <Inp label="Адрес доставки" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
@@ -6995,6 +6999,78 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
   );
 }
 
+// 📋 Списки клиентов по типу (B2B / Open market): выбрать группу и скопировать всех её клиентов —
+// юр. название, БИН и текущий долг. Режим «Расставить типы» — быстро отметить клиентов кнопками.
+function SegmentLists({ clients = [], orders = [], payments = [], reload, canEdit = false }) {
+  const [seg, setSeg] = useState("b2b");
+  const [open, setOpen] = useState(false);
+  const [assign, setAssign] = useState(false);
+  const [onlyUnset, setOnlyUnset] = useState(true);
+  const [busyId, setBusyId] = useState("");
+  const debtOf = useMemo(() => { const m = new Map(); for (const c of clients) m.set(c.id, Math.round(debtAt(c.id, "9999-12-31", orders, payments))); return m; }, [clients, orders, payments]);
+  const groups = [...SEGMENTS, { id: "", label: "Без типа" }];
+  const inSeg = s => clients.filter(c => (c.segment || "") === s);
+  const list = inSeg(seg).sort((a, b) => (debtOf.get(b.id) || 0) - (debtOf.get(a.id) || 0) || (a.org_name || a.name || "").localeCompare(b.org_name || b.name || "", "ru"));
+  const total = list.reduce((s, c) => s + (debtOf.get(c.id) || 0), 0);
+  const money = n => `${fmt(n)} тг${n < 0 ? " (переплата)" : ""}`;
+  const line = (c, i) => {
+    const org = String(c.org_name || "").trim(), name = String(c.name || "").trim();
+    const title = org ? (name && !org.toLowerCase().includes(name.toLowerCase()) ? `${org} (${name})` : org) : name;
+    return `${i + 1}. ${title} — БИН ${String(c.bin || "").trim() || "не указан"} — долг ${money(debtOf.get(c.id) || 0)}`;
+  };
+  const copy = () => {
+    const head = `${seg ? segLabel(seg) : "Клиенты без типа"} — ${TODAY().split("-").reverse().join(".")}`;
+    copyToClipboard([head, "", ...list.map(line), "", `Итого: ${list.length} клиент., долг ${money(total)}`].join("\n"));
+  };
+  const setType = async (c, s) => {
+    setBusyId(c.id);
+    try { await dbUpsert("clients", { ...c, segment: s }); await reload("clients"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + errText(e)); }
+    setBusyId("");
+  };
+  const assignList = clients.filter(c => !onlyUnset || !c.segment).sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru"));
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-3">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="clipboard" size={16} />Списки: B2B / Open market</span>
+        <span className="text-xs text-gray-400">{open ? "скрыть" : "открыть"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          <div className="flex gap-1.5 flex-wrap">
+            {groups.map(g => <button key={g.id || "none"} onClick={() => setSeg(g.id)} className={`text-sm px-3 py-1.5 rounded-lg border ${seg === g.id ? "bg-amber-500 border-amber-500 text-white" : "border-gray-200 text-gray-600"}`}>{g.label} <span className={seg === g.id ? "text-amber-100" : "text-gray-400"}>{inSeg(g.id).length}</span></button>)}
+          </div>
+          <div className="text-sm text-gray-600">{list.length} клиент. · долг всего: <b className="text-gray-900">{money(total)}</b></div>
+          <Btn onClick={copy} disabled={!list.length}><Icon name="copy" size={15} />Скопировать список ({list.length})</Btn>
+          {list.length > 0 && (
+            <div className="text-xs text-gray-600 bg-gray-50 rounded-lg p-2 max-h-60 overflow-y-auto space-y-0.5">
+              {list.map((c, i) => <div key={c.id} className={!String(c.bin || "").trim() ? "text-amber-700" : ""}>{line(c, i)}</div>)}
+            </div>
+          )}
+          {list.some(c => !String(c.bin || "").trim()) && <div className="text-xs text-amber-700">Оранжевым — у клиента не указан БИН (впиши в карточке клиента).</div>}
+          {canEdit && (
+            <div className="pt-1 border-t border-gray-100">
+              <button onClick={() => setAssign(v => !v)} className="text-sm text-amber-700 font-medium py-1">{assign ? "▲ Скрыть расстановку типов" : `▼ Расставить типы клиентам${inSeg("").length ? ` (без типа: ${inSeg("").length})` : ""}`}</button>
+              {assign && (
+                <div className="space-y-1.5 mt-1">
+                  <label className="text-xs text-gray-600 inline-flex items-center gap-1"><input type="checkbox" checked={onlyUnset} onChange={e => setOnlyUnset(e.target.checked)} className="accent-amber-500" />только без типа</label>
+                  {!assignList.length && <div className="text-sm text-gray-400">Всем клиентам тип уже указан.</div>}
+                  {assignList.map(c => (
+                    <div key={c.id} className="flex items-center gap-2 text-sm">
+                      <span className="flex-1 min-w-0 truncate">{c.name}{c.org_name ? <span className="text-xs text-gray-400"> · {c.org_name}</span> : null}</span>
+                      {SEGMENTS.map(s => <button key={s.id} disabled={busyId === c.id} onClick={() => setType(c, c.segment === s.id ? "" : s.id)} className={`text-xs px-2 py-1 rounded-lg border whitespace-nowrap ${c.segment === s.id ? "bg-amber-500 border-amber-500 text-white" : "border-gray-200 text-gray-600"} disabled:opacity-50`}>{s.label}</button>)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false, canOsv = false, onOpenClient = () => {} }) {
   const [open, setOpen] = useState({});
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
@@ -7072,6 +7148,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
         ? <OsvImport clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowOsv(false)} />
         : <button onClick={() => setShowOsv(true)} className="w-full bg-white border border-violet-200 hover:bg-violet-50 text-violet-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Оборотно-сальдовая ведомость — загрузить Excel, PDF или фото</button>)}
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
+      <SegmentLists clients={clients} orders={orders} payments={payments} reload={reload} canEdit={canEdit} />
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
       )}
