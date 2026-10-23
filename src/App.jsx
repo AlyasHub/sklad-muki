@@ -118,7 +118,7 @@ function PriceHint({ client, pos, onSet }) {
 function copyNakladnaya(g, client) {
   const bad = priceMismatches(g.orders, client);
   if (bad.length && !confirm(`⚠️ Цена в заявке не совпадает с карточкой клиента:\n${bad.map(x => `${x.o.brand} ${x.o.grade} ${x.o.bag_kg}кг — в заявке ${fmt(x.o.price_per_kg)} тг/кг, в карточке ${fmt(x.list)} тг/кг`).join("\n")}\n\nВсё равно скопировать для накладной? (Исправить — кнопка «Изменить».)`)) return;
-  copyNakladnaya(g, client);
+  copyToClipboard(nakladnayaText(g, client));
 }
 function nakladnayaText(g, client) {
   const head = (client && client.org_name) || g.clientName || "Клиент";
