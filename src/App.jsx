@@ -96,6 +96,24 @@ function mergedPositions(orders) {
   });
   return Object.values(m);
 }
+// Цена позиции по прайсу из карточки клиента (null — такого товара в прайсе нет)
+function listPriceOf(client, o) {
+  const p = ((client && client.prices) || []).find(x => x.brand === o.brand && x.grade === o.grade && Number(x.bag_kg) === Number(o.bag_kg));
+  return p && Number(p.price_per_kg) ? Number(p.price_per_kg) : null;
+}
+// Позиции, где цена в заявке не как в карточке клиента (пробы не считаем). Так 19.10 у Saniya bakery
+// остался «Первый сорт» по цене высшего (305 вместо 218) — сорт поменяли в «Изменить», а цена осталась.
+function priceMismatches(orders, client) {
+  if (!client) return [];
+  return (orders || []).filter(o => !o.trial && !o.isSample && Number(o.price_per_kg)).map(o => ({ o, list: listPriceOf(client, o) }))
+    .filter(x => x.list !== null && Math.abs(Number(x.o.price_per_kg) - x.list) > 0.001);
+}
+// «Для накладной»: если цена не как в карточке — сначала спросить, чтобы неверная цена не ушла бухгалтеру
+function copyNakladnaya(g, client) {
+  const bad = priceMismatches(g.orders, client);
+  if (bad.length && !confirm(`⚠️ Цена в заявке не совпадает с карточкой клиента:\n${bad.map(x => `${x.o.brand} ${x.o.grade} ${x.o.bag_kg}кг — в заявке ${fmt(x.o.price_per_kg)} тг/кг, в карточке ${fmt(x.list)} тг/кг`).join("\n")}\n\nВсё равно скопировать для накладной? (Исправить — кнопка «Изменить».)`)) return;
+  copyNakladnaya(g, client);
+}
 function nakladnayaText(g, client) {
   const head = (client && client.org_name) || g.clientName || "Клиент";
   const billable = g.orders.filter(o => !o.trial && !o.isSample); // бесплатные пробы в накладную не идут
@@ -1111,6 +1129,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                         <span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{m.bags} меш. × {m.bag_kg} кг</span>
                         <span>= <b>{fmt(m.bags * m.bag_kg)} кг</b></span>
                         {m.trial ? <span className="text-orange-600 font-medium">на пробу</span> : (showPrices && m.tg ? <span className="text-gray-400">· {fmt(m.tg)} тг</span> : null)}
+                        {showPrices && priceMismatches(g.orders.filter(o => o.brand === m.brand && o.grade === m.grade && Number(o.bag_kg) === Number(m.bag_kg)), client).slice(0, 1).map(x => <span key="pm" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">⚠️ цена {fmt(x.o.price_per_kg)} тг/кг, в карточке {fmt(x.list)}</span>)}
                       </div>
                     ))}
                   </div>
@@ -1122,7 +1141,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                   {(client?.access_note || g.orders[0].access_note) && <div className="text-xs text-sky-800 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1 mt-1 flex items-start gap-1"><span className="mt-0.5"><Icon name="door" size={13} /></span><span className="break-words">{client?.access_note || g.orders[0].access_note}</span></div>}
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                     {(client?.gis_link || g.orders[0].gis_link) &&<a href={client?.gis_link || g.orders[0].gis_link} target="_blank" rel="noreferrer" className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pin" size={12} />2ГИС</a>}
-                    {!driverMode && !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
+                    {!driverMode && !g.orders.some(o => o.foreign) && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyNakladnaya(g, client)} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
                     {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
                     {!driverMode && !g.orders.some(o => o.foreign) && showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => invoiceFromOrders(g, client)} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="wallet" size={12} />Счет PDF</button>}
                     {!driverMode && canEdit && !g.orders.some(o => o.foreign) && <button onClick={() => setEditGroup(g)} className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="pencil" size={12} />Изменить</button>}
@@ -1242,7 +1261,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                       ))}
                     </div>
                     <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-2 flex-wrap">
-                      {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyToClipboard(nakladnayaText(g, client))} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
+                      {g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => copyNakladnaya(g, client)} className="bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="copy" size={12} />Для накладной</button>}
                       {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => softInvoiceFromOrders(g, client)} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="receipt" size={12} />Накладная PDF</button>}
                       {showPrices && g.orders.some(o => !o.trial && !o.isSample) && <button onClick={() => invoiceFromOrders(g, client)} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="wallet" size={12} />Счет PDF</button>}
                       <span className="text-orange-600 inline-flex items-center gap-1"><Icon name="store" size={12} />фура из Караганды</span>
@@ -7390,13 +7409,24 @@ function EditGroupModal({ group, clients, reload, onClose, dateLabel = "Дата
   const [pointId, setPointId] = useState(base.pointId || ""); // адрес доставки (точка клиента) — можно перенести на другой адрес
   const [date, setDate] = useState(base.date); // дата доставки — можно поправить, если поставили не на то число
   const [saving, setSaving] = useState(false);
-  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
-  const upd = (i, f, v) => setPositions(ps => ps.map((p, idx) => idx === i ? { ...p, [f]: v } : p));
+  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && Number(p.bag_kg) === Number(bag_kg))?.price_per_kg || null;
+  const clientNow = clients.find(c => c.id === base.clientId);
+  // Сменили товар (бренд/сорт/фасовку) — цена из карточки клиента для НОВОГО товара. Раньше оставалась цена
+  // прежнего товара: 19.10 «Первый сорт» Saniya bakery ушёл по цене высшего (305 вместо 218) в накладную.
+  const upd = (i, f, v) => setPositions(ps => ps.map((p, idx) => {
+    if (idx !== i) return p;
+    const np = { ...p, [f]: v };
+    if ((f === "brand" || f === "grade" || f === "bag_kg") && !p.trial) { const lp = priceFor(clientNow, np.brand, np.grade, Number(np.bag_kg)); np.price_per_kg = lp != null ? lp : ""; }
+    return np;
+  }));
   const add = () => setPositions(ps => [...ps, { id: null, brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "", trial: false }]);
   const rm = i => setPositions(ps => ps.filter((_, idx) => idx !== i));
   const save = async () => {
     const valid = positions.filter(p => Number(p.bags) > 0);
     if (valid.length === 0) { alert("Оставь хотя бы одну позицию (или закрой и удали заявку целиком)."); return; }
+    // без цены (товара нет в карточке клиента и цену не вписали) — не сохраняем, иначе заявка уйдёт по 0 тг
+    const noPrice = valid.filter(p => !p.trial && !(Number(p.price_per_kg) > 0) && !priceFor(clientNow, p.brand, p.grade, Number(p.bag_kg)));
+    if (noPrice.length) { alert(`Укажи цену тг/кг: ${noPrice.map(p => `${p.brand} ${p.grade} ${p.bag_kg}кг`).join(", ")} — этого товара нет в карточке клиента.`); return; }
     setSaving(true);
     const client = clients.find(c => c.id === base.clientId);
     const grpDriver = group.orders.find(o => o.driverId)?.driverId || ""; // водитель заявки (с любой позиции)
@@ -7439,7 +7469,11 @@ function EditGroupModal({ group, clients, reload, onClose, dateLabel = "Дата
               <Inp label="Мешков" type="number" value={p.bags} onChange={e => upd(i, "bags", e.target.value)} />
               {p.trial
                 ? <div className="col-span-2 text-xs text-orange-600 font-medium">на пробу (бесплатно)</div>
-                : <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={p.price_per_kg || ""} onChange={e => upd(i, "price_per_kg", e.target.value)} /></div>}
+                : <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={p.price_per_kg || ""} onChange={e => upd(i, "price_per_kg", e.target.value)} />
+                  {(() => { const lp = priceFor(clientNow, p.brand, p.grade, Number(p.bag_kg)); return lp != null && p.price_per_kg !== "" && Number(p.price_per_kg) !== lp
+                    ? <div className="text-xs text-red-700 mt-1">⚠️ В карточке клиента для этого товара — {fmt(lp)} тг/кг. <button type="button" onClick={() => upd(i, "price_per_kg", lp)} className="underline font-semibold">Поставить {fmt(lp)}</button></div>
+                    : null; })()}
+                </div>}
             </div>
           </div>
         ))}
