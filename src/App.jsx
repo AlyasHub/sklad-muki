@@ -108,6 +108,12 @@ function priceMismatches(orders, client) {
   return (orders || []).filter(o => !o.trial && !o.isSample && Number(o.price_per_kg)).map(o => ({ o, list: listPriceOf(client, o) }))
     .filter(x => x.list !== null && Math.abs(Number(x.o.price_per_kg) - x.list) > 0.001);
 }
+// Подсказка под полем цены в формах заявки: вписанная цена не как в карточке клиента — показать и дать поставить
+function PriceHint({ client, pos, onSet }) {
+  const lp = client ? listPriceOf(client, pos) : null;
+  if (lp === null || pos.price_per_kg === "" || pos.price_per_kg == null || Number(pos.price_per_kg) === lp) return null;
+  return <div className="text-xs text-red-700 mt-1">⚠️ В карточке клиента для этого товара — {fmt(lp)} тг/кг. <button type="button" onClick={() => onSet(lp)} className="underline font-semibold">Поставить {fmt(lp)}</button></div>;
+}
 // «Для накладной»: если цена не как в карточке — сначала спросить, чтобы неверная цена не ушла бухгалтеру
 function copyNakladnaya(g, client) {
   const bad = priceMismatches(g.orders, client);
@@ -1417,7 +1423,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   useEffect(() => { if (openSignal) setShowManual(true); }, [openSignal]);
 
   function getPrice(client, brand, grade, bag_kg) {
-    return (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
+    return (client?.prices || []).find(p => p.brand === brand && p.grade === grade && Number(p.bag_kg) === Number(bag_kg))?.price_per_kg || null;
   }
 
   const handleAI = async () => {
@@ -5207,7 +5213,7 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
 }
 
 // 🤖 ИИ-помощник: пишешь задачу простым языком — он определяет раздел и делает (после подтверждения)
-function AssistantModal({ onClose, orders = [], reload }) {
+function AssistantModal({ onClose, orders = [], clients = [], reload }) {
   const [input, setInput] = useState("");
   const [phase, setPhase] = useState("input"); // input | loading | result | executing | done
   const [result, setResult] = useState(null);
@@ -5238,9 +5244,11 @@ function AssistantModal({ onClose, orders = [], reload }) {
     try {
       if (a.action === "create_order") {
         const positions = (p.positions && p.positions.length) ? p.positions : [{ brand: p.brand, grade: p.grade, bag_kg: p.bag_kg, bags: p.bags, price_per_kg: p.price_per_kg }];
+        // Цена — из карточки клиента, если такой товар там есть (ИИ мог ошибиться с ценой); нет в карточке — названная ИИ
+        const cli = clients.find(c => c.id === p.clientId);
         await Promise.all(positions.map(pos => dbUpsert("orders", {
           id: uid(), date: p.date, brand: pos.brand, grade: pos.grade, bag_kg: Number(pos.bag_kg), bags: Number(pos.bags),
-          driverId: "", price_per_kg: Number(p.trial ? 0 : (pos.price_per_kg || 0)), status: "новая",
+          driverId: "", price_per_kg: p.trial ? 0 : (listPriceOf(cli, pos) ?? Number(pos.price_per_kg || 0)), status: "новая",
           isSample: false, trial: !!p.trial, clientId: p.clientId || null, clientName: p.clientName || "",
         })));
         await reload("orders");
@@ -7273,9 +7281,10 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   const [saving, setSaving] = useState(false);
   const blankPos = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
   const [form, setForm] = useState({ clientId: "", date: TODAY(), note: "", positions: [{ ...blankPos }] });
-  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
+  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && Number(p.bag_kg) === Number(bag_kg))?.price_per_kg || null;
   const openAdd = () => { setForm({ clientId: "", date: TODAY(), note: "", positions: [{ ...blankPos }] }); setShowAdd(true); };
-  const updatePos = (i, field, value) => setForm(f => ({ ...f, positions: f.positions.map((p, idx) => idx === i ? { ...p, [field]: value } : p) }));
+  // сменили товар — вписанную цену сбрасываем на «авто из базы» (цена из карточки клиента для нового товара)
+  const updatePos = (i, field, value) => setForm(f => ({ ...f, positions: f.positions.map((p, idx) => idx === i ? { ...p, [field]: value, ...((field === "brand" || field === "grade" || field === "bag_kg") ? { price_per_kg: "" } : {}) } : p) }));
   const addPos = () => setForm(f => ({ ...f, positions: [...f.positions, { ...blankPos }] }));
   const removePos = i => setForm(f => ({ ...f, positions: f.positions.filter((_, idx) => idx !== i) }));
 
@@ -7288,8 +7297,10 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
   const save = async () => {
     const valid = form.positions.filter(p => Number(p.bags) > 0);
     if (!form.clientId || valid.length === 0) { alert("Выбери клиента и укажи хотя бы одну позицию с мешками."); return; }
-    setSaving(true);
     const client = clients.find(c => c.id === form.clientId);
+    const zeroCnt = valid.filter(p => !(Number(p.price_per_kg) || priceFor(client, p.brand, p.grade, Number(p.bag_kg)))).length; // нет ни цены, ни товара в карточке
+    if (zeroCnt && !confirm(`Для ${zeroCnt} позиц. цена не найдена в карточке клиента — записать их по 0 тг?`)) return;
+    setSaving(true);
     try {
       for (const p of valid) {
         const price = p.price_per_kg || priceFor(client, p.brand, p.grade, Number(p.bag_kg)) || 0;
@@ -7333,7 +7344,8 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
                   <Sel label="Сорт" value={p.grade} onChange={e => updatePos(i, "grade", e.target.value)} options={GRADES} />
                   <Sel label="Фасовка" value={p.bag_kg} onChange={e => updatePos(i, "bag_kg", e.target.value)} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
                   <Inp label="Мешков" type="number" value={p.bags} onChange={e => updatePos(i, "bags", e.target.value)} />
-                  <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={p.price_per_kg || ""} onChange={e => updatePos(i, "price_per_kg", e.target.value)} /></div>
+                  <div className="col-span-2"><Inp label="Цена тг/кг" type="number" placeholder="авто из базы" value={p.price_per_kg || ""} onChange={e => updatePos(i, "price_per_kg", e.target.value)} />
+                    <PriceHint client={clients.find(c => c.id === form.clientId)} pos={p} onSet={v => updatePos(i, "price_per_kg", v)} /></div>
                 </div>
               </div>
             ))}
@@ -7585,7 +7597,14 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   // Позиции обычной заявки клиенту (несколько сортов за раз — общий клиент/дата/водитель)
   const manBlank = { brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, bags: "", price_per_kg: "" };
   const [manPos, setManPos] = useState([{ ...manBlank }]);
-  const updMan = (i, k, v) => setManPos(ps => ps.map((p, j) => j === i ? { ...p, [k]: v } : p));
+  // Сменили товар (бренд/сорт/фасовку) — вписанную цену сбрасываем на «авто из базы» (цена из карточки клиента
+  // для нового товара), иначе осталась бы цена прежнего товара. У пробника новой компании карточки нет — не трогаем.
+  const updMan = (i, k, v) => setManPos(ps => ps.map((p, j) => {
+    if (j !== i) return p;
+    const np = { ...p, [k]: v };
+    if ((k === "brand" || k === "grade" || k === "bag_kg") && !form.isSample) np.price_per_kg = "";
+    return np;
+  }));
   // Остаток позиции на складе города заявки (город клиента, без клиента — текущий): видно, брать ли заявку
   const posAvail = p => {
     const city = form.clientId ? clientCity(clients.find(c => c.id === form.clientId)) : activeCity;
@@ -7623,7 +7642,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   })();
 
   const sc = { "новая": "blue", "в пути": "yellow", "отгружена": "green", "отменена": "red", "частично": "gray" };
-  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && p.bag_kg === Number(bag_kg))?.price_per_kg || null;
+  const priceFor = (client, brand, grade, bag_kg) => (client?.prices || []).find(p => p.brand === brand && p.grade === grade && Number(p.bag_kg) === Number(bag_kg))?.price_per_kg || null;
 
   const handleAI = async () => {
     if (!aiText.trim()) return;
@@ -7939,6 +7958,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                       <div key={mi} className="flex items-center gap-2 flex-wrap text-sm">
                         <span className="bg-amber-100 text-amber-900 font-semibold px-2 py-0.5 rounded-md whitespace-nowrap inline-flex items-center gap-1"><Icon name="box" size={13} />{m.bags} меш. × {m.bag_kg} кг</span>
                         <span className="text-gray-600">= <b>{fmt(m.bags * m.bag_kg)} кг</b> · {m.brand} {m.grade}{m.trial ? " · на пробу" : ""}</span>
+                        {canEdit && driverFilter == null && priceMismatches(g.orders.filter(o => o.brand === m.brand && o.grade === m.grade && Number(o.bag_kg) === Number(m.bag_kg)), clients.find(c => c.id === g.clientId)).slice(0, 1).map(x => <span key="pm" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">⚠️ цена {fmt(x.o.price_per_kg)} тг/кг, в карточке {fmt(x.list)}</span>)}
                       </div>
                     ))}
                   </div>
@@ -8077,7 +8097,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                     <Sel label="Сорт" value={p.grade} onChange={e => updMan(i, "grade", e.target.value)} options={GRADES} />
                     <Sel label="Фасовка" value={p.bag_kg} onChange={e => updMan(i, "bag_kg", e.target.value)} options={WEIGHTS.map(w => ({ value: w, label: w + " кг" }))} />
                     <Inp label="Мешков" type="number" value={p.bags} onChange={e => updMan(i, "bags", e.target.value)} />
-                    {!form.trial && <div className="col-span-2"><Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" min="0" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={p.price_per_kg || ""} onChange={e => updMan(i, "price_per_kg", e.target.value)} /></div>}
+                    {!form.trial && <div className="col-span-2"><Inp label={form.isSample ? "Цена тг/кг (0 = бесплатно)" : "Цена тг/кг"} type="number" min="0" placeholder={form.isSample ? "0 = бесплатно" : "авто из базы"} value={p.price_per_kg || ""} onChange={e => updMan(i, "price_per_kg", e.target.value)} />
+                      {!form.isSample && <PriceHint client={clients.find(c => c.id === form.clientId)} pos={p} onSet={v => updMan(i, "price_per_kg", v)} />}</div>}
                   </div>
                   <StockHint {...posAvail(p)} need={Number(p.bags) || 0} />
                 </div>
@@ -8572,7 +8593,7 @@ export default function App() {
             </div>
           )}
           <button onClick={() => setFabOpen(v => !v)} className="fixed z-40 right-4 bottom-24 w-14 h-14 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center shadow-xl transition-transform" style={{ transform: fabOpen ? "rotate(45deg)" : "none" }} aria-label="Добавить"><Icon name="plus" size={28} stroke={2.2} /></button>
-          {isDirector && assistantOpen && <AssistantModal onClose={() => setAssistantOpen(false)} orders={data.orders} reload={reload} />}
+          {isDirector && assistantOpen && <AssistantModal onClose={() => setAssistantOpen(false)} orders={data.orders} clients={data.clients} reload={reload} />}
         </>
       )}
 
