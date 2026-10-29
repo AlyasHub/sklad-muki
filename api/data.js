@@ -490,7 +490,7 @@ async function listFor(u, table) {
     const allDrivers = await dbList("drivers");
     const brigade = new Set([u.driverId, ...allDrivers.filter(d => d.foremanId === u.driverId).map(d => d.id)]);
     if (table === "drivers") return allDrivers.filter(d => brigade.has(d.id)).map(d => d.id === u.driverId ? d : (({ rate_per_kg, load_rate_per_kg, base_salary, base_included_t, tier1_to_t, tier1_rate, tier2_rate, ...rest }) => rest)(d)); // свою зарплату бригадир видит, у младших — скрыто
-    if (table === "notes") return (await dbList("notes")).filter(n => /^(warehouse|brigadir)(_|$)/.test(String(n.id))); // адрес склада + задания бригадиру (по городам)
+    if (table === "notes") return (await dbList("notes")).filter(n => /^(warehouse|brigadir|ratedays)(_|$)/.test(String(n.id))); // адрес склада + задания бригадиру + праздничные дни (для «Моя ЗП»)
     // Заявки бригады: развоз (driverId ∈ бригада) + самовывоз, который грузил кто-то из бригады (loaderId ∈ бригада,
     // у самовывоза driverId пустой). Иначе бригадир не видит свою погрузку самовывоза в «Моя ЗП».
     const myOrders = (await dbList("orders")).filter(o => brigade.has(o.driverId) || (o.pickup && brigade.has(o.loaderId)));
@@ -636,7 +636,8 @@ async function upsertFor(u, table, item) {
     // Адрес склада (старт маршрута) города: warehouse_<город> — только по своим городам
     if (table === "notes" && /^warehouse(_|$)/.test(String(item.id))) { const c = String(item.id).startsWith("warehouse_") ? String(item.id).slice(10) : myCities[0]; if (!inMy(c)) throw new Error("Склад другого города"); return dbUpsert("notes", item); }
     // Общие заметки и задания бригадиру по городу (shared_<город>, brigadir_<город>) — только свои города
-    if (table === "notes" && /^(shared|brigadir)_/.test(String(item.id))) { const c = String(item.id).replace(/^(shared|brigadir)_/, ""); if (!inMy(c)) throw new Error("Заметка другого города"); return dbUpsert("notes", item); }
+    // shared_/brigadir_ — заметки и задания бригадиру; ratedays_ — праздничные дни (оплата по ставке выходного)
+    if (table === "notes" && /^(shared|brigadir|ratedays)_/.test(String(item.id))) { const c = String(item.id).replace(/^(shared|brigadir|ratedays)_/, ""); if (!inMy(c)) throw new Error("Заметка другого города"); return dbUpsert("notes", item); }
     // 👥 Делегированный доступ: менеджер заводит/правит ТОЛЬКО своих подчинённых (бригадир/водитель/торгпред)
     // в своих городах. Выше своей роли, чужие города, dev и себя (кроме своей кассы) — нельзя.
     if (table === "users") {
@@ -742,6 +743,8 @@ async function upsertFor(u, table, item) {
       const author = existing?.created_by_name
         ? { created_by: existing.created_by, created_by_name: existing.created_by_name, created_at: existing.created_at }
         : { created_by: u.uid, created_by_name: u.name, created_at: new Date().toISOString(), created_by_role: "rep" };
+      // «по ставке выходного» (оплата водителю) ставят только админ/менеджер — торгпред не меняет
+      item.high_rate = !!(existing && existing.high_rate);
       const saved = await dbUpsert("orders", { ...item, ...author });
       // ⚠️ Списание склада делаем ЗДЕСЬ, на сервере: у торгпреда нет прав писать в stock,
       // поэтому раньше его заявка отмечалась «отгружена», а мука со склада не списывалась —

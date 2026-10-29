@@ -684,7 +684,7 @@ function BrigadirNotes({ notes = [], reload = () => {}, applyLocal = () => {}, c
     </div>
   );
 }
-function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payments = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false, activeCity = DEFAULT_CITY }) {
+function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payments = [], reload, applyLocal = () => {}, canEdit = true, showPrices = true, driverFilter = null, driverMode = false, foremanMode = false, serverStock = false, activeCity = DEFAULT_CITY, canRate = false }) {
   const [cursor, setCursor] = useState(new Date());
   const [selected, setSelected] = useState(TODAY());
   const [uploadingId, setUploadingId] = useState(null);
@@ -1120,7 +1120,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
                 {allShipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-xl px-4 py-3 text-sm border ${allShipped ? "bg-emerald-50 border-emerald-300" : allLoaded ? "bg-amber-50 border-amber-300" : "bg-red-50 border-red-200"}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="font-semibold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600"><Icon name="check" size={18} stroke={2.4} /></span>}{g.clientName || "Клиент"}{g.isSample && <Badge color="yellow">Проба</Badge>}{g.isTrial && <Badge color="yellow">на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="eye" size={12} />самовывоз · контроль</span> : <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="bag" size={12} />Самовывоз</span>)}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="coin" size={12} />разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="globe" size={12} />от клиента</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="user" size={12} />торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="box" size={12} />в машине</span>}</span>
+                    <span className="font-semibold text-gray-900 flex items-center gap-1.5 flex-wrap">{allShipped && <span className="text-emerald-600"><Icon name="check" size={18} stroke={2.4} /></span>}{g.clientName || "Клиент"}{g.isSample && <Badge color="yellow">Проба</Badge>}{g.isTrial && <Badge color="yellow">на пробу</Badge>}{isPickup && (isWatch ? <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="eye" size={12} />самовывоз · контроль</span> : <span className="text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="bag" size={12} />Самовывоз</span>)}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="coin" size={12} />разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="globe" size={12} />от клиента</span>}{g.orders.some(o => o.high_rate) && <span className="text-xs font-medium text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1" title="Водителю — по ставке выходного дня"><Icon name="clock" size={12} />по ставке вых.</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="user" size={12} />торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}{!isPickup && !isOneOff && allLoaded && !allShipped && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="box" size={12} />в машине</span>}</span>
                     {allShipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[gStatus] || "gray"}>{gStatus}</Badge>}
                   </div>
                   {client?.org_name && <div className="text-xs text-gray-500 flex items-center gap-1"><Icon name="building" size={12} />{client.org_name}</div>}
@@ -1367,7 +1367,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
       })()}
 
       {photoView && <PhotoViewer url={photoView} onClose={() => setPhotoView(null)} />}
-      {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} />}
+      {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} canRate={canRate} />}
       {histClient && showPrices && (() => {
         const cid = histClient.id;
         const co = orders.filter(o => o.clientId === cid);
@@ -3200,8 +3200,11 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
 // Зарплата бригадира (переделано 2026-09): оклад покрывает первые base_included_t тонн/мес.
 // Сверх этого — оплата ПО ДНЯМ: ставка дня = tier2_rate (8), если развоз бригады за день > day_threshold_kg
 // ИЛИ день выходной (сб/вс); иначе tier1_rate (6). Самовывоз считается отдельно (brigadePickupLoad).
-// dailyKg — массив {date:"YYYY-MM-DD", kg} развоза всей бригады по дням месяца.
-function brigadeSalary(d, dailyKg = []) {
+// dailyKg — массив {date:"YYYY-MM-DD", kg, hiKg} развоза всей бригады по дням месяца.
+// Праздники (holidays — Set дат, «Праздничные дни» в «Зарплате») — как выходной: весь день по tier2_rate.
+// hiKg — доставки, отмеченные «по ставке выходного» (отвезли после рабочего дня): их кг по tier2_rate,
+// остальное за день — по ставке дня. Отмеченные кг оплачиваются первыми из «сверх оклада» за день.
+function brigadeSalary(d, dailyKg = [], holidays = new Set()) {
   const base = Number(d.base_salary) || 0;
   const incl = (Number(d.base_included_t) || 0) * 1000; // кг в оклад
   const rLow = Number(d.tier1_rate) || 0;               // будни ≤ порога (6)
@@ -3212,14 +3215,18 @@ function brigadeSalary(d, dailyKg = []) {
   const rows = days.map(dd => {
     const [Y, M, D] = String(dd.date).split("-").map(Number);
     const wd = new Date(Y, (M || 1) - 1, D || 1).getDay(); // 0=вс, 6=сб (местное время)
-    const weekend = wd === 0 || wd === 6;
+    const holiday = holidays.has(dd.date);
+    const weekend = wd === 0 || wd === 6 || holiday;
     const rate = (weekend || dd.kg > dayThreshold) ? rHigh : rLow;
     const before = cum; cum += dd.kg; totalKg += dd.kg;
     const payKg = Math.max(0, cum - Math.max(incl, before)); // кг этого дня сверх включённых в оклад
-    const pay = Math.round(payKg * rate);
+    const hiKg = rate === rHigh ? 0 : Math.min(payKg, Number(dd.hiKg) || 0); // отмеченные доставки — по ставке выходного
+    const loKg = payKg - hiKg;
+    const hiPay = Math.round(hiKg * rHigh), loPay = Math.round(loKg * rate);
+    const pay = hiPay + loPay;
     paidKg += payKg; variablePay += pay;
-    if (rate === rHigh) { paid8Kg += payKg; paid8Pay += pay; } else { paid6Kg += payKg; paid6Pay += pay; }
-    return { date: dd.date, kg: dd.kg, weekend, rate, payKg, pay };
+    if (rate === rHigh) { paid8Kg += payKg; paid8Pay += pay; } else { paid6Kg += loKg; paid6Pay += loPay; paid8Kg += hiKg; paid8Pay += hiPay; }
+    return { date: dd.date, kg: dd.kg, weekend, holiday, rate, payKg, pay, hiKg: Number(dd.hiKg) || 0 };
   });
   const total = Math.round(base + variablePay);
   const toIncluded = Math.max(0, incl - totalKg);
@@ -3228,11 +3235,15 @@ function brigadeSalary(d, dailyKg = []) {
 // Развоз всей бригады по дням за месяц (основа для зарплаты по дням). Самовывоз (pickup) НЕ входит.
 function brigadeDailyKg(d, drivers, orders, ym) {
   const brigade = new Set([d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)]);
-  const byDate = {};
+  const byDate = {}, hiByDate = {};
   orders.filter(o => o.status === "отгружена" && !o.pickup && brigade.has(o.driverId) && (o.date || "").startsWith(ym))
-    .forEach(o => { byDate[o.date] = (byDate[o.date] || 0) + o.bags * o.bag_kg; });
-  return Object.entries(byDate).map(([date, kg]) => ({ date, kg }));
+    .forEach(o => { const kg = o.bags * o.bag_kg; byDate[o.date] = (byDate[o.date] || 0) + kg; if (o.high_rate) hiByDate[o.date] = (hiByDate[o.date] || 0) + kg; });
+  return Object.entries(byDate).map(([date, kg]) => ({ date, kg, hiKg: hiByDate[date] || 0 }));
 }
+// Праздничные дни города (оплата бригады по ставке выходного) — notes id «ratedays_<город>» { dates: [...] }
+const rateDaysOf = (notes, city) => new Set(((notes || []).find(n => n.id === "ratedays_" + (city || DEFAULT_CITY)) || {}).dates || []);
+// Подпись дня в разбивке зарплаты: праздник / выходной / часть доставок по ставке выходного
+const salaryDayTag = r => (r.holiday ? " · праздник" : r.weekend ? " · вых" : "") + (!r.weekend && r.hiKg > 0 ? ` · ${fmt(r.hiKg)} кг по ставке вых.` : "");
 
 // 📦 Погрузка самовывоза бригадой за месяц — считается ОТДЕЛЬНО от оклада/тарифов (не входит в объём бригады).
 // Заявки-самовывоз (pickup), которые грузил кто-то из бригады (loaderId), × ставка за погрузку (load_rate_per_kg, по умолч. 2.7 тг/кг).
@@ -3248,6 +3259,48 @@ function brigadePickupLoad(d, drivers, orders, ym) {
   // 👀 «только контроль» — клиент грузил сам, бригада проследила: тоннаж для статистики, но БЕЗ оплаты
   const watchKg = orders.filter(o => o.status === "отгружена" && o.pickup && o.pickupWatch && inb.has(o.loaderId) && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
   return { rate, per, kg, pay: Math.round(kg * rate), watchKg };
+}
+
+// 🎉 Праздничные дни города: весь развоз бригады за день — по ставке выходного (как сб/вс).
+// Хранится в notes «ratedays_<город>» { dates: [...] }; ставят админы и менеджер своего города.
+function RateDaysEditor({ notes = [], city = DEFAULT_CITY, reload, canEdit = false, multiCity = false }) {
+  const id = "ratedays_" + (city || DEFAULT_CITY);
+  const doc = notes.find(n => n.id === id) || null;
+  const dates = [...((doc && doc.dates) || [])].sort();
+  const [day, setDay] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const save = async list => {
+    setBusy(true);
+    try { await dbUpsert("notes", { ...(doc || {}), id, dates: [...new Set(list)].sort(), at: new Date().toISOString() }); await reload("notes"); }
+    catch (e) { alert("⚠️ Не сохранилось: " + errText(e)); }
+    setBusy(false);
+  };
+  const fromMonth = TODAY().slice(0, 7) + "-01";
+  const shown = showAll ? dates : dates.filter(d => d >= fromMonth); // прошлые месяцы — по кнопке
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl p-3 text-sm space-y-2">
+      <div className="font-semibold text-gray-700 flex items-center gap-1.5"><Icon name="calendar" size={15} />Праздничные дни — по ставке выходного{multiCity ? ` · ${cityName(notes, city)}` : ""}</div>
+      <div className="text-xs text-gray-500">В эти дни развоз бригады оплачивается как в субботу/воскресенье. Одну доставку в будни (отвезли после рабочего дня) отметь в самой заявке: «Изменить» → «По ставке выходного».</div>
+      {canEdit && (
+        <div className="flex gap-2 items-center">
+          <input type="date" value={day} onChange={e => setDay(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" aria-label="Праздничный день" />
+          <Btn size="sm" onClick={() => { if (day && !dates.includes(day)) save([...dates, day]); setDay(""); }} disabled={!day || busy}>Добавить</Btn>
+        </div>
+      )}
+      {shown.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {shown.map(d => (
+            <span key={d} className="inline-flex items-center gap-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full px-2 py-0.5 text-xs font-medium">
+              {d.split("-").reverse().join(".")}
+              {canEdit && <button onClick={() => save(dates.filter(x => x !== d))} disabled={busy} className="text-amber-600 hover:text-red-600" title="Убрать" aria-label={`Убрать ${d}`}>✕</button>}
+            </span>
+          ))}
+        </div>
+      ) : <div className="text-xs text-gray-400">{dates.length ? "В этом и следующих месяцах праздников не отмечено." : "Пока не отмечено ни одного дня."}</div>}
+      {dates.length > shown.length && <button onClick={() => setShowAll(true)} className="text-xs text-amber-700">Показать прошлые ({dates.length - shown.length})</button>}
+    </div>
+  );
 }
 
 function DriversTab({ drivers: allDrivers, orders, expenses = [], users = [], reload, canEdit = true, cities = [], activeCity = DEFAULT_CITY, multiCity = false, notes = [] }) {
@@ -3286,7 +3339,7 @@ function DriversTab({ drivers: allDrivers, orders, expenses = [], users = [], re
     const brigade = new Set([d.id, ...drivers.filter(x => x.foremanId === d.id).map(x => x.id)]);
     return orders.filter(o => o.status === "отгружена" && brigade.has(o.driverId) && (o.date || "").startsWith(ym)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
   };
-  const brigadirPay = d => brigadeSalary(d, brigadeDailyKg(d, drivers, orders, salMonth)).total;
+  const brigadirPay = d => brigadeSalary(d, brigadeDailyKg(d, drivers, orders, salMonth), rateDaysOf(notes, d.city)).total;
   const deleteDriver = async id => {
     const linked = (users || []).filter(u => u.driverId === id);
     if (!confirm(`Удалить рабочего${linked.length ? " и его логин? Он больше не сможет войти и его выкинет из приложения." : "?"}`)) return;
@@ -3347,6 +3400,7 @@ function DriversTab({ drivers: allDrivers, orders, expenses = [], users = [], re
         <span className="text-gray-500">Месяц зарплаты бригадира:</span>
         <input type="month" value={salMonth} onChange={e => setSalMonth(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1 text-sm" />
       </div>
+      <RateDaysEditor notes={notes} city={activeCity} reload={reload} canEdit={canEdit} multiCity={multiCity} />
       {showAdd && (<Modal title={editId ? "Изменить рабочего" : "Новый рабочий"} onClose={() => setShowAdd(false)}>
         <div className="space-y-3">
           <Inp label="Имя" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
@@ -3408,7 +3462,7 @@ function DriversTab({ drivers: allDrivers, orders, expenses = [], users = [], re
           const kgOf = id => orders.filter(o => o.status === "отгружена" && o.driverId === id && (o.date || "").startsWith(salMonth)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
           const perDriver = brigade.map(id => ({ id, name: drivers.find(x => x.id === id)?.name || "?", kg: kgOf(id), me: id === d.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
           const kg = perDriver.reduce((s, x) => s + x.kg, 0);
-          const b = brigadeSalary(d, brigadeDailyKg(d, drivers, orders, salMonth));
+          const b = brigadeSalary(d, brigadeDailyKg(d, drivers, orders, salMonth), rateDaysOf(notes, d.city));
           const sv = brigadePickupLoad(d, drivers, orders, salMonth); // погрузка самовывоза — отдельно
           const grand = b.total + sv.pay;
           const paidM = wagePaidMonth(d.id);
@@ -3434,7 +3488,7 @@ function DriversTab({ drivers: allDrivers, orders, expenses = [], users = [], re
                   <div className="font-semibold text-gray-700 mb-1">По дням (развоз бригады)</div>
                   <div className="space-y-0.5 max-h-52 overflow-y-auto">
                     {[...b.rows].reverse().map(r => <div key={r.date} className="flex items-center justify-between py-0.5">
-                      <span className="text-gray-600">{r.date.split("-").reverse().join(".")}{r.weekend ? " · вых" : ""}</span>
+                      <span className="text-gray-600">{r.date.split("-").reverse().join(".")}{salaryDayTag(r)}</span>
                       <span className="flex items-center gap-2"><b className="text-gray-800">{fmt(r.kg)} кг</b><span className={`text-xs px-1.5 py-0.5 rounded ${r.rate === b.rHigh ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>{fmt(r.rate)} тг</span></span>
                     </div>)}
                   </div>
@@ -5332,7 +5386,7 @@ function AssistantModal({ onClose, orders = [], clients = [], reload }) {
 }
 
 // 💰 «Моя зарплата» для бригадира: видит свой объём (вся бригада) и посчитанную зарплату за месяц.
-function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
+function MySalaryTab({ drivers = [], orders = [], notes = [], myDriverId = "" }) {
   const [month, setMonth] = useState(TODAY().slice(0, 7));
   const me = drivers.find(d => d.id === myDriverId);
   if (!me) return <div className="text-center py-12 text-gray-400">Карточка не найдена. Обратись к администратору.</div>;
@@ -5371,7 +5425,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
   const kgOf = id => orders.filter(o => o.status === "отгружена" && o.driverId === id && (o.date || "").startsWith(month)).reduce((s, o) => s + o.bags * o.bag_kg, 0);
   const perDriver = brigadeIds.map(id => ({ id, name: drivers.find(d => d.id === id)?.name || "?", kg: kgOf(id), me: id === me.id })).filter(x => x.kg > 0 || x.me).sort((a, b) => b.kg - a.kg);
   const kg = perDriver.reduce((s, x) => s + x.kg, 0);
-  const b = brigadeSalary(me, brigadeDailyKg(me, drivers, orders, month));
+  const b = brigadeSalary(me, brigadeDailyKg(me, drivers, orders, month), rateDaysOf(notes, me.city));
   const sv = brigadePickupLoad(me, drivers, orders, month); // погрузка самовывоза — отдельно
   const grand = b.total + sv.pay;
 
@@ -5398,7 +5452,7 @@ function MySalaryTab({ drivers = [], orders = [], myDriverId = "" }) {
         <div className="bg-white border border-gray-100 rounded-2xl p-4 text-sm">
           <div className="font-semibold text-gray-700 mb-1">По дням</div>
           <div className="space-y-0.5 max-h-52 overflow-y-auto">
-            {[...b.rows].reverse().map(r => <div key={r.date} className="flex items-center justify-between py-0.5"><span className="text-gray-600">{r.date.split("-").reverse().join(".")}{r.weekend ? " · вых" : ""}</span><span className="flex items-center gap-2"><b className="text-gray-800">{fmt(r.kg)} кг</b><span className={`text-xs px-1.5 py-0.5 rounded ${r.rate === b.rHigh ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>{fmt(r.rate)} тг</span></span></div>)}
+            {[...b.rows].reverse().map(r => <div key={r.date} className="flex items-center justify-between py-0.5"><span className="text-gray-600">{r.date.split("-").reverse().join(".")}{salaryDayTag(r)}</span><span className="flex items-center gap-2"><b className="text-gray-800">{fmt(r.kg)} кг</b><span className={`text-xs px-1.5 py-0.5 rounded ${r.rate === b.rHigh ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>{fmt(r.rate)} тг</span></span></div>)}
           </div>
         </div>
       )}
@@ -7414,8 +7468,11 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
 }
 
 // Форма редактирования позиций заявки (клиент+дата). Меняем сорт/кол-во/цену, удаляем и добавляем позиции.
-function EditGroupModal({ group, clients, reload, onClose, dateLabel = "Дата доставки", noteLabel = "Заметка (видит водитель)" }) {
+function EditGroupModal({ group, clients, reload, onClose, dateLabel = "Дата доставки", noteLabel = "Заметка (видит водитель)", canRate = false }) {
   const base = group.orders[0];
+  // «по ставке выходного» — водителю за эту доставку как в выходной (отвёз после рабочего дня). Ставят админ/менеджер.
+  const [hiRate, setHiRate] = useState(group.orders.some(o => o.high_rate));
+  const isPickupGroup = group.orders.some(o => o.pickup);
   const [positions, setPositions] = useState(group.orders.map(o => ({ id: o.id, brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, bags: o.bags, price_per_kg: o.price_per_kg ?? "", trial: !!o.trial })));
   const [note, setNote] = useState(group.orders.map(o => o.note).find(Boolean) || "");
   const [pointId, setPointId] = useState(base.pointId || ""); // адрес доставки (точка клиента) — можно перенести на другой адрес
@@ -7455,9 +7512,9 @@ function EditGroupModal({ group, clients, reload, onClose, dateLabel = "Дата
         const carry = idx === 0 ? { photos: allPhotos, delivered_by_driver: anyDelivered } : {};
         if (p.id) {
           const orig = group.orders.find(o => o.id === p.id);
-          return dbUpsert("orders", { ...orig, date, pointId: validPoint(client, pointId), brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry });
+          return dbUpsert("orders", { ...orig, date, pointId: validPoint(client, pointId), brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, note, ...carry, ...(canRate ? { high_rate: hiRate } : {}) });
         }
-        return dbUpsert("orders", { id: uid(), date, clientId: base.clientId, clientName: base.clientName, pointId: validPoint(client, pointId), brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, pickupWatch: grpWatch, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry });
+        return dbUpsert("orders", { id: uid(), date, clientId: base.clientId, clientName: base.clientName, pointId: validPoint(client, pointId), brand: p.brand, grade: p.grade, bag_kg: Number(p.bag_kg), bags: Number(p.bags), price_per_kg: price, status: base.status, driverId: grpDriver, pickup: grpPickup, loaderId: grpLoader, pickupWatch: grpWatch, trial: !!p.trial, fromKaraganda: !!base.fromKaraganda, note, ...carry, high_rate: canRate ? hiRate : !!base.high_rate });
       }));
       const keep = new Set(valid.filter(p => p.id).map(p => p.id));
       await Promise.all(group.orders.filter(o => !keep.has(o.id)).map(o => dbDelete("orders", o.id)));
@@ -7470,6 +7527,12 @@ function EditGroupModal({ group, clients, reload, onClose, dateLabel = "Дата
       <div className="space-y-3">
         <div className="text-xs text-gray-500">Измени дату, сорт/количество/цену, удали лишнюю позицию (✕) или добавь новую.</div>
         <Inp label={dateLabel} type="date" value={date} onChange={e => setDate(e.target.value)} />
+        {canRate && !isPickupGroup && !base.fromKaraganda && (
+          <label className="flex items-start gap-2 cursor-pointer bg-amber-50 rounded-lg px-3 py-2">
+            <input type="checkbox" checked={hiRate} onChange={e => setHiRate(e.target.checked)} className="w-4 h-4 mt-0.5 accent-amber-500" />
+            <span className="text-sm text-gray-700"><b>По ставке выходного</b> — водителю за эту доставку как в выходной (например, отвёз после рабочего дня). Праздники целиком — в «Зарплата» → «Праздничные дни».</span>
+          </label>
+        )}
         <PointSel client={clients.find(c => c.id === base.clientId)} value={pointId} onChange={setPointId} />
         {positions.map((p, i) => (
           <div key={i} className="border border-gray-200 rounded-xl p-3 relative">
@@ -7950,7 +8013,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
                 {shipped && !prevShipped && <div className="text-xs font-semibold text-emerald-600 pt-2 pb-1">— ✓ Отвезено ({shippedCount}) —</div>}
                 <div className={`rounded-2xl p-4 border ${shipped ? "bg-emerald-50 border-emerald-300" : "bg-white border-gray-100 shadow-sm"}`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-semibold text-gray-900 flex items-center gap-1.5 flex-wrap">{shipped && <span className="text-emerald-600"><Icon name="check" size={18} stroke={2.4} /></span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="gift" size={12} />на пробу</span>}{isPickup && <span className={`text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isWatch ? "text-purple-700 bg-purple-100" : "text-sky-700 bg-sky-100"}`}><Icon name={isWatch ? "eye" : "bag"} size={12} />{isWatch ? "Самовывоз · контроль" : "Самовывоз"}</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="coin" size={12} />разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="globe" size={12} />от клиента</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="user" size={12} />торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}</span>
+                    <span className="font-semibold text-gray-900 flex items-center gap-1.5 flex-wrap">{shipped && <span className="text-emerald-600"><Icon name="check" size={18} stroke={2.4} /></span>}{g.clientName || "Клиент"}{g.isTrial && <span className="text-xs font-medium text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="gift" size={12} />на пробу</span>}{isPickup && <span className={`text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isWatch ? "text-purple-700 bg-purple-100" : "text-sky-700 bg-sky-100"}`}><Icon name={isWatch ? "eye" : "bag"} size={12} />{isWatch ? "Самовывоз · контроль" : "Самовывоз"}</span>}{isOneOff && <span className="text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="coin" size={12} />разовая</span>}{g.orders.some(o => o.from_client) && <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="globe" size={12} />от клиента</span>}{g.orders.some(o => o.high_rate) && <span className="text-xs font-medium text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1" title="Водителю — по ставке выходного дня"><Icon name="clock" size={12} />по ставке вых.</span>}{g.orders.some(o => o.created_by_role === "rep") && <span className="text-xs font-medium text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1"><Icon name="user" size={12} />торгпред: {g.orders.find(o => o.created_by_role === "rep")?.created_by_name || "?"}</span>}</span>
                     {shipped ? <span className="text-xs font-bold bg-emerald-600 text-white px-3 py-1 rounded-full whitespace-nowrap">✓ Отгружено</span> : <Badge color={sc[st] || "gray"}>{st}</Badge>}
                   </div>
                   <div className="space-y-1">
@@ -8128,7 +8191,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
           </div>
         </Modal>
       )}
-      {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} />}
+      {editGroup && <EditGroupModal key={editGroup.key} group={editGroup} clients={clients} reload={reload} onClose={() => setEditGroup(null)} canRate={role === "director" || role === "citymanager"} />}
     </div>
   );
 }
@@ -8553,8 +8616,8 @@ export default function App() {
         {allowedTabs.includes(tab) && (
           <>
             {tab === "today" && <TodayTab orders={view.orders} clients={view.clients} drivers={data.drivers} stock={data.stock} notes={data.notes} me={user.name} role={user.role} reload={reload} applyLocal={applyLocal} driverFilter={user.role === "driver" ? (user.driverId || "") : null} canEdit={isDirector || isRep || isCityMgr} openSignal={openOrderSignal} activeCity={activeCity} />}
-            {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={calStock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} />}
-            {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} myDriverId={user.driverId || ""} />}
+            {tab === "calendar" && <CalendarTab orders={view.orders} drivers={data.drivers} clients={view.clients} stock={calStock} notes={data.notes} payments={view.payments} reload={reload} applyLocal={applyLocal} canEdit={isDirector || isRep || isCityMgr} showPrices={user.role !== "driver" && user.role !== "brigadir"} driverFilter={user.role === "driver" ? (user.driverId || "") : null} driverMode={user.role === "driver"} foremanMode={user.role === "brigadir"} serverStock={isRep} activeCity={activeCity} canRate={isDirector || isCityMgr} />}
+            {tab === "mysalary" && <MySalaryTab drivers={data.drivers} orders={data.orders} notes={data.notes} myDriverId={user.driverId || ""} />}
             {tab === "stock" && <div className="space-y-4">{canCity && <WarehouseSettings notes={data.notes} reload={reload} city={activeCity} multiCity={multiCity} cityLabel={cityName(data.notes, activeCity)} />}<StockTab stock={stockView} orders={stockOrdersView} trucks={data.trucks} expenses={data.expenses} reload={reload} canEdit={canCity} activeCity={activeCity} curCity={isRep ? activeCity : curCity /* у торгпреда нет переключателя городов — сразу склад его города, а не сводка «выбери город» */} notes={data.notes} multiCity={multiCity} allStock={data.stock} allOrderIds={allOrderIdSet} cities={cityList} /></div>}
             {tab === "lab" && <LabTab lab={data.lab} reload={reload} canEdit={isDirector || isCityMgr} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {tab === "revision" && (isDev || isCityMgr) && <RevisionTab stock={stockView} notes={data.notes} reload={reload} applyLocal={applyLocal} activeCity={activeCity} multiCity={multiCity} />}
