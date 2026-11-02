@@ -2553,7 +2553,9 @@ function RevisionTab({ stock = [], notes = [], reload, applyLocal = () => {}, ac
 
 function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [], role = "director", myUid = "", reload, canEdit = true, cities = [], activeCity = DEFAULT_CITY, focus = null }) {
   const isRep = role === "rep"; // торгпред видит только своих клиентов (сервер уже отфильтровал)
-  const isDirector = role === "director"; // сверка долга по акту — только директор
+  // «Свой» клиент торгпреда: в его группе ИЛИ он торгпред клиента (rep_uid) — даже если клиента перенесли в другую группу
+  const repMine = c => !!c && (c.ownerId === myUid || c.rep_uid === myUid);
+  const isDirector = role === "director"; // сверка долга по акту — директор (и торгпред — своим клиентам)
   const isCityMgr = role === "citymanager"; // менеджер города — его клиенты в его городе (сервер проставит)
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2711,8 +2713,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
 
-  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY, points: c.points || [], address_label: c.address_label || "", segment: c.segment || "" }); setShowAdd(true); };
-  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity, points: [], address_label: "", segment: "" }); setShowAdd(true); };
+  const openEdit = c => { setEditId(c.id); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: c.name, org_name: c.org_name || "", contact_name: c.contact_name || "", address: c.address, contact: c.contact || "", bin: c.bin || "", director: c.director || "", basis: c.basis || "", legal_address: c.legal_address || "", email: c.email || "", bank: c.bank || "", iik: c.iik || "", bik: c.bik || "", default_bag_kg: c.default_bag_kg || "", default_brand: c.default_brand || "", gis_link: c.gis_link || "", coords: c.coords || null, coords_manual: c.coords_manual || "", delivery_time: c.delivery_time || "", delivery_from: c.delivery_from || "", delivery_to: c.delivery_to || "", access_note: c.access_note || "", work_hours: c.work_hours || "", prices: c.prices || [], ownerId: c.ownerId || "", city: c.city || DEFAULT_CITY, points: c.points || [], address_label: c.address_label || "", segment: c.segment || "", rep_uid: c.rep_uid || "" }); setShowAdd(true); };
+  const openNew = () => { setEditId(null); setResolveErr(""); setClientText(""); setClientParseErr(""); setForm({ name: "", org_name: "", contact_name: "", address: "", contact: "", bin: "", director: "", basis: "", legal_address: "", email: "", bank: "", iik: "", bik: "", default_bag_kg: "", default_brand: "", gis_link: "", coords: null, coords_manual: "", delivery_time: "", delivery_from: "", delivery_to: "", access_note: "", work_hours: "", prices: [], ownerId: isRep ? myUid : "", city: activeCity, points: [], address_label: "", segment: "", rep_uid: isRep ? myUid : "" }); setShowAdd(true); };
 
   const handleResolve = async () => {
     setResolving(true); setResolveErr("");
@@ -2734,7 +2736,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const saveClient = async () => {
     setSaving(true);
     // ownerId: торгпреду сервер всё равно проставит своего; админ выбирает группу (пусто = наши)
-    const ownerId = isRep ? myUid : (form.ownerId || "");
+    // торгпред: новый клиент — в его группу; существующий остаётся в своей группе (сервер решает так же)
+    const ownerId = isRep ? (editId ? (clients.find(x => x.id === editId)?.ownerId || "") : myUid) : (form.ownerId || "");
     // Доп. адреса доставки: пустые убираем, координаты для маршрута берём из ссылки 2ГИС (как у основного адреса)
     const points = [];
     for (const p of (form.points || [])) {
@@ -2889,6 +2892,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             <Inp label="Название заведения" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Мамыр" />
             {!isRep && !isCityMgr && cities.length > 1 && <Sel label="Город" value={form.city || DEFAULT_CITY} onChange={e => setForm({ ...form, city: e.target.value })} options={cities.map(c => ({ value: c.id, label: c.name }))} />}
             {!isRep && repUsers.length > 0 && <Sel label="Группа клиента" value={form.ownerId || ""} onChange={e => setForm({ ...form, ownerId: e.target.value })} options={[{ value: "", label: houseName }, ...repUsers.map(u => ({ value: u.id, label: u.group_name || u.name }))]} />}
+            {!isRep && repUsers.length > 0 && <Sel label="Торгпред клиента (может править карточку, вносить оплаты и долг — в любой группе)" value={form.rep_uid || ""} onChange={e => setForm({ ...form, rep_uid: e.target.value })} options={[{ value: "", label: "— нет —" }, ...repUsers.map(u => ({ value: u.id, label: u.name }))]} />}
             <Sel label="Тип клиента (для списков в «Долгах»)" value={form.segment || ""} onChange={e => setForm({ ...form, segment: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...SEGMENTS.map(s => ({ value: s.id, label: s.label }))]} />
             <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
@@ -3005,12 +3009,12 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
                   {(c.default_bag_kg || c.default_brand) && <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-2 py-1 mt-1 inline-flex items-center gap-1"><Icon name="box" size={12} />{c.default_brand || "—"} · {c.default_bag_kg ? c.default_bag_kg + " кг мешки" : "фасовка не указана"}</div>}
                   {(c.prices || []).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{c.prices.map((p, i) => <span key={i} className="bg-amber-50 text-amber-800 text-xs px-2 py-0.5 rounded-full">{p.brand} {p.grade} {p.bag_kg}кг — {fmt(p.price_per_kg)}тг</span>)}</div>}
                 </div>
-                {canEdit && (!isRep || c.ownerId === myUid) && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}><Icon name="trash" size={15} /></Btn></div>}
+                {canEdit && (!isRep || repMine(c)) && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(c)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => deleteClient(c.id)}><Icon name="trash" size={15} /></Btn></div>}
               </div>
               <div className="flex gap-2 flex-wrap">
                 <Btn size="sm" variant="secondary" onClick={() => setHistoryClient(c)}><Icon name="clipboard" size={15} />История и оплаты</Btn>
-                {canEdit && (!isRep || c.ownerId === myUid) && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}><Icon name="link" size={15} />Заказ-ссылка</Btn>}
-                {canEdit && (!isRep || c.ownerId === myUid) && <Btn size="sm" variant="secondary" onClick={() => togglePause(c)}>{c.paused ? "▶ Возобновить" : "⏸ Приостановить"}</Btn>}
+                {canEdit && (!isRep || repMine(c)) && (c.prices || []).length > 0 && <Btn size="sm" variant="secondary" onClick={() => copyOrderLink(c)}><Icon name="link" size={15} />Заказ-ссылка</Btn>}
+                {canEdit && (!isRep || repMine(c)) && <Btn size="sm" variant="secondary" onClick={() => togglePause(c)}>{c.paused ? "▶ Возобновить" : "⏸ Приостановить"}</Btn>}
               </div>
               {c.paused && <div className="text-xs text-gray-600 bg-gray-100 rounded-lg px-2 py-1 mt-2">⏸ Работа приостановлена{c.paused_at ? ` с ${c.paused_at.split("-").reverse().join(".")}` : ""}{c.paused_note ? ` · ${c.paused_note}` : ""}. В «давно не заказывали», «Напомнить» и прогнозе закупа не учитывается.</div>}
             </div>
@@ -3031,9 +3035,9 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
           const withPaused = list => <>{list}{pausedSection}</>;
           if (isRep) {
             // торгпред: свои — плоским списком; если админ открыл ему чужие группы — разделы «Мои» / «Наши» / группы торгпредов
-            const others = shown.filter(c => c.ownerId !== myUid);
+            const others = shown.filter(c => !repMine(c));
             if (!others.length) return withPaused(shown.map(card));
-            const rGroups = [{ key: "mine", label: "Мои клиенты", items: shown.filter(c => c.ownerId === myUid) }, { key: "", label: houseName, items: others.filter(c => !c.ownerId) },
+            const rGroups = [{ key: "mine", label: "Мои клиенты", items: shown.filter(repMine) }, { key: "", label: houseName, items: others.filter(c => !c.ownerId) },
               ...repUsers.filter(u => u.id !== myUid).map(u => ({ key: u.id, label: u.group_name || u.name, items: others.filter(c => c.ownerId === u.id) }))];
             return withPaused(rGroups.filter(g => g.items.length).map(g => (
               <div key={g.key || "house"} className="space-y-3">
@@ -3118,7 +3122,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               {adjustSum !== 0 && <div className="text-sky-600">Корректировка по акту сверки: {adjustSum > 0 ? "−" : "+"}{fmt(Math.abs(adjustSum))} тг</div>}
               <div className={debtAll > 0 ? "text-red-600 font-bold" : "text-gray-500"}>{debtAll < 0 ? `Переплата (всего): ${fmt(-debtAll)} тг` : `Текущий долг (всего): ${fmt(debtAll)} тг`}</div>
             </div>
-            {isDirector && (
+            {(isDirector || (isRep && repMine(historyClient))) && (
               <div className="mb-3">
                 {!showReconcile ? (
                   <Btn size="sm" variant="secondary" onClick={() => { setShowReconcile(true); setReconcileVal(""); }}><Icon name="receipt" size={15} />Выставить долг по акту сверки</Btn>

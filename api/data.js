@@ -77,6 +77,7 @@ function clientText(c, ex) {
   const ptsKey = x => JSON.stringify((x.points || []).map(p => [p.label || "", p.address || ""]));
   if (ptsKey(ex) !== ptsKey(c)) ch.push("адреса доставки");
   if ((ex.ownerId || "") !== (c.ownerId || "")) ch.push("группа");
+  if ((ex.rep_uid || "") !== (c.rep_uid || "")) ch.push("торгпред клиента");
   if ((ex.segment || "") !== (c.segment || "")) ch.push(`тип: ${({ b2b: "B2B", market: "Open market" })[c.segment] || "не указан"}`);
   if ((ex.city || "astana") !== (c.city || "astana")) ch.push("город");
   if (!!ex.paused !== !!c.paused) ch.push(c.paused ? `работа приостановлена${c.paused_note ? ` (${c.paused_note})` : ""}` : "работа возобновлена");
@@ -357,18 +358,32 @@ ${list || "(пусто)"}
 // торгпреда), но ТОЛЬКО в городах торгпреда. Видимых клиентов он видит полностью (цены, долги)
 // и может вести по ним заявки/оплаты; править/удалять карточку — только свою.
 const repCities = u => (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+// «Свой» клиент торгпреда: в его группе (ownerId) ИЛИ он торгпред этого клиента (rep_uid — кто добавил/ведёт;
+// сохраняется, даже если админ перенёс клиента в другую группу, например в B2B «Наши клиенты»).
+const repOwns = (u, c) => !!c && (c.ownerId === u.uid || c.rep_uid === u.uid);
 async function repVisibleClients(u) {
   const sg = u.seeGroups || [];
-  if (!sg.length) return await dbFindBy("clients", "ownerId", u.uid);
+  if (!sg.length) {
+    const [a, b] = await Promise.all([dbFindBy("clients", "ownerId", u.uid), dbFindBy("clients", "rep_uid", u.uid)]);
+    const m = new Map(); for (const c of [...a, ...b]) if (c && c.id) m.set(c.id, c);
+    return [...m.values()];
+  }
   const [all, users] = await Promise.all([dbList("clients"), dbList("users")]);
   const repIds = new Set(users.filter(x => x.role === "rep").map(x => x.id));
   const myC = repCities(u);
-  return all.filter(c => c.ownerId === u.uid || (myC.includes(c.city || "astana") &&
+  return all.filter(c => repOwns(u, c) || (myC.includes(c.city || "astana") &&
     (c.ownerId ? (repIds.has(c.ownerId) && sg.includes(c.ownerId)) : sg.includes("_main"))));
+}
+// Клиента переносят из группы торгпреда в другую — запоминаем этого торгпреда (rep_uid), чтобы он и дальше вёл
+// своего клиента. Так 16.10 Emran потерял права на 4 своих клиентов, которых перенесли в «Наши» (B2B).
+async function keepRepOnMove(existing, item) {
+  if (!existing || item.rep_uid || !existing.ownerId || existing.rep_uid || item.ownerId === existing.ownerId) return item;
+  const prev = await dbGet("users", existing.ownerId).catch(() => null);
+  return prev && prev.role === "rep" ? { ...item, rep_uid: existing.ownerId } : item;
 }
 async function repSeesClient(u, cli) {
   if (!cli) return false;
-  if (cli.ownerId === u.uid) return true;
+  if (repOwns(u, cli)) return true;
   const sg = u.seeGroups || [];
   if (!sg.length || !repCities(u).includes(cli.city || "astana")) return false;
   if (!cli.ownerId) return sg.includes("_main");
@@ -577,6 +592,7 @@ async function upsertFor(u, table, item) {
       const photo_at = { ...(existing.photo_at || {}), ...(item.photo_at || {}) }; // время загрузки каждого документа
       item = { ...item, delivered_by_driver: !!existing.delivered_by_driver || !!item.delivered_by_driver, delivered_at: item.delivered_at || existing.delivered_at, photos, photo_at };
     }
+    if (table === "clients") item = await keepRepOnMove(existing, item); // перенесли из группы торгпреда — он остаётся торгпредом клиента
     const out = await dbUpsert(table, item);
     if (table === "orders") await syncOrderStock(existing, item); // движение склада всегда = заявке (пересчёт при правках)
     if (table === "payments") await logPay(u, item, existing); // история «Долгов»
@@ -591,7 +607,7 @@ async function upsertFor(u, table, item) {
     const inMy = c => myCities.includes(c || "astana");
     const guard = async (t) => { const ex = await dbGet(t, item.id); if (ex && !inMy(ex.city || "astana")) throw new Error("Это запись другого города"); return ex; };
     const cityFor = ex => ex ? (ex.city || myCities[0]) : (inMy(item.city) ? item.city : myCities[0]); // правка — сохраняем город записи; новая — выбранный (из его городов)
-    if (table === "clients") { const ex = await guard("clients"); const rec = { ...item, city: cityFor(ex) }; await dbUpsert("clients", rec); await logClient(u, rec, ex); return; }
+    if (table === "clients") { const ex = await guard("clients"); const rec = await keepRepOnMove(ex, { ...item, city: cityFor(ex) }); await dbUpsert("clients", rec); await logClient(u, rec, ex); return; }
     if (table === "drivers") { const ex = await guard("drivers"); return dbUpsert("drivers", { ...item, city: cityFor(ex) }); }
     if (table === "expenses") { const ex = await guard("expenses"); return dbUpsert("expenses", { ...item, city: cityFor(ex) }); }
     if (table === "stock") {
@@ -720,8 +736,11 @@ async function upsertFor(u, table, item) {
     // Торгпред меняет ТОЛЬКО своё: клиентов своей группы, заявки и оплаты своих клиентов.
     if (table === "clients") {
       const existing = await dbGet("clients", item.id);
-      if (existing && existing.ownerId !== u.uid) throw new Error("Это не ваш клиент");
-      { const rec = { ...item, ownerId: u.uid }; await dbUpsert("clients", rec); await logClient(u, rec, existing); return; } // всегда в его группу — чужую нельзя
+      if (existing && !repOwns(u, existing)) throw new Error("Это не ваш клиент");
+      // Новый клиент — в его группу и он торгпред клиента. Существующий — группу не меняем (админ мог перенести
+      // в B2B), торгпред клиента — он. Чужую группу/торгпреда выставить нельзя.
+      const rec = { ...item, ownerId: existing ? (existing.ownerId || "") : u.uid, rep_uid: u.uid };
+      await dbUpsert("clients", rec); await logClient(u, rec, existing); return;
     }
     if (table === "orders") {
       const existing = await dbGet("orders", item.id);
