@@ -1720,6 +1720,15 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
     setSaving(false);
   };
   const deleteMovement = async id => {
+    // Списание по отгрузке клиента (mv_<заявка>): если удалить только его, отгрузка и долг клиента останутся,
+    // а склад разойдётся с заявками. Поэтому удаляем саму отгрузку — сервер уберёт и списание, долг пересчитается.
+    const orderId = typeof id === "string" && id.startsWith("mv_") ? id.slice(3) : "";
+    const o = orderId && orders.find(x => x.id === orderId);
+    if (o) {
+      if (!confirm(`Это списание по отгрузке клиента «${o.clientName || "?"}» за ${String(o.date || "").split("-").reverse().join(".")} (${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags}).\n\nЕсли удалить только движение склада, отгрузка и ДОЛГ клиента останутся.\n\nОК — удалить саму отгрузку: уйдут и списание со склада, и долг.\nОтмена — ничего не удалять. (Поправить отгрузку можно в «Клиенты» → клиент → «История».)`)) return;
+      try { await dbDelete("orders", orderId); await reload("orders"); await reload("stock"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
+      return;
+    }
     if (!confirm("Удалить эту запись со склада? Остаток пересчитается.")) return;
     try { await dbDelete("stock", id); await reload("stock"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
   };
@@ -2563,6 +2572,14 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   const [resolving, setResolving] = useState(false);
   const [resolveErr, setResolveErr] = useState("");
   const [historyClient, setHistoryClient] = useState(null);
+  const [editShip, setEditShip] = useState(null); // отгрузка клиента (дата+адрес) — «Изменить» из истории
+  // Удалить отгрузку целиком: сервер уберёт и списание со склада (mv_), долг клиента пересчитается сам
+  const deleteShipment = async list => {
+    const kg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0), sum = list.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
+    if (!confirm(`Удалить отгрузку за ${String(list[0].date).split("-").reverse().join(".")} (${fmt(kg)} кг, ${fmt(sum)} тг)?\nМука вернётся на склад, долг клиента уменьшится.`)) return;
+    try { await Promise.all(list.map(o => dbDelete("orders", o.id))); await reload("orders"); await reload("stock"); }
+    catch (e) { alert("⚠️ Не удалилось: " + ((e && e.message) || e)); reload("orders"); }
+  };
   const [stmtBusy, setStmtBusy] = useState(false); // выписка клиента в Excel формируется
   // Переход из «Долгов» (история действий): сразу открыть «История и оплаты» этого клиента
   useEffect(() => { if (!focus) return; const c = clients.find(x => x.id === focus.id); if (c) setHistoryClient(c); }, [focus && focus.t]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -3075,8 +3092,8 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
           return true;
         };
         const co = orders.filter(o => o.clientId === historyClient.id && inPeriod(o)).sort((a, b) => b.date.localeCompare(a.date));
-        const byDate = {};
-        co.forEach(o => { (byDate[o.date] = byDate[o.date] || []).push(o); });
+        const byDate = {}; // отгрузка = дата + адрес доставки (у клиента может быть несколько точек)
+        co.forEach(o => { const k = `${o.date}|${o.pointId || ""}`; (byDate[k] = byDate[k] || []).push(o); });
         const delivered = co.filter(o => o.status === "отгружена");
         const totalKg = delivered.reduce((s, o) => s + o.bags * o.bag_kg, 0);
         const totalDelivered = delivered.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
@@ -3165,19 +3182,28 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
               </div>
             )}
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              {Object.entries(byDate).map(([date, list]) => {
+              {Object.entries(byDate).map(([gKey, list]) => {
+                const date = list[0].date;
                 const sum = list.reduce((s, o) => s + o.bags * o.bag_kg * (o.price_per_kg || 0), 0);
                 const kg = list.reduce((s, o) => s + o.bags * o.bag_kg, 0);
                 const allPaid = list.every(o => o.paid);
                 const method = list.find(o => o.pay_method)?.pay_method;
                 const isFree = sum <= 0 && list.every(o => o.trial || o.isSample); // вся отгрузка на пробу — платить нечего
+                const pt = list[0].pointId && (historyClient.points || []).find(p => p.id === list[0].pointId);
+                const canShip = canEdit && (!isRep || repMine(historyClient)); // править/удалять отгрузку
                 return (
-                  <div key={date} className={`border rounded-xl p-3 text-sm ${isFree ? "border-orange-200 bg-orange-50" : allPaid ? "border-emerald-200 bg-emerald-50" : "border-gray-100"}`}>
+                  <div key={gKey} className={`border rounded-xl p-3 text-sm ${isFree ? "border-orange-200 bg-orange-50" : allPaid ? "border-emerald-200 bg-emerald-50" : "border-gray-100"}`}>
                     <div className="flex items-center justify-between">
-                      <span className="font-medium">{date.split("-").reverse().join(".")}</span>
+                      <span className="font-medium">{date.split("-").reverse().join(".")}{pt ? <span className="text-xs font-normal text-gray-500"> · {pt.label || pt.address}</span> : null}</span>
                       <span className="text-gray-500">{fmt(kg)} кг · {fmt(sum)} тг</span>
                     </div>
-                    {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags} — {o.status}</div>)}
+                    {list.map(o => <div key={o.id} className="text-gray-500 text-xs mt-0.5">• {o.brand} {o.grade} {o.bag_kg}кг × {o.bags}{o.price_per_kg ? ` · ${fmt(o.price_per_kg)} тг/кг` : ""} — {o.status}</div>)}
+                    {canShip && (
+                      <div className="flex gap-2 mt-2">
+                        <Btn size="sm" variant="secondary" onClick={() => setEditShip({ key: gKey, clientName: historyClient.name, orders: list })}><Icon name="pencil" size={14} />Изменить</Btn>
+                        <Btn size="sm" variant="danger" onClick={() => deleteShipment(list)}><Icon name="trash" size={14} />Удалить</Btn>
+                      </div>
+                    )}
                     <div className="mt-2">
                       {isFree
                         ? <span className="text-orange-600 font-medium text-xs">На пробу — бесплатно</span>
@@ -3195,6 +3221,9 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
           </Modal>
         );
       })()}
+      {/* правка отгрузки из истории: склад (на сервере) и долг пересчитываются сами */}
+      {editShip && <EditGroupModal key={editShip.key} group={editShip} clients={clients} onClose={() => setEditShip(null)} canRate={isDirector || isCityMgr}
+        reload={async t => { await reload(t); if (t === "orders") reload("stock"); }} />}
     </div>
   );
 }
