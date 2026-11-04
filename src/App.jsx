@@ -724,42 +724,27 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
   // Повторное списание (двойное нажатие, два администратора) перезаписывает ту же строку — не задваивается.
   // Отмена отгрузки удаляет эту строку — точный откат без «дрейфа» остатков.
   const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
-  // serverStock=true (торгпред): движение склада пишет СЕРВЕР при сохранении заявки — у роли rep
-  // нет прав на таблицу stock, и попытка записать её из браузера дала бы ложную ошибку.
-  const shipStock = o => serverStock ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}`, city: orderCity(o, clients) });
-  const unshipStock = async o => {
-    if (serverStock) return; // откат тоже делает сервер
-    if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id); // точный откат
-    // заявки, списанные до этого обновления, возвращаем отдельной строкой (как раньше)
-    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}`, city: orderCity(o, clients) });
-  };
+  // Движение склада по заявке (mv_<id>) пишет и откатывает СЕРВЕР при сохранении заявки (syncOrderStock в api/data.js) —
+  // для всех ролей. Браузер этого больше не дублирует: он решал по своей копии склада, а она могла не успеть обновиться —
+  // 03.11 отмена отгрузки не увидела mv_ и добавила лишний «Возврат» +2500 кг (Смагулова Пампушка).
 
-  // Директор подтверждает доставку → списание со склада
+  // Директор подтверждает доставку → списание со склада (на сервере)
   const confirmDelivery = async o => {
     try {
       await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена", city: o.city || orderCity(o, clients) });
-      if (o.status !== "отгружена") {
-        await shipStock(o);
-        await reload("stock");
-      }
+      if (o.status !== "отгружена") await reload("stock");
       await reload("orders");
     } catch (e) { notifyErr(e); }
   };
 
-  // Изменение статуса. Если переключаем НА "отгружена" — списываем со склада;
-  // если снимаем "отгружена" — возвращаем на склад, чтобы остатки не врали.
+  // Изменение статуса. Переключили НА "отгружена" — сервер списывает со склада;
+  // сняли "отгружена" — возвращает на склад, чтобы остатки не врали.
   const updateStatus = async (o, status) => {
     if (status === o.status) return;
     try {
       // при отгрузке фиксируем город на заявке (o.city), чтобы склад и заявка не разъехались по городам
       await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) });
-      if (status === "отгружена" && o.status !== "отгружена") {
-        await shipStock(o);
-        await reload("stock");
-      } else if (status !== "отгружена" && o.status === "отгружена") {
-        await unshipStock(o);
-        await reload("stock");
-      }
+      if ((status === "отгружена") !== (o.status === "отгружена")) await reload("stock");
       await reload("orders");
     } catch (e) { notifyErr(e); }
   };
@@ -813,10 +798,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
         if (o.status === status) return;
         // При отгрузке ФИКСИРУЕМ город на самой заявке (o.city), чтобы движение склада и заявка
         // не «разъехались» по городам, если позже поменять город клиента.
-        await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) });
-        if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
-        if (status === "отгружена" && o.status !== "отгружена") await shipStock(o);
-        else if (status !== "отгружена" && o.status === "отгружена") await unshipStock(o);
+        await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) }); // склад списывает/возвращает сервер
       }));
       reload("stock"); // склад подтянем в фоне (не блокируя экран)
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
@@ -830,8 +812,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
     try {
       await Promise.all(g.orders.map(async o => {
         if (o.confirmed && o.status === "отгружена") return;
-        await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена", city: o.city || orderCity(o, clients) });
-        if (o.status !== "отгружена" && !o.fromKaraganda) await shipStock(o);
+        await dbUpsert("orders", { ...o, confirmed: true, status: "отгружена", city: o.city || orderCity(o, clients) }); // списание — на сервере
       }));
       reload("stock");
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }
@@ -7797,14 +7778,8 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
   const notifyErr = e => alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз.");
   // Железный учёт: одно движение склада на позицию (id = mv_<id заявки>) — не задваивается, отмена = точный откат
   const busyRef = useRef(new Set()); // замок: группа, по которой уже идёт сохранение
-  // У торгпреда (isRep) движение склада пишет СЕРВЕР при сохранении заявки: прав на таблицу
-  // stock у роли rep нет, запись из браузера дала бы ложную ошибку «Нет прав на изменение».
-  const shipStock = o => isRep ? Promise.resolve() : dbUpsert("stock", { id: "mv_" + o.id, date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: -(o.bags * o.bag_kg), bags: -o.bags, bag_kg: o.bag_kg, note: `Отгрузка: ${o.clientName}`, city: orderCity(o, clients) });
-  const unshipStock = async o => {
-    if (isRep) return; // откат тоже делает сервер
-    if (stock.some(s => s.id === "mv_" + o.id)) return dbDelete("stock", "mv_" + o.id);
-    return dbUpsert("stock", { id: uid(), date: TODAY(), brand: o.brand, grade: o.grade, weight_kg: o.bags * o.bag_kg, bags: o.bags, bag_kg: o.bag_kg, note: `Возврат: ${o.clientName}`, city: orderCity(o, clients) });
-  };
+  // Движение склада (mv_<id заявки>) пишет и откатывает СЕРВЕР при сохранении заявки (syncOrderStock) — для всех ролей.
+  // Браузер не дублирует: по устаревшей копии склада он однажды записал лишний «Возврат» (03.11, +2500 кг).
   const setGroupStatus = async (g, status) => {
     if (busyRef.current.has(g.key)) return; // пока первое нажатие сохраняется, второе игнорируем
     busyRef.current.add(g.key);
@@ -7815,10 +7790,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
         if (o.status === status) return;
         // При отгрузке ФИКСИРУЕМ город на самой заявке (o.city), чтобы движение склада и заявка
         // не «разъехались» по городам, если позже поменять город клиента.
-        await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) });
-        if (o.fromKaraganda) return; // карагандинские отгрузки склад Астаны не трогают
-        if (status === "отгружена" && o.status !== "отгружена") await shipStock(o);
-        else if (status !== "отгружена" && o.status === "отгружена") await unshipStock(o);
+        await dbUpsert("orders", { ...o, status, ...(status === "отгружена" ? { city: o.city || orderCity(o, clients) } : {}) }); // склад списывает/возвращает сервер
       }));
       reload("stock");
     } catch (e) { notifyErr(e); reload("orders"); reload("stock"); }

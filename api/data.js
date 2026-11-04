@@ -798,15 +798,31 @@ async function syncOrderStock(existing, item) {
   const nowShipped = item.status === "отгружена";
   const wasShipped = !!(existing && existing.status === "отгружена");
   const bags = Number(item.bags) || 0, bag_kg = Number(item.bag_kg) || 0;
-  let prev = null; try { prev = await dbGet("stock", mvId); } catch {} // движение по этой заявке (если есть)
+  // Ошибки чтения/записи склада НЕ глотаем: заявка уже сохранена, пусть браузер покажет «Не сохранилось» —
+  // повторное нажатие досчитает склад (ниже). Иначе склад молча разошёлся бы с заявкой.
+  const prev = await dbGet("stock", mvId); // движение по этой заявке (если есть)
+  const exDate = String((existing && existing.date) || item.date || "");
   // Не отгружена (или пустая позиция) — движение по заявке убираем, если оно было.
-  if (!nowShipped || !bags || !bag_kg) { if (prev) { try { await dbDelete("stock", mvId); } catch {} } return; }
-  // Отгружена. Пишем/обновляем mv_ ТОЛЬКО когда:
+  if (!nowShipped || !bags || !bag_kg) {
+    if (prev) await dbDelete("stock", mvId);
+    // Отгрузка по-старому (до 15.07.2026 списывалась строкой со случайным id, mv_ нет) — возвращаем муку строкой
+    // ret_<заявка>. Раньше это делал браузер по своей копии склада и мог вернуть дважды (03.11: лишние +2500 кг).
+    // id постоянный — повторное сохранение возврат не задвоит. Заявки торгпредов того времени склад не списывали — им не возвращаем.
+    else if (wasShipped && !nowShipped && exDate < "2026-07-15" && existing.created_by_role !== "rep") {
+      const eb = Number(existing.bags) || 0, ek = Number(existing.bag_kg) || 0;
+      let city = existing.city || null;
+      if (!city && existing.clientId) { try { const cli = await dbGet("clients", existing.clientId); city = cli && cli.city; } catch {} }
+      if (eb && ek) await dbUpsert("stock", { id: "ret_" + item.id, date: todayAstana(), brand: existing.brand, grade: existing.grade, bag_kg: ek, bags: eb, weight_kg: eb * ek, note: `Возврат: ${existing.clientName || ""}`, city: city || "astana" });
+    }
+    return;
+  }
+  // Отгружена. Пишем/обновляем mv_, когда:
   //  • заявка ТОЛЬКО ЧТО стала отгружена (переход) → создаём списание;
-  //  • или mv_ уже есть → пересчитываем под текущее кол-во/сорт (лечит правку ПОСЛЕ отгрузки — недостача не копится).
-  // Если заявка была отгружена, но mv_ НЕТ — значит списана по-старому (случайный id движения);
-  // НЕ создаём mv_, иначе задвоим списание старых отгрузок.
-  if (!prev && wasShipped) return;
+  //  • или mv_ уже есть → пересчитываем под текущее кол-во/сорт (лечит правку ПОСЛЕ отгрузки — недостача не копится);
+  //  • или заявка с 09.2026 без mv_ — значит прошлая запись склада сорвалась, досписываем (у всех таких отгрузок mv_ есть).
+  // Заявка до 09.2026 отгружена, а mv_ НЕТ — списана по-старому (случайный id движения) или (торгпред, 31.07–17.08)
+  // не списана вовсе и закрыта ревизией. mv_ НЕ создаём, иначе задвоим списание.
+  if (!prev && wasShipped && exDate < "2026-09-01") return;
   let city = item.city || null;
   if (!city && item.clientId) { try { const cli = await dbGet("clients", item.clientId); city = cli && cli.city; } catch {} }
   city = city || "astana";
