@@ -266,7 +266,7 @@ const NAV_ICON = { today: "home", calendar: "calendar", stock: "box", lab: "flas
 const NAV_SHORT = { today: "Сегодня", calendar: "Календарь", stock: "Склад", lab: "Лаборатория", revision: "Ревизия", clients: "Клиенты", crm: "CRM", reactivate: "Напомнить", reports: "Отчёты", debts: "Долги", contracts: "Договоры", invoice: "Накладная", orders: "Заявки", supply: "Поставки", karaganda: "Под клиента", kgdm: "Менеджеры КГД", drivers: "Зарплата", mysalary: "Моя ЗП", expenses: "Расходы", cashbox: "Касса", cities: "Города", access: "Доступ" };
 const BRANDS = ["ДАРАД", "ДАЛА НАН"];
 const GRADES = ["Высший сорт", "Первый сорт", "Отруби"];
-const WEIGHTS = [5, 10, 25, 35, 50];
+const WEIGHTS = [2, 5, 10, 25, 35, 50];
 // 🏙 Мультигород: справочник городов хранится в notes id="cities" (data.items=[{id,name,kind,req}]).
 // kind: "mill" — мельница/источник (Караганда), "warehouse" — склад в городе (Астана и др.).
 // Пока справочник не заполнен — показываем два города по умолчанию, чтобы приложение работало сразу.

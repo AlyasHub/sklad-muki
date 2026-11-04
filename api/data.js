@@ -948,7 +948,7 @@ async function runAssistant(message, debug) {
   const prompt = `Ты — ИИ-помощник склада муки «Darad». Пользователь пишет задачу простым языком, ты определяешь, к чему она относится, и возвращаешь СТРОГО ОДИН JSON-объект без markdown и без пояснений вокруг.
 
 СЕГОДНЯ ${today} (${weekday}). ЗАВТРА ${tomorrow}.
-Бренды: ${AI_BRANDS.join(", ")}. Сорта: ${AI_GRADES.join(", ")}. Фасовки мешков: 5, 10, 25, 50 кг.
+Бренды: ${AI_BRANDS.join(", ")}. Сорта: ${AI_GRADES.join(", ")}. Фасовки мешков: 2, 5, 10, 25, 50 кг.
 Способы оплаты (method): ${AI_PAY_METHODS.join(", ")}.
 Категории расходов (category): ${AI_EXPENSE_CATS.join(", ")}.
 
