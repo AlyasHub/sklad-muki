@@ -508,8 +508,12 @@ function PointSel({ client, value, onChange }) {
 }
 // Клиенты для выпадающих списков: приостановленные — в конце и с пометкой
 // Тип клиента — для списков в «Долгах»: B2B (заведения, компании) и Open market (рынок)
-const SEGMENTS = [{ id: "b2b", label: "B2B" }, { id: "market", label: "Open market" }];
-const segLabel = s => (SEGMENTS.find(x => x.id === s) || {}).label || "";
+// Группы клиентов — ровно как списки во вкладке «Клиенты»: «наши» (ownerId пустой, название — notes «clientgroups»)
+// и группа каждого торгпреда (ownerId = его id). По ним же — долги и списки в «Долгах» и отчёт «По торгпредам».
+const clientGroups = (users, notes) => [
+  { id: "", label: ((notes || []).find(n => n.id === "clientgroups") || {}).houseName || "Наши клиенты" },
+  ...(users || []).filter(u => u.role === "rep").map(u => ({ id: u.id, label: u.group_name || u.name })),
+];
 const clientOptions = list => [...(list || [])].sort((a, b) => (a.paused ? 1 : 0) - (b.paused ? 1 : 0)).map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") + (c.paused ? " · ⏸ приостановлен" : "") }));
 // pointId только если такая точка есть у этого клиента (защита от «чужой» точки после смены клиента)
 const validPoint = (client, pid) => (pid && client && (client.points || []).some(p => p.id === pid)) ? pid : "";
@@ -2891,7 +2895,6 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
             {!isRep && !isCityMgr && cities.length > 1 && <Sel label="Город" value={form.city || DEFAULT_CITY} onChange={e => setForm({ ...form, city: e.target.value })} options={cities.map(c => ({ value: c.id, label: c.name }))} />}
             {!isRep && repUsers.length > 0 && <Sel label="Группа клиента" value={form.ownerId || ""} onChange={e => setForm({ ...form, ownerId: e.target.value })} options={[{ value: "", label: houseName }, ...repUsers.map(u => ({ value: u.id, label: u.group_name || u.name }))]} />}
             {!isRep && repUsers.length > 0 && <Sel label="Торгпред клиента (может править карточку, вносить оплаты и долг — в любой группе)" value={form.rep_uid || ""} onChange={e => setForm({ ...form, rep_uid: e.target.value })} options={[{ value: "", label: "— нет —" }, ...repUsers.map(u => ({ value: u.id, label: u.name }))]} />}
-            <Sel label="Тип клиента (для списков в «Долгах»)" value={form.segment || ""} onChange={e => setForm({ ...form, segment: e.target.value })} options={[{ value: "", label: "— не указан —" }, ...SEGMENTS.map(s => ({ value: s.id, label: s.label }))]} />
             <Inp label="Организация (ИП / ТОО)" value={form.org_name} onChange={e => setForm({ ...form, org_name: e.target.value })} placeholder="ИП Салават" />
             <Inp label="Имя контакта (кто пишет)" value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Азиз" />
             <Inp label="Адрес доставки" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
@@ -3774,7 +3777,9 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   // 📊 По торгпредам: оборот/тоннаж/заявки за период + текущий долг (всё неоплаченное минус оплаты)
   const repsList = (users || []).filter(u => u.role === "rep");
   const ownerByClient = {}; (clients || []).forEach(c => { if (c.ownerId) ownerByClient[c.id] = c.ownerId; });
-  const ownerOf = o => ownerByClient[o.clientId] || (o.created_by_role === "rep" ? o.created_by : null); // клиент → его торгпред (или автор-пробник)
+  // Строго по группе клиента в «Клиентах»: клиент из «наших» не идёт торгпреду, даже если заявку внёс он.
+  // По автору заявки — только разовые/пробники без карточки клиента.
+  const ownerOf = o => o.clientId ? (ownerByClient[o.clientId] || null) : (o.created_by_role === "rep" ? o.created_by : null);
   const repAgg = {};
   const repEnsure = id => (repAgg[id] = repAgg[id] || { kg: 0, rev: 0, ordSet: new Set(), cliSet: new Set(), debt: 0 });
   delivered.forEach(o => { const owner = ownerOf(o); if (!owner) return; const a = repEnsure(owner); a.kg += o.bags * o.bag_kg; a.rev += o.bags * o.bag_kg * (o.price_per_kg || 0); a.ordSet.add((o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date); if (o.clientId) a.cliSet.add(o.clientId); });
@@ -7094,46 +7099,30 @@ function OsvImport({ clients = [], orders = [], payments = [], reload, onClose }
   );
 }
 
-// 📋 Списки клиентов по типу (B2B / Open market): выбрать группу и скопировать всех её клиентов —
-// юр. название и БИН (без долгов), по алфавиту. Режим «Расставить типы» — быстро отметить клиентов кнопками.
-function SegmentLists({ clients = [], reload, canEdit = false }) {
-  const [seg, setSeg] = useState("b2b");
+// 📋 Список клиентов выбранной группы (как в «Клиентах»): скопировать всех — юр. название и БИН (без долгов), по алфавиту.
+// Группу выбирают переключателем вверху «Долгов» (он же фильтрует долги).
+function GroupClientList({ clients = [], label = "" }) {
   const [open, setOpen] = useState(false);
-  const [assign, setAssign] = useState(false);
-  const [onlyUnset, setOnlyUnset] = useState(true);
-  const [busyId, setBusyId] = useState("");
-  const groups = [...SEGMENTS, { id: "", label: "Без типа" }];
-  const inSeg = s => clients.filter(c => (c.segment || "") === s);
   const title = c => {
     const org = String(c.org_name || "").trim(), name = String(c.name || "").trim();
     return org ? (name && !org.toLowerCase().includes(name.toLowerCase()) ? `${org} (${name})` : org) : name;
   };
   // по алфавиту — без «ИП / ТОО» и кавычек в начале, иначе они сбивают порядок
   const sortKey = c => title(c).replace(/^\s*(ип|тоо|ао|чп)(?=[\s«»"'‘’“”„.]|$)\.?\s*/i, "").replace(/^[\s«»"'‘’“”„.]+/, "").toLowerCase(); // \b не работает с кириллицей
-  const list = inSeg(seg).sort((a, b) => sortKey(a).localeCompare(sortKey(b), "ru"));
+  const list = [...clients].sort((a, b) => sortKey(a).localeCompare(sortKey(b), "ru"));
   const line = (c, i) => `${i + 1}. ${title(c)} — БИН ${String(c.bin || "").trim() || "не указан"}`;
   const copy = () => {
-    const head = `${seg ? segLabel(seg) : "Клиенты без типа"} — ${TODAY().split("-").reverse().join(".")}`;
+    const head = `${label} — ${TODAY().split("-").reverse().join(".")}`;
     copyToClipboard([head, "", ...list.map(line), "", `Итого: ${list.length} клиент.`].join("\n"));
   };
-  const setType = async (c, s) => {
-    setBusyId(c.id);
-    try { await dbUpsert("clients", { ...c, segment: s }); await reload("clients"); }
-    catch (e) { alert("⚠️ Не сохранилось: " + errText(e)); }
-    setBusyId("");
-  };
-  const assignList = clients.filter(c => !onlyUnset || !c.segment).sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru"));
   return (
     <div className="bg-white border border-gray-100 rounded-2xl p-3">
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
-        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="clipboard" size={16} />Списки: B2B / Open market</span>
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="clipboard" size={16} />Список «{label}» — юр. название и БИН</span>
         <span className="text-xs text-gray-400">{open ? "скрыть" : "открыть"}</span>
       </button>
       {open && (
         <div className="mt-2 space-y-2">
-          <div className="flex gap-1.5 flex-wrap">
-            {groups.map(g => <button key={g.id || "none"} onClick={() => setSeg(g.id)} className={`text-sm px-3 py-1.5 rounded-lg border ${seg === g.id ? "bg-amber-500 border-amber-500 text-white" : "border-gray-200 text-gray-600"}`}>{g.label} <span className={seg === g.id ? "text-amber-100" : "text-gray-400"}>{inSeg(g.id).length}</span></button>)}
-          </div>
           <div className="text-sm text-gray-600">{list.length} клиент. · юр. название и БИН</div>
           <Btn onClick={copy} disabled={!list.length}><Icon name="copy" size={15} />Скопировать список ({list.length})</Btn>
           {list.length > 0 && (
@@ -7142,31 +7131,19 @@ function SegmentLists({ clients = [], reload, canEdit = false }) {
             </div>
           )}
           {list.some(c => !String(c.bin || "").trim()) && <div className="text-xs text-amber-700">Оранжевым — у клиента не указан БИН (впиши в карточке клиента).</div>}
-          {canEdit && (
-            <div className="pt-1 border-t border-gray-100">
-              <button onClick={() => setAssign(v => !v)} className="text-sm text-amber-700 font-medium py-1">{assign ? "▲ Скрыть расстановку типов" : `▼ Расставить типы клиентам${inSeg("").length ? ` (без типа: ${inSeg("").length})` : ""}`}</button>
-              {assign && (
-                <div className="space-y-1.5 mt-1">
-                  <label className="text-xs text-gray-600 inline-flex items-center gap-1"><input type="checkbox" checked={onlyUnset} onChange={e => setOnlyUnset(e.target.checked)} className="accent-amber-500" />только без типа</label>
-                  {!assignList.length && <div className="text-sm text-gray-400">Всем клиентам тип уже указан.</div>}
-                  {assignList.map(c => (
-                    <div key={c.id} className="flex items-center gap-2 text-sm">
-                      <span className="flex-1 min-w-0 truncate">{c.name}{c.org_name ? <span className="text-xs text-gray-400"> · {c.org_name}</span> : null}</span>
-                      {SEGMENTS.map(s => <button key={s.id} disabled={busyId === c.id} onClick={() => setType(c, c.segment === s.id ? "" : s.id)} className={`text-xs px-2 py-1 rounded-lg border whitespace-nowrap ${c.segment === s.id ? "bg-amber-500 border-amber-500 text-white" : "border-gray-200 text-gray-600"} disabled:opacity-50`}>{s.label}</button>)}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="text-xs text-gray-400">Кто в какой группе — меняется в «Клиенты» (карточка клиента → «Группа клиента»).</div>
         </div>
       )}
     </div>
   );
 }
 
-function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDirector = false, canOsv = false, onOpenClient = () => {} }) {
+function DebtsTab({ orders, clients, payments = [], users = [], notes = [], reload, canEdit = true, isDirector = false, canOsv = false, onOpenClient = () => {} }) {
   const [open, setOpen] = useState({});
+  const [grp, setGrp] = useState("all"); // группа клиентов — строго как списки в «Клиентах»: all | "" (наши) | id торгпреда
+  const groups = clientGroups(users, notes);
+  const grpLabel = grp === "all" ? "Все клиенты" : ((groups.find(g => g.id === grp) || {}).label || "");
+  const inGroup = c => grp === "all" || (!!c && (c.ownerId || "") === grp); // разовые покупатели (без карточки) — только во «Всех»
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
   const [selected, setSelected] = useState({});
   const [payClient, setPayClient] = useState(null); // клиент, которому вносим оплату в счёт долга
@@ -7191,7 +7168,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
   // net = отгружено-неоплачено − внесённые оплаты (и корректировки по актам сверки; может уйти в переплату)
   Object.values(byClient).forEach(c => { c.paid = paidByClient[c.key] || 0; c.paidReal = realByClient[c.key] || 0; c.adjust = adjByClient[c.key] || 0; c.net = c.total - c.paid; });
   // клиенты, у кого оплат больше, чем незакрытых отгрузок (или оплаты без открытых долгов) — показываем как переплату
-  const list = Object.values(byClient).sort((a, b) => b.net - a.net);
+  const list = Object.values(byClient).filter(c => inGroup(clients.find(x => x.id === c.clientId))).sort((a, b) => b.net - a.net);
   const grand = list.reduce((s, c) => s + Math.max(0, c.net), 0);
 
   const markPaid = async (c, date, method) => {
@@ -7230,8 +7207,16 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
 
   return (
     <div className="space-y-4">
+      {groups.length > 1 && (
+        <div className="flex gap-1.5 flex-wrap">
+          {[{ id: "all", label: "Все клиенты" }, ...groups].map(g => {
+            const n = g.id === "all" ? clients.length : clients.filter(c => (c.ownerId || "") === g.id).length;
+            return <button key={g.id || "house"} onClick={() => { setGrp(g.id); setSelected({}); }} className={`text-sm px-3 py-1.5 rounded-lg border ${grp === g.id ? "bg-amber-500 border-amber-500 text-white" : "bg-white border-gray-200 text-gray-600"}`}>{g.label} <span className={grp === g.id ? "text-amber-100" : "text-gray-400"}>{n}</span></button>;
+          })}
+        </div>
+      )}
       <div className="bg-gradient-to-br from-rose-50 to-red-50 border border-rose-100 rounded-2xl p-4 flex items-center justify-between">
-        <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={17} />Общий долг клиентов</div>
+        <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={17} />{grp === "all" ? "Общий долг клиентов" : `Долг · ${grpLabel}`}</div>
         <div className="text-2xl font-display font-semibold text-red-600">{fmt(grand)} тг</div>
       </div>
       <ActivityLog payments={payments} clients={clients} onOpenClient={onOpenClient} />
@@ -7242,7 +7227,7 @@ function DebtsTab({ orders, clients, payments = [], reload, canEdit = true, isDi
         ? <OsvImport clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowOsv(false)} />
         : <button onClick={() => setShowOsv(true)} className="w-full bg-white border border-violet-200 hover:bg-violet-50 text-violet-800 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Оборотно-сальдовая ведомость — загрузить Excel, PDF или фото</button>)}
       <div className="text-xs text-gray-400">Долг появляется только после статуса «Доставлено». Пока заявка новая или в пути — долга нет. «Внести оплату» — когда клиент присылает сумму в счёт общего долга.</div>
-      <SegmentLists clients={clients} reload={reload} canEdit={canEdit} />
+      <GroupClientList clients={clients.filter(inGroup)} label={grpLabel} />
       {list.length > 0 && !reconcile && (
         <button onClick={() => setReconcile(true)} className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl px-4 py-2.5 text-sm font-medium inline-flex items-center justify-center gap-1.5"><Icon name="file" size={15} />Акт сверки — выбрать компании и скопировать список для бухгалтера</button>
       )}
@@ -8629,7 +8614,7 @@ export default function App() {
             {tab === "supply" && <TrucksTab trucks={data.trucks} orders={data.orders} stock={data.stock} reload={reload} canEdit={canCity} cities={cityList} notes={data.notes} multiCity={multiCity} activeCity={activeCity} curCity={curCity} toCities={isCityMgr ? cityList.filter(c => c.kind !== "mill" && myCities.includes(c.id)) : null} fromCities={isCityMgr ? cityList.filter(c => c.kind === "mill" || myCities.includes(c.id)) : null} />}
             {tab === "karaganda" && <KaragandaTab orders={view.orders} clients={view.clients} reload={reload} canEdit={isDirector || isCityMgr} />}
             {tab === "kgdm" && <KgdManagersTab kgdClients={data.kgd_clients} kgdDocs={data.kgd_docs} reload={reload} canManage={isDirector || user.role === "kgdmanager" || user.role === "kgdsenior"} isSenior={isDirector || user.role === "kgdsenior"} me={user.name} />}
-            {tab === "debts" && <DebtsTab onOpenClient={openClientHistory} orders={view.orders} clients={view.clients} payments={view.payments} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} canOsv={isDirector || isCityMgr} />}
+            {tab === "debts" && <DebtsTab onOpenClient={openClientHistory} orders={view.orders} clients={view.clients} payments={view.payments} users={data.users} notes={data.notes} reload={reload} canEdit={isDirector || isRep || isCityMgr} isDirector={isDirector} canOsv={isDirector || isCityMgr} />}
             {tab === "contracts" && <ContractsTab clients={view.clients} />}
             {tab === "invoice" && <SoftInvoiceTab clients={view.clients} orders={view.orders} />}
             {tab === "reactivate" && <ReactivateTab clients={view.clients} orders={view.orders} />}
