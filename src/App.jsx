@@ -7146,8 +7146,14 @@ function DebtsTab({ orders, clients, payments = [], users = [], notes = [], relo
   const [open, setOpen] = useState({});
   const [grp, setGrp] = useState("all"); // группа клиентов — строго как списки в «Клиентах»: all | "" (наши) | id торгпреда
   const groups = clientGroups(users, notes);
-  const grpLabel = grp === "all" ? "Все клиенты" : ((groups.find(g => g.id === grp) || {}).label || "");
-  const inGroup = c => grp === "all" || (!!c && (c.ownerId || "") === grp); // разовые покупатели (без карточки) — только во «Всех»
+  // + торгпред: в выбранной группе — только клиенты, у которых он «Торгпред клиента» (добавил он; rep_uid) или его группа
+  const [rep, setRep] = useState("all");
+  const reps = (users || []).filter(u => u.role === "rep");
+  const repName = (reps.find(u => u.id === rep) || {}).name || "";
+  const grpLabel = (grp === "all" ? "Все клиенты" : ((groups.find(g => g.id === grp) || {}).label || "")) + (rep !== "all" ? ` · ${repName}` : "");
+  const inGrpOnly = c => grp === "all" || (!!c && (c.ownerId || "") === grp);
+  const ofRep = (c, id) => !!c && (c.rep_uid === id || c.ownerId === id);
+  const inGroup = c => inGrpOnly(c) && (rep === "all" || ofRep(c, rep)); // разовые покупатели (без карточки) — только во «Всех» без торгпреда
   const [reconcile, setReconcile] = useState(false); // режим «акт сверки»: отмечаем компании галочками
   const [selected, setSelected] = useState({});
   const [payClient, setPayClient] = useState(null); // клиент, которому вносим оплату в счёт долга
@@ -7219,8 +7225,17 @@ function DebtsTab({ orders, clients, payments = [], users = [], notes = [], relo
           })}
         </div>
       )}
+      {reps.length > 0 && groups.length > 1 && (
+        <div className="flex gap-1.5 flex-wrap items-center">
+          <span className="text-xs text-gray-500">Торгпред:</span>
+          {[{ id: "all", name: "Все" }, ...reps].map(u => {
+            const n = clients.filter(c => inGrpOnly(c) && (u.id === "all" || ofRep(c, u.id))).length;
+            return <button key={u.id} onClick={() => { setRep(u.id); setSelected({}); }} className={`text-xs px-2.5 py-1 rounded-full border ${rep === u.id ? "bg-sky-600 border-sky-600 text-white" : "bg-white border-gray-200 text-gray-600"}`}>{u.name} <span className={rep === u.id ? "text-sky-100" : "text-gray-400"}>{n}</span></button>;
+          })}
+        </div>
+      )}
       <div className="bg-gradient-to-br from-rose-50 to-red-50 border border-rose-100 rounded-2xl p-4 flex items-center justify-between">
-        <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={17} />{grp === "all" ? "Общий долг клиентов" : `Долг · ${grpLabel}`}</div>
+        <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={17} />{grp === "all" && rep === "all" ? "Общий долг клиентов" : `Долг · ${grpLabel}`}</div>
         <div className="text-2xl font-display font-semibold text-red-600">{fmt(grand)} тг</div>
       </div>
       <ActivityLog payments={payments} clients={clients} onOpenClient={onOpenClient} />
