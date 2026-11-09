@@ -3783,8 +3783,11 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   const repAgg = {};
   const repEnsure = id => (repAgg[id] = repAgg[id] || { kg: 0, rev: 0, ordSet: new Set(), cliSet: new Set(), debt: 0 });
   delivered.forEach(o => { const owner = ownerOf(o); if (!owner) return; const a = repEnsure(owner); a.kg += o.bags * o.bag_kg; a.rev += o.bags * o.bag_kg * (o.price_per_kg || 0); a.ordSet.add((o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date); if (o.clientId) a.cliSet.add(o.clientId); });
-  orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const owner = ownerOf(o); if (!owner) return; const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) repEnsure(owner).debt += sum; });
-  (payments || []).forEach(p => { const owner = ownerByClient[p.clientId]; if (owner && repAgg[owner]) repAgg[owner].debt -= (p.amount || 0); });
+  // Долг — по каждому клиенту отдельно, как во вкладке «Долги»: переплата одного клиента не гасит долг другого
+  const repNet = {};
+  orders.filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const owner = ownerOf(o); if (!owner) return; const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) { const k = o.clientId || ("nm:" + (o.clientName || "")); (repNet[k] = repNet[k] || { owner, net: 0 }).net += sum; } });
+  (payments || []).forEach(p => { const k = p.clientId || ("nm:" + (p.clientName || "")); if (repNet[k]) repNet[k].net -= (p.amount || 0); });
+  Object.values(repNet).forEach(e => { if (e.net > 0) repEnsure(e.owner).debt += e.net; });
   const repStats = repsList.map(r => { const a = repAgg[r.id] || { kg: 0, rev: 0, ordSet: new Set(), cliSet: new Set(), debt: 0 }; return { id: r.id, name: r.group_name || r.name, kg: a.kg, rev: a.rev, orders: a.ordSet.size, clientsN: a.cliSet.size, debt: Math.max(0, a.debt) }; }).sort((a, b) => b.rev - a.rev);
   // 🏙 По городам (сводно, все города — независимо от выбора в фильтре): оборот/тоннаж/заявки/долг/расходы/прибыль за период.
   const cityAgg = {};
