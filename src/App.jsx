@@ -4453,21 +4453,9 @@ function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, ci
   const openNew = () => { setEditId(null); reset(); setShowAdd(true); };
   const openEdit = t => { setEditId(t.id); setEditItemIdx(null); setF({ date: t.date || TODAY(), driver_name: t.driver_name || "", car_number: t.car_number || "", whatsapp: t.whatsapp || "", logist_phone: t.logist_phone || "", price: t.price || "", note: t.note || "", city: t.city || DEFAULT_CITY, fromCity: t.status === "принята" ? (t.fromCity || "") : (t.fromCity ?? millCity) /* у принятой — как была: не выдумываем списание на мельнице */, transport: t.transport || "фура" }); setItems((t.items || []).map(i => ({ brand: i.brand, grade: i.grade, bag_kg: Number(i.bag_kg), kg: itemKg(i) }))); setIt({ brand: BRANDS[0], grade: GRADES[0], bag_kg: 50, kg: "" }); setShowAdd(true); };
 
-  // Движения склада по принятой фуре: приход в городе назначения (tin_), списание у источника (tout_) и расход
-  // за фуру (texp_). id привязаны к фуре и номеру позиции — повторная запись перезаписывает те же строки.
-  // oldCount — сколько позиций было раньше: если стало меньше, движения лишних позиций убираем.
-  const writeTruckMoves = async (t, date, oldCount = 0) => {
-    const toC = t.city || DEFAULT_CITY, from = t.fromCity || "";
-    const moves = t.items.map(item => { const weight_kg = itemKg(item); return { item, weight_kg, bags: item.bag_kg > 0 ? Math.round(weight_kg / item.bag_kg) : 0 }; });
-    // Сначала списание в городе-источнике (видно движение; мельница безлимитна — минус там нормален). Если на него
-    // нет прав (чужой склад) — ошибка вылетит ДО прихода, и склад не разъедется наполовину.
-    if (from && from !== toC) for (let i = 0; i < moves.length; i++) { const { item, weight_kg, bags } = moves[i]; await dbUpsert("stock", { id: `tout_${t.id}_${i}`, date, brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags: -bags, weight_kg: -weight_kg, price_per_kg: 0, note: `Отправка → ${cityName(notes, toC)}`, city: from, toCity: toC, transport: t.transport || "фура" }); }
-    for (let i = 0; i < moves.length; i++) { const { item, weight_kg, bags } = moves[i]; await dbUpsert("stock", { id: `tin_${t.id}_${i}`, date, brand: item.brand, grade: item.grade, bag_kg: item.bag_kg, bags, weight_kg, price_per_kg: 0, note: `Приход (${t.transport === "вагон" ? "вагон" : "фура"} от ${t.date}${from ? ", из " + cityName(notes, from) : ""}${t.car_number ? ", " + t.car_number : ""})`, city: toC }); }
-    for (let i = t.items.length; i < oldCount; i++) { try { await dbDelete("stock", `tin_${t.id}_${i}`); } catch {} try { await dbDelete("stock", `tout_${t.id}_${i}`); } catch {} }
-    if (t.price) await dbUpsert("expenses", { id: "texp_" + t.id, date, category: "Фура/Поставка", amount: Number(t.price), note: `${t.transport === "вагон" ? "Вагон" : "Фура"} от ${t.date}${t.driver_name ? `, ${t.driver_name}` : ""}`, city: toC });
-    else if (oldCount) { try { await dbDelete("expenses", `texp_${t.id}`); } catch {} } // цену убрали при правке — убираем и расход
-  };
-
+  // Приход в городе назначения (tin_), списание у источника (tout_) и расход за поставку (texp_) пишет СЕРВЕР
+  // (syncTruckStock в api/data.js) при сохранении фуры — одним запросом. Раньше это делал браузер ~22 запросами
+  // по очереди: на телефоне приёмка шла долго и обрывалась на середине (Актау, 11.2026: легло на тонну меньше).
   const saveTruck = async () => {
     if (items.length === 0) return;
     setSaving(true);
@@ -4477,9 +4465,8 @@ function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, ci
       const wasAccepted = existing?.status === "принята";
       if (wasAccepted && legacyAccepted) { next.items = existing.items; next.price = existing.price; } // принята по-старому: склад не пересчитываем (см. предупреждение в окне)
       else if (wasAccepted) {
-        // Принятая фура: переписываем приход/списание/расход под новые позиции. Дату поменяли — приход на склад тоже этим днём.
+        // Принятая фура: сервер перепишет приход/списание/расход под новые позиции. Дату поменяли — приход на склад тоже этим днём.
         next.accepted_date = f.date !== existing.date ? f.date : (existing.accepted_date || f.date);
-        await writeTruckMoves(next, next.accepted_date, (existing.items || []).length);
       }
       await dbUpsert("trucks", next);
       setShowAdd(false); setEditId(null); reset(); await reload("trucks");
@@ -4493,20 +4480,10 @@ function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, ci
     if (t.status === status) return;
     setSaving(true);
     try {
-      if (status === "принята" && t.status !== "принята") {
-        // id прихода привязан к фуре и позиции — двойное нажатие «Принять» перезапишет те же строки, а не задвоит их
-        await writeTruckMoves(t, TODAY());
-        await dbUpsert("trucks", { ...t, status: "принята", accepted_date: TODAY() });
-        await reload("stock"); await reload("expenses");
-      } else {
-        // Снимаем «принята» — убираем приход/списание/расход, чтобы остатки не врали
-        if (t.status === "принята") {
-          for (let i = 0; i < (t.items || []).length; i++) { try { await dbDelete("stock", `tin_${t.id}_${i}`); } catch {} try { await dbDelete("stock", `tout_${t.id}_${i}`); } catch {} }
-          try { await dbDelete("expenses", `texp_${t.id}`); } catch {}
-        }
-        await dbUpsert("trucks", { ...t, status });
-        if (t.status === "принята") { await reload("stock"); await reload("expenses"); }
-      }
+      // «Принята» — сервер кладёт приход на склад, списывает у источника и пишет расход за поставку; сняли «принята» —
+      // всё это убирает. Одним запросом; id строк привязаны к фуре — двойное нажатие не задвоит.
+      await dbUpsert("trucks", status === "принята" ? { ...t, status, accepted_date: TODAY() } : { ...t, status });
+      if (status === "принята" || t.status === "принята") { await reload("stock"); await reload("expenses"); }
       await reload("trucks");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
     setSaving(false);
@@ -4516,11 +4493,8 @@ function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, ci
     const accepted = t && t.status === "принята";
     if (!confirm(`Удалить ${t?.transport === "вагон" ? "вагон" : "фуру"}?${accepted ? "\nБыла принята на склад — приход и списание у источника уберутся, расход за поставку тоже." : ""}`)) return;
     try {
-      if (accepted) { // убираем приход в целевом городе + списание у источника + расход
-        for (let i = 0; i < (t.items || []).length; i++) { try { await dbDelete("stock", `tin_${t.id}_${i}`); } catch {} try { await dbDelete("stock", `tout_${t.id}_${i}`); } catch {} }
-        try { await dbDelete("expenses", `texp_${t.id}`); } catch {}
-      }
-      await dbDelete("trucks", id); await reload("trucks"); if (accepted) { reload("stock"); reload("expenses"); }
+      await dbDelete("trucks", id); // приход, списание у источника и расход сервер убирает вместе с фурой
+      await reload("trucks"); if (accepted) { reload("stock"); reload("expenses"); }
     } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); }
   };
 
@@ -4656,11 +4630,12 @@ function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, ci
               </div>
             )}
             {t.note && <div className="text-xs text-gray-400 mt-1">{t.note}</div>}
+            {t.status === "принята" && t.accepted_by && <div className="text-xs text-gray-400 mt-1">Принял: {t.accepted_by}{t.accepted_date ? ` · ${t.accepted_date.split("-").reverse().join(".")}` : ""}</div>}
             {canEdit && t.status !== "принята" && (
               <div className="flex gap-1 flex-wrap mt-3 items-center">
                 <span className="text-xs text-gray-400">Статус:</span>
                 {["грузится", "в пути", "разгрузка"].map(s => <button key={s} onClick={() => setTruckStatus(t, s)} className={`text-xs px-2 py-1 rounded-lg ${t.status === s ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{s}</button>)}
-                <Btn size="sm" onClick={() => setTruckStatus(t, "принята")} disabled={saving}>✓ Принять на склад</Btn>
+                <Btn size="sm" onClick={() => setTruckStatus(t, "принята")} disabled={saving}>{saving ? "Принимаю…" : "✓ Принять на склад"}</Btn>
               </div>
             )}
             {canEdit && t.status !== "принята" && (

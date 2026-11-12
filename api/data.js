@@ -230,8 +230,10 @@ export default async function handler(req, res) {
         if (!ch || !ch.data) return res.status(400).json({ error: "Эту запись восстановить нельзя" });
         const exists = await dbGet(ch.table, ch.data.id);
         if (exists) return res.status(400).json({ error: "Такая запись уже есть — восстанавливать не нужно" });
-        await dbUpsert(ch.table, ch.data);
-        await logChange(u, "restore", ch.table, ch.data);
+        // Принятую поставку возвращаем вместе с приходом/списанием/расходом (при удалении они убираются) — тем же днём приёмки
+        const rec = ch.table === "trucks" ? await syncTruckStock(u, null, ch.data, { restoring: true }) : ch.data;
+        await dbUpsert(ch.table, rec);
+        await logChange(u, "restore", ch.table, rec);
         return res.status(200).json({ ok: true, table: ch.table, title: ch.title });
       }
       if (op === "backupNow") return res.status(200).json({ backup: await makeSnapshot(u.name) });
@@ -593,6 +595,7 @@ async function upsertFor(u, table, item) {
       item = { ...item, delivered_by_driver: !!existing.delivered_by_driver || !!item.delivered_by_driver, delivered_at: item.delivered_at || existing.delivered_at, photos, photo_at };
     }
     if (table === "clients") item = await keepRepOnMove(existing, item); // перенесли из группы торгпреда — он остаётся торгпредом клиента
+    if (table === "trucks") item = await syncTruckStock(u, existing, item); // склад и расход по поставке — до записи фуры
     const out = await dbUpsert(table, item);
     if (table === "orders") await syncOrderStock(existing, item); // движение склада всегда = заявке (пересчёт при правках)
     if (table === "payments") await logPay(u, item, existing); // история «Долгов»
@@ -625,7 +628,14 @@ async function upsertFor(u, table, item) {
       const ex = await guard("stock"); return dbUpsert("stock", { ...item, city: cityFor(ex) });
     }
     // Поставка фур В СВОЙ город (склад мельницы списывается через tout_, см. выше). Межгородские перемещения между чужими складами — нет.
-    if (table === "trucks") { const ex = await dbGet("trucks", item.id); if (ex && !inMy(ex.city || "astana")) throw new Error("Фура другого города"); const toC = item.city || (ex && ex.city) || myCities[0]; if (!inMy(toC)) throw new Error("Поставка в чужой город"); return dbUpsert("trucks", { ...item, city: toC }); }
+    if (table === "trucks") {
+      const ex = await dbGet("trucks", item.id); if (ex && !inMy(ex.city || "astana")) throw new Error("Фура другого города");
+      const toC = item.city || (ex && ex.city) || myCities[0]; if (!inMy(toC)) throw new Error("Поставка в чужой город");
+      const rec = await syncTruckStock(u, ex, { ...item, city: toC }); // склад и расход по поставке — до записи фуры
+      await dbUpsert("trucks", rec);
+      await logChange(u, ex ? "update" : "create", "trucks", rec); // видно, кто из менеджеров принимал/правил
+      return;
+    }
     if (table === "lab") { const ex = await dbGet("lab", item.id); if (ex && ex.city && !inMy(ex.city)) throw new Error("Анализ другого города"); return dbUpsert("lab", { ...item, city: inMy(item.city) ? item.city : myCities[0] }); }
     if (table === "crm") { const ex = await dbGet("crm", item.id); if (ex && ex.ownerId && ex.ownerId !== u.uid) throw new Error("Чужая запись CRM"); return dbUpsert("crm", { ...item, ownerId: u.uid }); }
     if (table === "orders") {
@@ -833,6 +843,72 @@ async function syncOrderStock(existing, item) {
   });
 }
 
+// Строки склада по поставке (фура/вагон): tin_<фура>_<i> (приход), tout_<фура>_<i> (списание у источника).
+// LIKE-шаблон грубый («_» в нём — любой символ), поэтому точный отбор — здесь же.
+async function truckMoveIds(id) {
+  const [a, b] = await Promise.all([
+    dbSelect("stock", `select=id&id=like.${encodeURIComponent(`tin_${id}_*`)}`),
+    dbSelect("stock", `select=id&id=like.${encodeURIComponent(`tout_${id}_*`)}`),
+  ]);
+  return [...a, ...b].map(r => String(r.id)).filter(x => {
+    const p = (x.startsWith("tin_") ? "tin_" : "tout_") + id + "_";
+    return x.startsWith(p) && /^\d+$/.test(x.slice(p.length));
+  });
+}
+async function dropTruckMoves(id) {
+  await dbDelete("expenses", "texp_" + id);
+  await Promise.all((await truckMoveIds(id)).map(x => dbDelete("stock", x)));
+}
+
+// Склад по поставке пишет ТОЛЬКО сервер, одним запросом и ДО записи самой фуры. Раньше это делал браузер —
+// ~22 запроса по очереди: на телефоне приёмка шла долго и могла оборваться на середине (Актау, вагон 06.11:
+// легло 66 900 из 67 900, а вагон остался «не принят»). Теперь: принята → приход в городе назначения, списание
+// у источника, расход за поставку; сняли «принята» → всё это убираем; правка принятой → пересчёт под новый состав.
+// id строк привязаны к фуре и позиции — повтор (после ошибки) перезаписывает те же строки, а не задваивает.
+// Ошибку не глотаем: фура тогда не сохранится, и повторное нажатие доделает начатое.
+async function syncTruckStock(u, existing, item, { restoring = false } = {}) {
+  const id = item.id;
+  const wasAcc = !!existing && existing.status === "принята";
+  const nowAcc = item.status === "принята";
+  const have = await truckMoveIds(id);
+  // Не принята — строк склада быть не должно (остались от сорванной приёмки — убираем, иначе остаток завышен)
+  if (!wasAcc && !nowAcc) { if (have.length) await dropTruckMoves(id); return item; }
+  // Принята до 19.07.2026 «по-старому» (движения со случайными id) — склад не пересчитываем, состав и цену не меняем
+  if (wasAcc && !have.length && String(existing.accepted_date || existing.date || "") < "2026-07-19") return nowAcc ? { ...item, items: existing.items, price: existing.price } : item;
+  if (!nowAcc) { await dropTruckMoves(id); return item; }
+  // Восстановление удалённой «старой» поставки: её движения со случайными id при удалении остались — новые не пишем (задвоили бы)
+  if (restoring && String(item.accepted_date || item.date || "") < "2026-07-19") return item;
+
+  const toC = item.city || "astana", from = item.fromCity || "";
+  const cdoc = await dbGet("notes", "cities");
+  const cities = (cdoc && cdoc.items) || [];
+  const cname = c => (cities.find(x => x.id === c) || {}).name || (c === "astana" ? "Астана" : c);
+  if (u.role === "citymanager" && from && from !== toC) { // менеджер города списывает только с мельницы или своего склада
+    const my = (u.cities && u.cities.length) ? u.cities : [u.city || "astana"];
+    if (!my.includes(from) && (cities.find(x => x.id === from) || {}).kind !== "mill") throw new Error("Списывать можно только с мельницы или своего склада");
+  }
+  const keepDate = wasAcc || restoring; // правка принятой / восстановление — день приёмки прежний; новая приёмка — сегодня
+  const date = keepDate ? (item.accepted_date || (existing && existing.accepted_date) || todayAstana()) : todayAstana();
+  const kgOf = i => (i.kg != null && i.kg !== "") ? (Number(i.kg) || 0) : (Number(i.tonnes) || 0) * 1000; // старые записи — в тоннах
+  const kind = item.transport === "вагон" ? "вагон" : "фура";
+  const want = [];
+  (item.items || []).forEach((it, i) => {
+    const kg = kgOf(it), bag_kg = Number(it.bag_kg) || 0, bags = bag_kg > 0 ? Math.round(kg / bag_kg) : 0;
+    if (from && from !== toC) want.push({ id: `tout_${id}_${i}`, date, brand: it.brand, grade: it.grade, bag_kg, bags: -bags, weight_kg: -kg, price_per_kg: 0, note: `Отправка → ${cname(toC)}`, city: from, toCity: toC, transport: item.transport || "фура" });
+    want.push({ id: `tin_${id}_${i}`, date, brand: it.brand, grade: it.grade, bag_kg, bags, weight_kg: kg, price_per_kg: 0, note: `Приход (${kind} от ${item.date}${from ? ", из " + cname(from) : ""}${item.car_number ? ", " + item.car_number : ""})`, city: toC });
+  });
+  if (!want.length) throw new Error("В поставке нет позиций");
+  // Параллельно — секунда, а не полминуты. Новая приёмка «всё или ничего»: сорвалась — записанное убираем, фура не сохранится.
+  const res = await Promise.allSettled(want.map(r => dbUpsert("stock", r)));
+  const bad = res.find(x => x.status === "rejected");
+  if (bad) { if (!wasAcc) { try { await dropTruckMoves(id); } catch {} } throw bad.reason; }
+  const keep = new Set(want.map(r => r.id));
+  await Promise.all(have.filter(x => !keep.has(x)).map(x => dbDelete("stock", x))); // убрали позицию / сменили источник
+  if (Number(item.price) > 0) await dbUpsert("expenses", { id: "texp_" + id, date, category: "Фура/Поставка", amount: Number(item.price), note: `${kind === "вагон" ? "Вагон" : "Фура"} от ${item.date}${item.driver_name ? `, ${item.driver_name}` : ""}`, city: toC });
+  else await dbDelete("expenses", "texp_" + id);
+  return keepDate ? { ...item, accepted_date: date } : { ...item, accepted_date: date, accepted_by: u.name || "" };
+}
+
 async function deleteFor(u, table, id) {
   if ((u.role === "kgdmanager" || u.role === "kgdsenior") && table === "kgd_clients") {
     const ex = await dbGet("kgd_clients", id);
@@ -851,7 +927,7 @@ async function deleteFor(u, table, id) {
     if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const exCity = ex.city || (ex.clientId ? ((await dbGet("clients", ex.clientId)) || {}).city : null) || "astana"; if (!inMy(exCity)) throw new Error("Заявка другого города"); try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
     if (table === "stock" && String(id).startsWith("tout_")) { const tid = String(id).slice(5).split("_")[0]; const tr = await dbGet("trucks", tid); if (!tr || inMy(tr.city || "astana")) return dbDelete("stock", id); throw new Error("Нет прав на это движение склада"); }
     if (["clients", "drivers", "expenses", "stock"].includes(table)) { const ex = await dbGet(table, id); if (ex && !inMy(ex.city || "astana")) throw new Error("Запись другого города"); await dbDelete(table, id); if (table === "clients" && ex) await logClient(u, null, ex, true); return; }
-    if (table === "trucks") { const ex = await dbGet("trucks", id); if (ex && !inMy(ex.city || "astana")) throw new Error("Фура другого города"); return dbDelete("trucks", id); }
+    if (table === "trucks") { const ex = await dbGet("trucks", id); if (!ex) return; if (!inMy(ex.city || "astana")) throw new Error("Фура другого города"); await dropTruckMoves(id); await logChange(u, "delete", "trucks", ex); return dbDelete("trucks", id); }
     if (table === "lab") { const ex = await dbGet("lab", id); if (ex && ex.city && !inMy(ex.city)) throw new Error("Анализ другого города"); return dbDelete("lab", id); }
     if (table === "crm") { const ex = await dbGet("crm", id); if (ex && ex.ownerId && ex.ownerId !== u.uid) throw new Error("Чужая запись CRM"); return dbDelete("crm", id); }
     if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || !inMy(cli.city || "astana")) throw new Error("Оплата другого города"); if (ex.adjust && !ex.recon) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
@@ -893,12 +969,8 @@ async function deleteFor(u, table, id) {
     try { await dbDelete("stock", "mv_" + id); } catch {}
   }
   if (table === "trucks") {
-    // приходы фуры (tin_<id>_0..N) и расход за фуру (texp_<id>)
-    try {
-      const st = await dbList("stock");
-      for (const s of st) if (typeof s.id === "string" && s.id.startsWith("tin_" + id + "_")) await dbDelete("stock", s.id);
-    } catch {}
-    try { await dbDelete("expenses", "texp_" + id); } catch {}
+    // приход (tin_), списание у источника (tout_) и расход за поставку (texp_). Сбой — фуру не удаляем, повтор доделает.
+    await dropTruckMoves(id);
   }
 
   return dbDelete(table, id);
