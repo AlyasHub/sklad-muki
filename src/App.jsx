@@ -1616,6 +1616,54 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
   );
 }
 
+// 📦 Остатки на любую дату → Excel. Склад — журнал движений (приход/отгрузка/списание/ревизия), у каждого своя дата,
+// поэтому остаток на день = сумма всех движений по этот день включительно (тот же расчёт, что и сегодняшний остаток).
+// Мельницу не берём: она безлимитный источник, у неё не остаток, а отправки.
+function StockAsOf({ rows = [], cities = [], notes = [], defCity = "all", multiCity = false }) {
+  const [day, setDay] = useState(TODAY());
+  const [city, setCity] = useState(defCity);
+  const millIds = new Set(cities.filter(c => c.kind === "mill").map(c => c.id));
+  const seen = new Set(rows.map(stockCity));
+  const whs = multiCity ? cities.filter(c => c.kind !== "mill" && seen.has(c.id)) : []; // склады, которые видит этот пользователь
+  const inScope = s => !multiCity || (city === "all" ? !millIds.has(stockCity(s)) : stockCity(s) === city);
+  const pos = {};
+  rows.filter(s => (s.date || "") <= day && inScope(s)).forEach(s => {
+    const c = multiCity ? stockCity(s) : "";
+    const k = `${c}|${s.brand}|${s.grade}|${s.bag_kg}`;
+    const p = pos[k] = pos[k] || { city: c, brand: s.brand, grade: s.grade, bag_kg: Number(s.bag_kg) || 0, bags: 0, kg: 0 };
+    p.bags += Number(s.bags) || 0; p.kg += Number(s.weight_kg) || 0;
+  });
+  const list = Object.values(pos).filter(p => Math.round(p.kg) !== 0 || p.bags !== 0)
+    .sort((a, b) => cityName(notes, a.city).localeCompare(cityName(notes, b.city)) || String(a.brand).localeCompare(String(b.brand)) || String(a.grade).localeCompare(String(b.grade)) || a.bag_kg - b.bag_kg);
+  const totKg = list.reduce((s, p) => s + p.kg, 0), totBags = list.reduce((s, p) => s + p.bags, 0);
+  const dmy = day.split("-").reverse().join(".");
+  const where = !multiCity ? "" : city === "all" ? "все склады" : cityName(notes, city);
+  const download = () => {
+    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const out = [[`Остатки на складе на ${dmy}${where ? " — " + where : ""}`], [], [...(multiCity ? ["Город"] : []), "Бренд", "Сорт", "Фасовка, кг", "Мешков", "Кг"]];
+    const cityIds = [...new Set(list.map(p => p.city))];
+    cityIds.forEach(cid => {
+      const ps = list.filter(p => p.city === cid);
+      ps.forEach(p => out.push([...(multiCity ? [cityName(notes, cid)] : []), p.brand, p.grade, p.bag_kg, p.bags, Math.round(p.kg)]));
+      if (multiCity && cityIds.length > 1) out.push([`Итого ${cityName(notes, cid)}`, "", "", "", ps.reduce((s, p) => s + p.bags, 0), Math.round(ps.reduce((s, p) => s + p.kg, 0))], []);
+    });
+    out.push([...(multiCity ? ["ИТОГО"] : []), ...(multiCity ? ["", "", ""] : ["ИТОГО", "", ""]), totBags, Math.round(totKg)]);
+    downloadFile(`Остатки_${day}${where ? "_" + where.replace(/\s+/g, "_") : ""}.csv`, "﻿" + out.map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+  };
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
+      <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="download" size={16} />Остатки на дату — Excel</div>
+      <div className="flex flex-wrap gap-2 items-end">
+        <div className="flex flex-col gap-1"><label className="text-sm font-medium text-gray-700">На какое число</label><input type="date" value={day} max={TODAY()} onChange={e => setDay(e.target.value || TODAY())} className="border border-gray-200 rounded-lg px-3 py-2 text-sm" /></div>
+        {multiCity && whs.length > 1 && <div className="flex-1 min-w-[140px]"><Sel label="Склад" value={city} onChange={e => setCity(e.target.value)} options={[{ value: "all", label: "Все склады" }, ...whs.map(c => ({ value: c.id, label: c.name }))]} /></div>}
+      </div>
+      <div className="text-sm text-gray-600">На {dmy}{where ? ` · ${where}` : ""}: <b className={totKg < 0 ? "text-red-600" : "text-gray-900"}>{fmt(Math.round(totKg))} кг</b> · {fmt(totBags)} мешков · {list.length} позиций</div>
+      <Btn onClick={download} disabled={!list.length}><Icon name="download" size={15} />Скачать Excel</Btn>
+      <p className="text-xs text-gray-400">Считается по истории склада: все приходы, отгрузки, списания и ревизии по выбранный день включительно.</p>
+    </div>
+  );
+}
+
 function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canEdit = true, activeCity = DEFAULT_CITY, curCity = "all", notes = [], multiCity = false, allStock = null, allOrderIds = null, cities = [] }) {
   const isMill = citiesOf(notes).find(c => c.id === activeCity)?.kind === "mill"; // мельница — безлимитный источник (минус в остатке нормален)
   const [showAdd, setShowAdd] = useState(false);
@@ -1798,6 +1846,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
             </div>
           ))}
         </div>
+        <StockAsOf rows={allStock || stock} cities={cities} notes={notes} defCity="all" multiCity={multiCity} />
       </div>
     );
   }
@@ -1818,6 +1867,7 @@ function StockTab({ stock, orders = [], trucks = [], expenses = [], reload, canE
         })()}
       </div>
       )}
+      {!isMill && <StockAsOf key={activeCity} rows={multiCity ? (allStock || stock) : stock} cities={cities} notes={notes} defCity={multiCity ? activeCity : "all"} multiCity={multiCity} />}
       {isMill && (() => {
         // Мельница: не «остаток», а ОТПРАВКИ по городам назначения. Данные — из движений-минусов (tout_/«Отправка»).
         const out = stock.filter(s => s.weight_kg < 0);
@@ -4283,7 +4333,18 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
         <div className="bg-gradient-to-br from-slate-50 to-gray-100 border border-gray-200 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
             <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="expense" size={16} />Расходы за период</div>
-            <div className="text-lg font-bold text-gray-700">{fmt(expTotal)} тг</div>
+            <div className="flex items-center gap-2">
+              {expInPeriod.length > 0 && <button onClick={() => {
+                // Список расходов за период (траты из касс + ЗП + фуры) — CSV с ; и BOM, открывается в Excel
+                const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+                const txt = v => /^[=+\-@]/.test(String(v || "")) ? "'" + v : (v || ""); // текст с «=», «-»… Excel не примет за формулу
+                const rows = [...expInPeriod].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map(x => [(x.date || "").split("-").reverse().join("."), catName(x.category), x.amount || 0, txt(x.note), cityName(notes, x.city || DEFAULT_CITY), x.fromCashbox ? "касса" : String(x.id).startsWith("texp_") ? "поставка" : x.driverId ? "зарплата" : "вручную"]);
+                if (trialCost > 0) rows.push(["", "На пробу", trialCost, "бесплатно отгруженная мука по закупочной цене", "", "расчёт"]); // как в сумме на экране
+                const tag = period === "custom" ? `${from}_${to}` : period === "month" ? TODAY().slice(0, 7) : { week: "неделя", "3month": "3мес", all: "всё" }[period] || period;
+                downloadFile(`Расходы_${tag}.csv`, "﻿" + [["Дата", "Категория", "Сумма, тг", "Примечание", "Город", "Откуда"], ...rows, [], ["Итого", "", expTotal]].map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+              }} className="text-xs bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-2.5 py-1 font-medium inline-flex items-center gap-1"><Icon name="download" size={13} />Excel</button>}
+              <div className="text-lg font-bold text-gray-700">{fmt(expTotal)} тг</div>
+            </div>
           </div>
           <div className="space-y-1 text-sm">
             {Object.entries(expByCat).sort((a, b) => b[1] - a[1]).map(([cat, v]) => (
@@ -5132,15 +5193,23 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
     setSaving(false);
   };
 
-  const openNew = d => { setEditItem(null); setDir(d); setForm({ date: TODAY(), amount: "", note: "" }); setShowAdd(true); };
-  const openEdit = x => { setEditItem(x); setDir(x.dir === "in" ? "in" : "out"); setForm({ date: x.date || TODAY(), amount: String(x.amount ?? ""), note: x.note || "" }); setShowAdd(true); };
+  // 💸 Трата сама попадает в «Расходы» (копию пишет сервер) — по умолчанию «Прочее». «Не расход» — передал деньги
+  // в другую кассу, или это ЗП из «Зарплаты» / фура с ценой в «Поставках» (они уже в расходах — иначе дважды).
+  const myCities = (me.cities && me.cities.length) ? me.cities : null; // менеджер — только свои города; директор — все
+  const expCityOpts = citiesOf(notes).filter(c => !myCities || myCities.includes(c.id)).map(c => ({ value: c.id, label: c.name }));
+  const defExpCity = ownerId => uCity(ownerId) || (curCity !== "all" ? curCity : activeCity);
+  const EXP_CAT_OPTS = [...EXPENSE_CATS.map(c => ({ value: c, label: c })), { value: "none", label: "Не расход — передал деньги / ЗП или фура уже записаны" }];
+  const openNew = d => { setEditItem(null); setDir(d); setForm({ date: TODAY(), amount: "", note: "", expCat: "Прочее", expCity: defExpCity(selId) }); setShowAdd(true); };
+  // Старые траты (до 17.11.2026) без категории — «не расход», пока сам не выберешь (иначе ЗП/фуры задвоились бы)
+  const openEdit = x => { setEditItem(x); setDir(x.dir === "in" ? "in" : "out"); setForm({ date: x.date || TODAY(), amount: String(x.amount ?? ""), note: x.note || "", expCat: x.expCat || "none", expCity: x.expCity || defExpCity(ownerIdOf(x)) }); setShowAdd(true); };
   const save = async () => {
     if (!form.amount || Number(form.amount) <= 0) return;
     setSaving(true);
     try {
+      const exp = dir === "out" ? { expCat: form.expCat || "none", expCity: form.expCity || "" } : { expCat: "", expCity: "" };
       const rec = editItem
-        ? { ...editItem, dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), userId: ownerIdOf(editItem), city: uCity(ownerIdOf(editItem)) }
-        : { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), userId: selId, city: uCity(selId) };
+        ? { ...editItem, dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), ...exp, userId: ownerIdOf(editItem), city: uCity(ownerIdOf(editItem)) }
+        : { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), ...exp, userId: selId, city: uCity(selId) };
       await dbUpsert("cashbox", rec);
       setShowAdd(false); setEditItem(null); await reload("cashbox");
     } catch (e) {
@@ -5218,6 +5287,13 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
             <Inp label="Дата" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
             <Inp label="Сумма, тг" type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
             <Inp label={dir === "in" ? "От кого / за что (по желанию)" : "На что потратил"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={dir === "in" ? "напр. от Эрика на закуп" : "напр. роутер, камеры"} />
+            {dir === "out" && <>
+              <Sel label="В расходы — категория" value={form.expCat || "none"} onChange={e => setForm({ ...form, expCat: e.target.value })} options={EXP_CAT_OPTS} />
+              {multiCity && isOwner && form.expCat !== "none" && expCityOpts.length > 1 && <Sel label="Город расхода" value={form.expCity || ""} onChange={e => setForm({ ...form, expCity: e.target.value })} options={expCityOpts} />}
+              <p className="text-xs text-gray-500 -mt-1">{form.expCat === "none"
+                ? "В «Расходы» не попадёт."
+                : "Трата сама попадёт в «Расходы». Если отдал деньги человеку в его кассу, выдал ЗП, записанную в «Зарплате», или оплатил фуру с ценой в «Поставках» — выбери «Не расход», иначе посчитается дважды."}</p>
+            </>}
           </div>
           <div className="flex gap-2 mt-4">
             <Btn onClick={save} disabled={!form.amount || saving}>{saving ? "Сохраняю…" : "Сохранить"}</Btn>
@@ -5254,6 +5330,7 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
               <div className="min-w-0">
                 <div className="font-medium text-gray-900">{isIn ? "▲ Приход" : "▼ Трата"}{x.note ? ` — ${x.note}` : ""}</div>
                 <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ${x.created_by_name}` : ""}{canEditSel ? " · нажми чтобы изменить" : ""}</div>
+                {!isIn && <div className={`text-xs ${x.expCat && x.expCat !== "none" ? "text-amber-700" : "text-gray-400"}`}>{x.expCat && x.expCat !== "none" ? `→ в расходах: ${x.expCat}` : "не в расходах"}</div>}
               </div>
               <span className={`font-bold flex-shrink-0 ${isIn ? "text-emerald-600" : "text-red-500"}`}>{isIn ? "+" : "−"}{fmt(x.amount)} тг</span>
             </button>
@@ -5308,7 +5385,7 @@ function AssistantModal({ onClose, orders = [], clients = [], reload }) {
         await dbUpsert("payments", { id: uid(), clientId: p.clientId || "", clientName: p.clientName || "", date: p.date, amount: Number(p.amount), method: p.method || "Наличные", note: p.note || "" });
         await reload("payments");
       } else if (a.action === "cashbox") {
-        await dbUpsert("cashbox", { id: uid(), dir: p.dir === "in" ? "in" : "out", date: p.date, amount: Number(p.amount), note: p.note || "" });
+        await dbUpsert("cashbox", { id: uid(), dir: p.dir === "in" ? "in" : "out", date: p.date, amount: Number(p.amount), note: p.note || "", expCat: p.dir === "in" ? "" : "Прочее" }); // трата — сразу и в «Расходы» (как в кассе)
         await reload("cashbox");
       } else if (a.action === "add_expense") {
         await dbUpsert("expenses", { id: uid(), date: p.date, category: p.category || "Прочее", amount: Number(p.amount), note: p.note || "" });
@@ -5625,7 +5702,9 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
               <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг{multiCity && <span className="ml-2 text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full align-middle">{cityName(notes, x.city || DEFAULT_CITY)}</span>}</div>
               <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ${x.created_by_name}` : ""}</div>
             </div>
-            {canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}><Icon name="trash" size={15} /></Btn></div>}
+            {x.fromCashbox
+              ? <span className="text-xs text-amber-700 bg-amber-50 rounded-full px-2 py-0.5 whitespace-nowrap" title="Правится и удаляется в «Касса»">из кассы</span>
+              : canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}><Icon name="trash" size={15} /></Btn></div>}
           </div>
         ))}
       </div>

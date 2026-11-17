@@ -233,6 +233,7 @@ export default async function handler(req, res) {
         // Принятую поставку возвращаем вместе с приходом/списанием/расходом (при удалении они убираются) — тем же днём приёмки
         const rec = ch.table === "trucks" ? await syncTruckStock(u, null, ch.data, { restoring: true }) : ch.data;
         await dbUpsert(ch.table, rec);
+        if (ch.table === "cashbox") await syncCashExpense(u, rec, rec.expCity || rec.city || "astana"); // вернуть и копию траты в «Расходы»
         await logChange(u, "restore", ch.table, rec);
         return res.status(200).json({ ok: true, table: ch.table, title: ch.title });
       }
@@ -598,6 +599,7 @@ async function upsertFor(u, table, item) {
     if (table === "trucks") item = await syncTruckStock(u, existing, item); // склад и расход по поставке — до записи фуры
     const out = await dbUpsert(table, item);
     if (table === "orders") await syncOrderStock(existing, item); // движение склада всегда = заявке (пересчёт при правках)
+    if (table === "cashbox") await syncCashExpense(u, item, item.expCity || item.city || "astana"); // трата из кассы → копия в «Расходы»
     if (table === "payments") await logPay(u, item, existing); // история «Долгов»
     if (table === "clients") await logClient(u, item, existing);
     if (LOGGED.has(table)) await logChange(u, existing ? "update" : "create", table, item);
@@ -656,7 +658,13 @@ async function upsertFor(u, table, item) {
     }
     if (table === "payments") { const cli = await dbGet("clients", item.clientId); if (!cli || !inMy(cli.city || "astana")) throw new Error("Клиент другого города"); const ex = await dbGet("payments", item.id); if (ex) { const exCli = await dbGet("clients", ex.clientId); if (!exCli || !inMy(exCli.city || "astana")) throw new Error("Это оплата другого города"); } { await dbUpsert("payments", item); await logPay(u, item, ex); return; } }
     // Касса: менеджер ведёт ТОЛЬКО свою (userId = он сам). Чужую кассу трогать нельзя.
-    if (table === "cashbox") { const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса"); return dbUpsert("cashbox", { ...item, userId: u.uid, city: myCities[0], created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name }); }
+    if (table === "cashbox") {
+      const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса");
+      const rec = { ...item, userId: u.uid, city: myCities[0], created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name };
+      await dbUpsert("cashbox", rec);
+      await syncCashExpense(u, rec, inMy(item.expCity) ? item.expCity : myCities[0]); // трата → копия в «Расходы» (только свои города)
+      return;
+    }
     // Ревизия склада (заметка revision_<город>): только по своим городам
     if (table === "notes" && /^revision(_|$)/.test(String(item.id))) { const c = String(item.id).startsWith("revision_") ? String(item.id).slice(9) : myCities[0]; if (!inMy(c)) throw new Error("Ревизия другого города"); return dbUpsert("notes", item); }
     // Адрес склада (старт маршрута) города: warehouse_<город> — только по своим городам
@@ -790,7 +798,13 @@ async function upsertFor(u, table, item) {
       { await dbUpsert("payments", item); await logPay(u, item, ex); return; }
     }
     // Касса: торгпред ведёт ТОЛЬКО свою (userId = он сам). Поля санитизируем, чужую кассу трогать нельзя.
-    if (table === "cashbox") { const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса"); return dbUpsert("cashbox", { id: item.id, dir: item.dir === "in" ? "in" : "out", date: item.date, amount: Number(item.amount) || 0, note: String(item.note || "").slice(0, 300), userId: u.uid, city: u.city || "astana", created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name }); }
+    if (table === "cashbox") {
+      const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса");
+      const rec = { id: item.id, dir: item.dir === "in" ? "in" : "out", date: item.date, amount: Number(item.amount) || 0, note: String(item.note || "").slice(0, 300), expCat: CASH_EXP_CATS.includes(item.expCat) ? item.expCat : "none", userId: u.uid, city: u.city || "astana", created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name };
+      await dbUpsert("cashbox", rec);
+      await syncCashExpense(u, rec, u.city || "astana"); // трата → копия в «Расходы» (торгпред расходы не видит, но они общие)
+      return;
+    }
     throw new Error("Нет прав на изменение");
   }
   throw new Error("Нет прав на изменение");
@@ -840,6 +854,25 @@ async function syncOrderStock(existing, item) {
   await dbUpsert("stock", {
     id: mvId, date, brand: item.brand, grade: item.grade,
     bag_kg, bags: -bags, weight_kg: -(bags * bag_kg), note: `Отгрузка: ${item.clientName || ""}`, city,
+  });
+}
+
+// 💸 Трата из кассы → копия в «Расходы» (id cbx_<запись кассы>): раздел «Расходы» руками не ведут, всё пишут в кассе,
+// а отчёт по расходам нужен. Категорию выбирают при трате; "none" — не расход (передал деньги в другую кассу;
+// ЗП из «Зарплаты» и фура с ценой в «Поставках» и так уже в расходах — иначе посчиталось бы дважды).
+// Старые траты (до 17.11.2026) без категории — не копируются, пока их не откроют и не выберут категорию.
+// Правка/удаление записи кассы правит/удаляет и копию. city — город расхода (проверен вызывающим по роли).
+const CASH_EXP_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
+async function syncCashExpense(u, rec, city) {
+  const eid = "cbx_" + rec.id;
+  const amount = Number(rec.amount) || 0;
+  if (rec.dir === "in" || !CASH_EXP_CATS.includes(rec.expCat) || amount <= 0) { await dbDelete("expenses", eid); return; }
+  const owner = rec.userId ? await dbGet("users", rec.userId) : null;
+  const ownerName = (owner && owner.name) || rec.created_by_name || u.name || "";
+  await dbUpsert("expenses", {
+    id: eid, date: rec.date, category: rec.expCat, amount,
+    note: `${rec.note || "Трата"} · касса ${ownerName}`.slice(0, 300), city: city || "astana",
+    fromCashbox: rec.id, created_by: rec.created_by || u.uid, created_by_name: rec.created_by_name || u.name,
   });
 }
 
@@ -931,7 +964,7 @@ async function deleteFor(u, table, id) {
     if (table === "lab") { const ex = await dbGet("lab", id); if (ex && ex.city && !inMy(ex.city)) throw new Error("Анализ другого города"); return dbDelete("lab", id); }
     if (table === "crm") { const ex = await dbGet("crm", id); if (ex && ex.ownerId && ex.ownerId !== u.uid) throw new Error("Чужая запись CRM"); return dbDelete("crm", id); }
     if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !cli || !inMy(cli.city || "astana")) throw new Error("Оплата другого города"); if (ex.adjust && !ex.recon) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
-    if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
+    if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); await dbDelete("expenses", "cbx_" + id); return dbDelete("cashbox", id); }
     if (table === "users") {
       const ex = await dbGet("users", id);
       if (!ex) return;
@@ -952,7 +985,7 @@ async function deleteFor(u, table, id) {
     if (table === "clients") { const ex = await dbGet("clients", id); if (!ex || ex.ownerId !== u.uid) throw new Error("Это не ваш клиент"); await dbDelete("clients", id); await logClient(u, null, ex, true); return; }
     if (table === "orders") { const ex = await dbGet("orders", id); if (!ex) return; const ownSample = !ex.clientId && ex.created_by === u.uid; if (!ownSample) { const cli = await dbGet("clients", ex.clientId); if (!(await repSeesClient(u, cli))) throw new Error("Это не ваша заявка"); } try { await dbDelete("stock", "mv_" + id); } catch {} return dbDelete("orders", id); }
     if (table === "payments") { const ex = await dbGet("payments", id); const cli = ex && await dbGet("clients", ex.clientId); if (!ex || !(await repSeesClient(u, cli))) throw new Error("Это не ваша оплата"); if (ex.adjust && !ex.recon) throw new Error("Корректировку по акту сверки может убрать только директор"); await dbDelete("payments", id); await logPay(u, ex, null, true); return; }
-    if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); return dbDelete("cashbox", id); }
+    if (table === "cashbox") { const ex = await dbGet("cashbox", id); if (!ex) return; if ((ex.userId || "") !== u.uid) throw new Error("Это чужая касса"); await dbDelete("expenses", "cbx_" + id); return dbDelete("cashbox", id); }
     throw new Error("Нет прав на удаление");
   }
   if (u.role !== "director") throw new Error("Нет прав на удаление");
@@ -972,6 +1005,7 @@ async function deleteFor(u, table, id) {
     // приход (tin_), списание у источника (tout_) и расход за поставку (texp_). Сбой — фуру не удаляем, повтор доделает.
     await dropTruckMoves(id);
   }
+  if (table === "cashbox") await dbDelete("expenses", "cbx_" + id); // копия траты в «Расходах»
 
   return dbDelete(table, id);
 }
