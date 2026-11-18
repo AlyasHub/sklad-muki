@@ -5193,20 +5193,18 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
     setSaving(false);
   };
 
-  // 💸 Трата сама попадает в «Расходы» (копию пишет сервер) — по умолчанию «Прочее». «Не расход» — передал деньги
-  // в другую кассу, или это ЗП из «Зарплаты» / фура с ценой в «Поставках» (они уже в расходах — иначе дважды).
+  // 💸 ВСЕ траты сами попадают в «Расходы» (копию пишет сервер). Категория — для отчёта, по умолчанию «Прочее».
   const myCities = (me.cities && me.cities.length) ? me.cities : null; // менеджер — только свои города; директор — все
   const expCityOpts = citiesOf(notes).filter(c => !myCities || myCities.includes(c.id)).map(c => ({ value: c.id, label: c.name }));
   const defExpCity = ownerId => uCity(ownerId) || (curCity !== "all" ? curCity : activeCity);
-  const EXP_CAT_OPTS = [...EXPENSE_CATS.map(c => ({ value: c, label: c })), { value: "none", label: "Не расход — передал деньги / ЗП или фура уже записаны" }];
+  const expCatOf = x => EXPENSE_CATS.includes(x.expCat) ? x.expCat : "Прочее";
   const openNew = d => { setEditItem(null); setDir(d); setForm({ date: TODAY(), amount: "", note: "", expCat: "Прочее", expCity: defExpCity(selId) }); setShowAdd(true); };
-  // Старые траты (до 17.11.2026) без категории — «не расход», пока сам не выберешь (иначе ЗП/фуры задвоились бы)
-  const openEdit = x => { setEditItem(x); setDir(x.dir === "in" ? "in" : "out"); setForm({ date: x.date || TODAY(), amount: String(x.amount ?? ""), note: x.note || "", expCat: x.expCat || "none", expCity: x.expCity || defExpCity(ownerIdOf(x)) }); setShowAdd(true); };
+  const openEdit = x => { setEditItem(x); setDir(x.dir === "in" ? "in" : "out"); setForm({ date: x.date || TODAY(), amount: String(x.amount ?? ""), note: x.note || "", expCat: expCatOf(x), expCity: x.expCity || defExpCity(ownerIdOf(x)) }); setShowAdd(true); };
   const save = async () => {
     if (!form.amount || Number(form.amount) <= 0) return;
     setSaving(true);
     try {
-      const exp = dir === "out" ? { expCat: form.expCat || "none", expCity: form.expCity || "" } : { expCat: "", expCity: "" };
+      const exp = dir === "out" ? { expCat: form.expCat || "Прочее", expCity: form.expCity || "" } : { expCat: "", expCity: "" };
       const rec = editItem
         ? { ...editItem, dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), ...exp, userId: ownerIdOf(editItem), city: uCity(ownerIdOf(editItem)) }
         : { id: uid(), dir, date: form.date, amount: Number(form.amount), note: form.note.trim(), ...exp, userId: selId, city: uCity(selId) };
@@ -5288,11 +5286,9 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
             <Inp label="Сумма, тг" type="number" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
             <Inp label={dir === "in" ? "От кого / за что (по желанию)" : "На что потратил"} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={dir === "in" ? "напр. от Эрика на закуп" : "напр. роутер, камеры"} />
             {dir === "out" && <>
-              <Sel label="В расходы — категория" value={form.expCat || "none"} onChange={e => setForm({ ...form, expCat: e.target.value })} options={EXP_CAT_OPTS} />
-              {multiCity && isOwner && form.expCat !== "none" && expCityOpts.length > 1 && <Sel label="Город расхода" value={form.expCity || ""} onChange={e => setForm({ ...form, expCity: e.target.value })} options={expCityOpts} />}
-              <p className="text-xs text-gray-500 -mt-1">{form.expCat === "none"
-                ? "В «Расходы» не попадёт."
-                : "Трата сама попадёт в «Расходы». Если отдал деньги человеку в его кассу, выдал ЗП, записанную в «Зарплате», или оплатил фуру с ценой в «Поставках» — выбери «Не расход», иначе посчитается дважды."}</p>
+              <Sel label="Категория в «Расходах»" value={form.expCat || "Прочее"} onChange={e => setForm({ ...form, expCat: e.target.value })} options={EXPENSE_CATS} />
+              {multiCity && isOwner && expCityOpts.length > 1 && <Sel label="Город расхода" value={form.expCity || ""} onChange={e => setForm({ ...form, expCity: e.target.value })} options={expCityOpts} />}
+              <p className="text-xs text-gray-500 -mt-1">Трата сама попадёт в «Расходы».</p>
             </>}
           </div>
           <div className="flex gap-2 mt-4">
@@ -5330,7 +5326,7 @@ function CashboxTab({ cashbox = [], users = [], notes = [], me = {}, myRecord = 
               <div className="min-w-0">
                 <div className="font-medium text-gray-900">{isIn ? "▲ Приход" : "▼ Трата"}{x.note ? ` — ${x.note}` : ""}</div>
                 <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.created_by_name ? ` · ${x.created_by_name}` : ""}{canEditSel ? " · нажми чтобы изменить" : ""}</div>
-                {!isIn && <div className={`text-xs ${x.expCat && x.expCat !== "none" ? "text-amber-700" : "text-gray-400"}`}>{x.expCat && x.expCat !== "none" ? `→ в расходах: ${x.expCat}` : "не в расходах"}</div>}
+                {!isIn && <div className="text-xs text-amber-700">→ в расходах: {expCatOf(x)}</div>}
               </div>
               <span className={`font-bold flex-shrink-0 ${isIn ? "text-emerald-600" : "text-red-500"}`}>{isIn ? "+" : "−"}{fmt(x.amount)} тг</span>
             </button>
@@ -5650,14 +5646,30 @@ function CrmTab({ crm = [], clients = [], reload, activeCity = DEFAULT_CITY, mul
   );
 }
 
-function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities = [], activeCity = DEFAULT_CITY, multiCity = false, curCity = "all", notes = [] }) {
+function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities = [], activeCity = DEFAULT_CITY, multiCity = false, curCity = "all", notes = [], isDirector = false }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const blank = { date: TODAY(), category: EXPENSE_CATS[0], amount: "", note: "", city: activeCity };
   const [form, setForm] = useState(blank);
+  const [period, setPeriod] = useState("month"); // week | month | prev | 3month | all | custom
+  const [from, setFrom] = useState(TODAY().slice(0, 8) + "01");
+  const [to, setTo] = useState(TODAY());
+  const [syncMsg, setSyncMsg] = useState("");
   // Открыть форму расхода по сигналу с кнопки «+»
   useEffect(() => { if (openSignal) { setEditId(null); setForm(blank); setShowAdd(true); } }, [openSignal]);
+  // 💸 Все траты из касс — в расходах: при открытии директором сервер дописывает недостающие копии (в т.ч. старые траты),
+  // правит разошедшиеся и убирает копии удалённых. Пишет только разницу.
+  useEffect(() => {
+    if (!isDirector) return;
+    let alive = true;
+    apiData("cashExpenseSync").then(r => {
+      if (!alive || !r) return;
+      const n = (r.added || 0) + (r.updated || 0) + (r.removed || 0);
+      if (n) { setSyncMsg(`Траты из кассы подтянуты в расходы: ${r.added ? "+" + r.added : ""}${r.updated ? " обновлено " + r.updated : ""}${r.removed ? " убрано " + r.removed : ""}`.trim()); reload("expenses"); }
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [isDirector]);
 
   const openNew = () => { setEditId(null); setForm(blank); setShowAdd(true); };
   const openEdit = x => { setEditId(x.id); setForm({ date: x.date, category: catName(x.category), amount: x.amount, note: x.note || "", city: x.city || DEFAULT_CITY }); setShowAdd(true); };
@@ -5671,14 +5683,55 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
   const del = async id => { if (!confirm("Удалить расход?")) return; try { await dbDelete("expenses", id); await reload("expenses"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
 
   const cityExp = (multiCity && curCity !== "all") ? expenses.filter(x => (x.city || DEFAULT_CITY) === curCity) : expenses; // город выбран — его расходы; «Все города» — все
-  const now = new Date();
-  const monthTotal = cityExp.filter(x => { const d = new Date(x.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); }).reduce((s, x) => s + (x.amount || 0), 0);
-  const sorted = [...cityExp].sort((a, b) => b.date.localeCompare(a.date));
+  // Период — по строкам дат YYYY-MM-DD (без сдвигов часовых поясов)
+  const today = TODAY(), ym = today.slice(0, 7);
+  const shift = (days) => { const d = new Date(today + "T12:00:00"); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
+  const prevYm = (() => { const [y, m] = ym.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; })();
+  const prevEnd = `${prevYm}-${String(new Date(Number(prevYm.slice(0, 4)), Number(prevYm.slice(5, 7)), 0).getDate()).padStart(2, "0")}`; // последний день прошлого месяца
+  const range = period === "week" ? [shift(-6), today] : period === "month" ? [ym + "-01", today] : period === "prev" ? [prevYm + "-01", prevEnd]
+    : period === "3month" ? [shift(-90), today] : period === "custom" ? [from, to] : ["", "9999"];
+  const inRange = x => (x.date || "") >= range[0] && (x.date || "") <= range[1];
+  const list = cityExp.filter(inRange).sort((a, b) => (b.date || "").localeCompare(a.date || "") || String(b.id).localeCompare(String(a.id)));
+  const total = list.reduce((s, x) => s + (x.amount || 0), 0);
+  const byCat = {}; list.forEach(x => { const k = catName(x.category); byCat[k] = (byCat[k] || 0) + (x.amount || 0); });
+  const dmy = d => (d || "").split("-").reverse().join(".");
+  const periodLabel = period === "all" ? "всё время" : `${dmy(range[0])} – ${dmy(range[1])}`;
+  const periods = [["week", "Неделя"], ["month", "Этот месяц"], ["prev", "Прошлый месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
+  const srcOf = x => x.fromCashbox ? "касса" : String(x.id).startsWith("texp_") ? "поставка" : x.driverId ? "зарплата" : "вручную";
+  // Excel (CSV с ; и BOM): список за период + итоги по категориям
+  const download = () => {
+    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const txt = v => /^[=+\-@]/.test(String(v || "")) ? "'" + v : (v || ""); // текст с «=», «-»… Excel не примет за формулу
+    const where = multiCity ? (curCity === "all" ? "все города" : cityName(notes, curCity)) : "";
+    const rows = [[`Расходы за ${periodLabel}${where ? " — " + where : ""}`], [], ["Дата", "Категория", "Сумма, тг", "Примечание", ...(multiCity ? ["Город"] : []), "Откуда", "Кто внёс"]];
+    [...list].reverse().forEach(x => rows.push([dmy(x.date), catName(x.category), x.amount || 0, txt(x.note), ...(multiCity ? [cityName(notes, x.city || DEFAULT_CITY)] : []), srcOf(x), x.created_by_name || ""]));
+    rows.push([], ["ИТОГО", "", total], [], ["По категориям"]);
+    Object.entries(byCat).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => rows.push(["", k, v]));
+    const tag = period === "all" ? "всё" : `${range[0]}_${range[1]}`;
+    downloadFile(`Расходы_${tag}.csv`, "﻿" + rows.map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+  };
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Расходы</h3>{canEdit && <Btn onClick={openNew}>+ Расход</Btn>}</div>
-      <div className="bg-gradient-to-br from-rose-50 to-red-50 rounded-2xl p-4"><div className="text-xs text-red-700 font-medium">Расходы за текущий месяц</div><div className="text-2xl font-bold text-red-700">{fmt(monthTotal)} тг</div></div>
+      <div className="flex flex-wrap gap-2">
+        {periods.map(([v, l]) => <button key={v} onClick={() => setPeriod(v)} className={`px-3.5 py-1.5 rounded-xl text-sm font-medium transition-all ${period === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>)}
+      </div>
+      {period === "custom" && (
+        <div className="flex items-center gap-2 text-sm">
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 flex-1" />
+          <span className="text-gray-400">—</span>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 flex-1" />
+        </div>
+      )}
+      <div className="bg-gradient-to-br from-rose-50 to-red-50 rounded-2xl p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div><div className="text-xs text-red-700 font-medium">Расходы за {periodLabel}</div><div className="text-2xl font-bold text-red-700">{fmt(total)} тг</div><div className="text-xs text-red-700/70">{list.length} записей</div></div>
+          <Btn size="sm" variant="secondary" onClick={download} disabled={!list.length}><Icon name="download" size={15} />Excel</Btn>
+        </div>
+        {Object.keys(byCat).length > 0 && <div className="mt-2 pt-2 border-t border-red-100 space-y-0.5 text-sm">{Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([k, v]) => <div key={k} className="flex justify-between"><span className="text-gray-600">{k}</span><b className="text-gray-800">{fmt(v)} тг</b></div>)}</div>}
+      </div>
+      {syncMsg && <div className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2">{syncMsg}</div>}
       {showAdd && (
         <Modal title={editId ? "Изменить расход" : "Новый расход"} onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
@@ -5695,8 +5748,8 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
         </Modal>
       )}
       <div className="space-y-2">
-        {expenses.length === 0 && <div className="text-center py-12 text-gray-400">Расходов нет.</div>}
-        {sorted.map(x => (
+        {list.length === 0 && <div className="text-center py-12 text-gray-400">{expenses.length ? "За этот период расходов нет." : "Расходов нет."}</div>}
+        {list.map(x => (
           <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
             <div>
               <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг{multiCity && <span className="ml-2 text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full align-middle">{cityName(notes, x.city || DEFAULT_CITY)}</span>}</div>
@@ -8694,7 +8747,7 @@ export default function App() {
             {tab === "clients" && <ClientsTab focus={clientFocus} clients={view.clients} orders={view.orders} payments={view.payments} users={data.users} notes={data.notes} role={user.role} myUid={user.id} reload={reload} canEdit={isDirector || isRep || isCityMgr} cities={cityList} activeCity={activeCity} />}
             {tab === "crm" && <CrmTab crm={data.crm} clients={data.clients} reload={reload} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {tab === "drivers" && <DriversTab drivers={data.drivers} orders={data.orders} expenses={data.expenses} users={data.users} reload={reload} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} notes={data.notes} />}
-            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} curCity={curCity} notes={data.notes} />}
+            {tab === "expenses" && <ExpensesTab expenses={data.expenses} reload={reload} openSignal={openExpenseSignal} canEdit={canCity} cities={cityList} activeCity={activeCity} multiCity={multiCity} curCity={curCity} notes={data.notes} isDirector={isDirector} />}
             {tab === "cashbox" && <CashboxTab cashbox={data.cashbox} users={data.users} notes={data.notes} me={user} myRecord={myRecord} isOwner={isDirector || user.role === "viewer" || isCityMgr} fullOwner={isDirector || user.role === "viewer"} canEdit={user.role !== "viewer"} reload={reload} activeCity={activeCity} multiCity={multiCity} curCity={curCity} />}
             {/* Отчёты: селектор городов внутри (Все / выбранные). Данные передаём глобально, ReportsTab фильтрует по выбору. */}
             {tab === "reports" && <ReportsTab orders={data.orders} drivers={data.drivers} stock={data.stock} expenses={data.expenses} payments={data.payments} clients={data.clients} users={data.users} role={user.role} reload={reload} canEdit={canCity} cities={availableCities} notes={data.notes} curCity={curCity} />}

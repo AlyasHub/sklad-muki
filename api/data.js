@@ -215,6 +215,23 @@ export default async function handler(req, res) {
       if (u.role === "rep") { const ids = new Set((await repVisibleClients(u)).map(c => c.id)); rows = rows.filter(r => r.clientId && ids.has(r.clientId)); }
       return res.status(200).json({ rows: day ? rows : rows.slice(0, 300) });
     }
+    // Все траты из касс → «Расходы» (cbx_<запись кассы>): дописать недостающие копии (и старые траты до 17.11), поправить
+    // разошедшиеся, убрать копии удалённых/ставших «приходом». Пишет только разницу. Вызывается при открытии «Расходов» директором.
+    if (op === "cashExpenseSync") {
+      if (u.role !== "director") return res.status(403).json({ error: "Только для администратора" });
+      const [cb, ex, users] = await Promise.all([dbList("cashbox"), dbList("expenses"), dbList("users")]);
+      const nameOf = new Map(users.map(x => [x.id, x.name]));
+      const legacyOwner = (users.filter(x => x.role === "director").sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || {}).id; // как в «Кассе»: записи без владельца — у основателя
+      const have = new Map(ex.filter(e => String(e.id).startsWith("cbx_")).map(e => [e.id, e]));
+      const want = new Map();
+      cb.forEach(r => { const row = cashExpenseRow(u, r, nameOf.get(r.userId || legacyOwner) || "", r.expCity || r.city || "astana"); if (row) want.set(row.id, row); });
+      const same = (a, b) => ["date", "category", "amount", "note", "city"].every(k => String(a[k] ?? "") === String(b[k] ?? ""));
+      const put = [...want.values()].filter(r => !have.has(r.id) || !same(have.get(r.id), r));
+      const drop = [...have.keys()].filter(id => !want.has(id));
+      for (let i = 0; i < put.length; i += 20) await Promise.all(put.slice(i, i + 20).map(r => dbUpsert("expenses", r))); // пачками по 20
+      await Promise.all(drop.map(id => dbDelete("expenses", id)));
+      return res.status(200).json({ ok: true, added: put.filter(r => !have.has(r.id)).length, updated: put.filter(r => have.has(r.id)).length, removed: drop.length });
+    }
     // Журнал изменений и резервные копии — только администратор
     if (op === "changes" || op === "restoreChange" || op === "backupNow" || op === "backupList" || op === "backupGet") {
       if (u.role !== "director") return res.status(403).json({ error: "Только для администратора" });
@@ -800,7 +817,7 @@ async function upsertFor(u, table, item) {
     // Касса: торгпред ведёт ТОЛЬКО свою (userId = он сам). Поля санитизируем, чужую кассу трогать нельзя.
     if (table === "cashbox") {
       const ex = await dbGet("cashbox", item.id); if (ex && (ex.userId || "") && ex.userId !== u.uid) throw new Error("Это чужая касса");
-      const rec = { id: item.id, dir: item.dir === "in" ? "in" : "out", date: item.date, amount: Number(item.amount) || 0, note: String(item.note || "").slice(0, 300), expCat: CASH_EXP_CATS.includes(item.expCat) ? item.expCat : "none", userId: u.uid, city: u.city || "astana", created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name };
+      const rec = { id: item.id, dir: item.dir === "in" ? "in" : "out", date: item.date, amount: Number(item.amount) || 0, note: String(item.note || "").slice(0, 300), expCat: CASH_EXP_CATS.includes(item.expCat) ? item.expCat : "Прочее", userId: u.uid, city: u.city || "astana", created_by: ex?.created_by || u.uid, created_by_name: ex?.created_by_name || u.name };
       await dbUpsert("cashbox", rec);
       await syncCashExpense(u, rec, u.city || "astana"); // трата → копия в «Расходы» (торгпред расходы не видит, но они общие)
       return;
@@ -857,23 +874,24 @@ async function syncOrderStock(existing, item) {
   });
 }
 
-// 💸 Трата из кассы → копия в «Расходы» (id cbx_<запись кассы>): раздел «Расходы» руками не ведут, всё пишут в кассе,
-// а отчёт по расходам нужен. Категорию выбирают при трате; "none" — не расход (передал деньги в другую кассу;
-// ЗП из «Зарплаты» и фура с ценой в «Поставках» и так уже в расходах — иначе посчиталось бы дважды).
-// Старые траты (до 17.11.2026) без категории — не копируются, пока их не откроют и не выберут категорию.
-// Правка/удаление записи кассы правит/удаляет и копию. city — город расхода (проверен вызывающим по роли).
+// 💸 ВСЕ траты из кассы → копия в «Расходы» (id cbx_<запись кассы>): раздел «Расходы» руками не ведут, всё пишут
+// в кассе, а отчёт по расходам нужен (владелец 18.11.2026: «все траты», без исключений). Категория — выбранная при
+// трате, иначе «Прочее». Правка/удаление записи кассы правит/удаляет и копию; старые траты дописывает op cashExpenseSync.
+// city — город расхода (проверен вызывающим по роли).
 const CASH_EXP_CATS = ["Фура/Поставка", "Водители", "Грузчики", "Склад", "Аренда", "Зарплата", "Прочее"];
-async function syncCashExpense(u, rec, city) {
-  const eid = "cbx_" + rec.id;
-  const amount = Number(rec.amount) || 0;
-  if (rec.dir === "in" || !CASH_EXP_CATS.includes(rec.expCat) || amount <= 0) { await dbDelete("expenses", eid); return; }
-  const owner = rec.userId ? await dbGet("users", rec.userId) : null;
-  const ownerName = (owner && owner.name) || rec.created_by_name || u.name || "";
-  await dbUpsert("expenses", {
-    id: eid, date: rec.date, category: rec.expCat, amount,
-    note: `${rec.note || "Трата"} · касса ${ownerName}`.slice(0, 300), city: city || "astana",
+function cashExpenseRow(u, rec, ownerName, city) {
+  const amount = Number(rec && rec.amount) || 0;
+  if (!rec || rec.dir === "in" || amount <= 0) return null;
+  return {
+    id: "cbx_" + rec.id, date: rec.date, category: CASH_EXP_CATS.includes(rec.expCat) ? rec.expCat : "Прочее", amount,
+    note: `${rec.note || "Трата"} · касса ${ownerName || ""}`.trim().slice(0, 300), city: city || "astana",
     fromCashbox: rec.id, created_by: rec.created_by || u.uid, created_by_name: rec.created_by_name || u.name,
-  });
+  };
+}
+async function syncCashExpense(u, rec, city) {
+  const owner = rec.userId ? await dbGet("users", rec.userId) : null;
+  const row = cashExpenseRow(u, rec, (owner && owner.name) || rec.created_by_name || u.name || "", city);
+  if (row) await dbUpsert("expenses", row); else await dbDelete("expenses", "cbx_" + rec.id);
 }
 
 // Строки склада по поставке (фура/вагон): tin_<фура>_<i> (приход), tout_<фура>_<i> (списание у источника).
