@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
-import { downloadClientsReport, loadExcelJS } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»); чтение Excel-ведомости
+import { downloadClientsReport, loadExcelJS, downloadXlsx } from "./xlsxReport.js"; // Excel по клиентам (как «Отчет Темирлан»); чтение Excel-ведомости
 import { debtAt, reconId, clientCheckpoints, checkpointDrift, saveCheckpoints, resyncCheckpoints, recentMonths, monthFirst, nextMonthFirst, monthLast, monthLabel } from "./recon.js"; // сверки долга по месяцам
 import { dayAfter, osvLines, osvTotalCheck, osvByClient, sheetsToText } from "./osv.js"; // оборотно-сальдовая ведомость → сверки
 import { syncState, mergeLoad } from "./sync.js"; // частичное обновление данных раз в минуту
@@ -955,17 +955,16 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
     if (Object.keys(byDrv).length) { L.push("", "ВОДИТЕЛИ:"); Object.values(byDrv).forEach(v => L.push(`• ${v.name}: ${fmt(v.kg)} кг · к оплате ${fmt(v.pay)} тг`)); }
     return L.join("\n");
   };
-  // Таблица для Excel (CSV с ; и BOM — корректно открывается в Excel)
-  const buildCsv = () => {
+  // Таблица для Excel (.xlsx)
+  const buildRows = () => {
     const headers = ["Дата", "Клиент", "Организация", "Бренд", "Сорт", "Фасовка кг", "Мешков", "Кг", "Цена тг/кг", "Сумма тг", "Статус", "Водитель", "Внёс"];
-    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const rows = dayOrders.map(o => {
       const client = clients.find(c => c.id === o.clientId);
       const drv = drivers.find(dr => dr.id === o.driverId);
       const kg = o.bags * o.bag_kg;
       return [o.date, o.clientName, client?.org_name || "", o.brand, o.grade, o.bag_kg, o.bags, kg, o.price_per_kg || 0, kg * (o.price_per_kg || 0), o.status, drv?.name || "", o.created_by_name || ""];
     });
-    return "﻿" + [headers, ...rows].map(r => r.map(esc).join(";")).join("\r\n");
+    return [headers, ...rows];
   };
 
   const prevMonth = () => setCursor(new Date(year, month - 1, 1));
@@ -1046,7 +1045,7 @@ function CalendarTab({ orders, drivers, clients, stock = [], notes = [], payment
         {!driverMode && dayOrders.length > 0 && (
           <div className="flex gap-2 mb-3">
             <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Отчёт_${selected}.txt`, buildReport(), "text/plain;charset=utf-8")}><Icon name="download" size={15} />Отчёт за день</Btn>
-            <Btn size="sm" variant="secondary" onClick={() => downloadFile(`Склад_${selected}.csv`, buildCsv(), "text/csv;charset=utf-8")}><Icon name="download" size={15} />Excel</Btn>
+            <Btn size="sm" variant="secondary" onClick={() => downloadXlsx(`Склад_${selected}`, buildRows(), { header: 0, sheet: "Заявки" }).catch(e => alert("⚠️ " + (e.message || e)))}><Icon name="download" size={15} />Excel</Btn>
           </div>
         )}
         {(() => {
@@ -1639,7 +1638,6 @@ function StockAsOf({ rows = [], cities = [], notes = [], defCity = "all", multiC
   const dmy = day.split("-").reverse().join(".");
   const where = !multiCity ? "" : city === "all" ? "все склады" : cityName(notes, city);
   const download = () => {
-    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const out = [[`Остатки на складе на ${dmy}${where ? " — " + where : ""}`], [], [...(multiCity ? ["Город"] : []), "Бренд", "Сорт", "Фасовка, кг", "Мешков", "Кг"]];
     const cityIds = [...new Set(list.map(p => p.city))];
     cityIds.forEach(cid => {
@@ -1648,7 +1646,7 @@ function StockAsOf({ rows = [], cities = [], notes = [], defCity = "all", multiC
       if (multiCity && cityIds.length > 1) out.push([`Итого ${cityName(notes, cid)}`, "", "", "", ps.reduce((s, p) => s + p.bags, 0), Math.round(ps.reduce((s, p) => s + p.kg, 0))], []);
     });
     out.push([...(multiCity ? ["ИТОГО"] : []), ...(multiCity ? ["", "", ""] : ["ИТОГО", "", ""]), totBags, Math.round(totKg)]);
-    downloadFile(`Остатки_${day}${where ? "_" + where.replace(/\s+/g, "_") : ""}.csv`, "﻿" + out.map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+    downloadXlsx(`Остатки_${day}${where ? "_" + where.replace(/\s+/g, "_") : ""}`, out, { header: 2, sheet: "Остатки " + dmy }).catch(e => alert("⚠️ " + (e.message || e)));
   };
   return (
     <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 space-y-3">
@@ -3734,7 +3732,8 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   // Отчёт считается по доступным/выбранным городам: заявки (город фиксирован на заявке/клиенте), оплаты (город клиента), расходы (город расхода).
   const orders = (repMode ? ordersProp.filter(o => !o.foreign) : ordersProp).filter(o => cityOk(orderCity(o, clients)));
   const payments = (paymentsProp || []).filter(p => { if (!cityScoped) return true; const cl = clients.find(c => c.id === p.clientId); return cityOk(cl ? clientCity(cl) : DEFAULT_CITY); });
-  const expenses = (expensesProp || []).filter(x => cityOk(x.city || DEFAULT_CITY));
+  // Расходы в отчётах — только траты из касс (владелец 18.11.2026): ЗП/фуры из своих разделов платят из кассы — не дублируем
+  const expenses = (expensesProp || []).filter(x => x.fromCashbox && cityOk(x.city || DEFAULT_CITY));
   const toggleCity = id => setSelCities(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
   // 📊 Excel по клиентам (по шаблону «Отчет Темирлан»): период с–по, чьи клиенты
   const [xlOpen, setXlOpen] = useState(false);
@@ -3847,7 +3846,7 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   (ordersProp || []).filter(filterFn).filter(o => o.status === "отгружена").forEach(o => { const a = cEnsure(orderCity(o, clients)); const kg = o.bags * o.bag_kg; a.kg += kg; a.rev += kg * (o.price_per_kg || 0); a.ordSet.add((o.clientId || "nm:" + (o.clientName || "")) + "|" + o.date); const pk = `${o.brand} ${o.grade} ${o.bag_kg}кг`; a.prod[pk] = (a.prod[pk] || 0) + kg; });
   (ordersProp || []).filter(o => o.status === "отгружена" && !o.paid).forEach(o => { const sum = o.bags * o.bag_kg * (o.price_per_kg || 0); if (sum > 0) cEnsure(orderCity(o, clients)).debt += sum; });
   (paymentsProp || []).forEach(p => { const cl = clients.find(c => c.id === p.clientId); cEnsure(cl ? clientCity(cl) : DEFAULT_CITY).debt -= (p.amount || 0); });
-  (expensesProp || []).filter(filterFn).forEach(x => { const a = cEnsure(x.city || DEFAULT_CITY); a.exp += (x.amount || 0); if (/фура|поставк|перемещ|доставк/i.test(x.category || "")) a.deliv += (x.amount || 0); });
+  (expensesProp || []).filter(x => x.fromCashbox).filter(filterFn).forEach(x => { const a = cEnsure(x.city || DEFAULT_CITY); a.exp += (x.amount || 0); if (/фура|поставк|перемещ|доставк/i.test(x.category || "")) a.deliv += (x.amount || 0); });
   const cityStats = cities.map(c => { const a = cityAgg[c.id]; return { ...c, kg: a.kg, rev: a.rev, orders: a.ordSet.size, debt: Math.max(0, Math.round(a.debt)), exp: Math.round(a.exp), deliv: Math.round(a.deliv), delivPerKg: a.kg ? a.deliv / a.kg : 0, profit: Math.round(a.rev - a.exp), topProd: Object.entries(a.prod).sort((x, y) => y[1] - x[1]).slice(0, 5) }; }).sort((a, b) => (a.kind === "mill" ? 1 : 0) - (b.kind === "mill" ? 1 : 0) || b.rev - a.rev);
   // Расходы за период
   const expInPeriod = expenses.filter(filterFn);
@@ -3921,13 +3920,12 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   });
   const gradeOrder = g => { const i = GRADES.indexOf(g); return i === -1 ? 99 : i; }; // Высший, потом Первый
   const downloadGradeDetail = () => {
-    const esc2 = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const rows = [["Бренд", "Сорт", "Фасовка кг", "Мешков", "Кг", "Сумма тг", "Ср. цена тг/кг", "Доля объёма %"]];
     Object.entries(brandTree).sort((a, b) => a[0].localeCompare(b[0], "ru")).forEach(([brand, b]) =>
       Object.entries(b.grades).sort((a, b) => gradeOrder(a[0]) - gradeOrder(b[0])).forEach(([grade, g]) =>
         Object.entries(g.packs).sort((a, b) => Number(b[0]) - Number(a[0])).forEach(([pk, p]) =>
-          rows.push([brand, grade, pk, p.bags, p.kg, Math.round(p.rev), p.kg ? Math.round(p.rev / p.kg) : 0, totalKg ? (p.kg / totalKg * 100).toFixed(1) : 0]))));
-    downloadFile(`Отчёт_бренды_сорта_фасовки_${TODAY()}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+          rows.push([brand, grade, Number(pk), p.bags, p.kg, Math.round(p.rev), p.kg ? Math.round(p.rev / p.kg) : 0, totalKg ? Math.round(p.kg / totalKg * 1000) / 10 : 0]))));
+    downloadXlsx(`Отчёт_бренды_сорта_фасовки_${TODAY()}`, rows, { header: 0, sheet: "Бренды и сорта" }).catch(e => alert("⚠️ " + (e.message || e)));
   };
 
   // 🔍 Свой отчёт: продажи за период с фильтрами бренд/сорт/фасовки
@@ -3954,14 +3952,13 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
   const repDates = Object.entries(repByDate).sort((a, b) => b[0].localeCompare(a[0]));
   const repFilterName = `${repBrand === "all" ? "все бренды" : repBrand} · ${repGrade === "all" ? "все сорта" : repGrade} · ${repPacks.length ? repPacks.join("+") + " кг" : "все фасовки"}`;
   const downloadRep = () => {
-    const esc2 = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const rows = [["Фильтр", repFilterName], ["Итого кг", repKg], ["Мешков", repBags], ["Сумма тг", Math.round(repRev)], ["Средняя цена тг/кг", Math.round(repAvgPrice)], [],
       ["Клиент", "Мешков", "Кг", "Сумма тг", "Ср. цена тг/кг", "Доля %"]];
-    repClients.forEach(([name, v]) => rows.push([name, v.bags, v.kg, Math.round(v.rev), v.kg ? Math.round(v.rev / v.kg) : 0, repKg ? (v.kg / repKg * 100).toFixed(1) : 0]));
+    repClients.forEach(([name, v]) => rows.push([name, v.bags, v.kg, Math.round(v.rev), v.kg ? Math.round(v.rev / v.kg) : 0, repKg ? Math.round(v.kg / repKg * 1000) / 10 : 0]));
     rows.push([]);
     rows.push(["Дата", "Кг", "Сумма тг"]);
-    repDates.forEach(([d, v]) => rows.push([d, v.kg, Math.round(v.rev)]));
-    downloadFile(`Свой_отчёт_${TODAY()}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+    repDates.forEach(([d, v]) => rows.push([d.split("-").reverse().join("."), v.kg, Math.round(v.rev)]));
+    downloadXlsx(`Свой_отчёт_${TODAY()}`, rows, { header: 6, sheet: "Свой отчёт" }).catch(e => alert("⚠️ " + (e.message || e)));
   };
   const maxP = Math.max(...pl.map(([, v]) => v.kg), 1), maxW = Math.max(...wl.map(([, v]) => v.kg), 1), maxC = Math.max(...cl.map(([, v]) => v.kg), 1);
   const TD = 14;
@@ -4335,13 +4332,11 @@ function ReportsTab({ orders: ordersProp, drivers, stock = [], expenses: expense
             <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="expense" size={16} />Расходы за период</div>
             <div className="flex items-center gap-2">
               {expInPeriod.length > 0 && <button onClick={() => {
-                // Список расходов за период (траты из касс + ЗП + фуры) — CSV с ; и BOM, открывается в Excel
-                const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-                const txt = v => /^[=+\-@]/.test(String(v || "")) ? "'" + v : (v || ""); // текст с «=», «-»… Excel не примет за формулу
-                const rows = [...expInPeriod].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map(x => [(x.date || "").split("-").reverse().join("."), catName(x.category), x.amount || 0, txt(x.note), cityName(notes, x.city || DEFAULT_CITY), x.fromCashbox ? "касса" : String(x.id).startsWith("texp_") ? "поставка" : x.driverId ? "зарплата" : "вручную"]);
-                if (trialCost > 0) rows.push(["", "На пробу", trialCost, "бесплатно отгруженная мука по закупочной цене", "", "расчёт"]); // как в сумме на экране
+                // Список расходов за период (траты из касс) → .xlsx
+                const rows = [...expInPeriod].sort((a, b) => (a.date || "").localeCompare(b.date || "")).map(x => [(x.date || "").split("-").reverse().join("."), catName(x.category), x.amount || 0, x.note || "", cityName(notes, x.city || DEFAULT_CITY)]);
+                if (trialCost > 0) rows.push(["", "На пробу", trialCost, "бесплатно отгруженная мука по закупочной цене (расчёт)", ""]); // как в сумме на экране
                 const tag = period === "custom" ? `${from}_${to}` : period === "month" ? TODAY().slice(0, 7) : { week: "неделя", "3month": "3мес", all: "всё" }[period] || period;
-                downloadFile(`Расходы_${tag}.csv`, "﻿" + [["Дата", "Категория", "Сумма, тг", "Примечание", "Город", "Откуда"], ...rows, [], ["Итого", "", expTotal]].map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+                downloadXlsx(`Расходы_${tag}`, [["Дата", "Категория", "Сумма, тг", "Примечание", "Город"], ...rows, [], ["Итого", "", expTotal]], { header: 0, sheet: "Расходы" }).catch(e => alert("⚠️ " + (e.message || e)));
               }} className="text-xs bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-2.5 py-1 font-medium inline-flex items-center gap-1"><Icon name="download" size={13} />Excel</button>}
               <div className="text-lg font-bold text-gray-700">{fmt(expTotal)} тг</div>
             </div>
@@ -4577,7 +4572,6 @@ function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, ci
   const monthDirect = (orders || []).filter(o => o.fromKaraganda && (o.date || "").slice(0, 7) === expMonth).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const monthLabel = () => { const [y, m] = expMonth.split("-"); return `${["","янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"][Number(m)]}.${y}`; };
   const exportExcel = () => {
-    const esc2 = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const rows = [[`Фуры за ${monthLabel()}`], []];
     // 1) Фуры на склад (приход)
     rows.push(["ФУРЫ НА СКЛАД (приход)"]);
@@ -4591,11 +4585,12 @@ function TrucksTab({ trucks, orders = [], stock = [], reload, canEdit = true, ci
     rows.push([]);
     // 2) Прямые фуры с Караганды клиенту (fromKaraganda). Отменённые не показываем; ИТОГО — только отгруженные.
     rows.push(["ПРЯМЫЕ ФУРЫ С КАРАГАНДЫ КЛИЕНТУ"]);
+    const head2 = rows.length;
     rows.push(["Дата", "Клиент", "Товар", "Кг", "Стоимость, тг", "Статус"]);
     let dTotalKg = 0, dTotalSum = 0, dShipped = 0;
     monthDirect.filter(o => o.status !== "отменена").forEach(o => { const kg = o.bags * o.bag_kg; const sum = kg * (o.price_per_kg || 0); if (o.status === "отгружена") { dTotalKg += kg; dTotalSum += sum; dShipped++; } rows.push([o.date, o.clientName || "", `${o.brand} ${o.grade} ${o.bag_kg}кг × ${o.bags}`, Math.round(kg), Math.round(sum), o.status || ""]); });
     rows.push(["ИТОГО (отгружено)", "", "", Math.round(dTotalKg), Math.round(dTotalSum), `${dShipped} позиций`]);
-    downloadFile(`Фуры_${expMonth}.csv`, "﻿" + rows.map(r => r.map(esc2).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+    downloadXlsx(`Фуры_${expMonth}`, rows, { header: 3, bold: [2, head2 - 1, head2], sheet: "Фуры " + monthLabel() }).catch(e => alert("⚠️ " + (e.message || e)));
   };
 
   return (
@@ -5682,7 +5677,10 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
   };
   const del = async id => { if (!confirm("Удалить расход?")) return; try { await dbDelete("expenses", id); await reload("expenses"); } catch (e) { alert("⚠️ Не удалилось: " + (e && e.message ? e.message : e)); } };
 
-  const cityExp = (multiCity && curCity !== "all") ? expenses.filter(x => (x.city || DEFAULT_CITY) === curCity) : expenses; // город выбран — его расходы; «Все города» — все
+  // Только траты из касс (владелец 18.11.2026): ЗП из «Зарплаты», фуры из «Поставок» и старые ручные расходы сюда не берём —
+  // их же платят из кассы, иначе каждая трата посчиталась бы дважды. Сами записи остаются (на них стоит учёт «Зарплаты»).
+  const cashExp = expenses.filter(x => x.fromCashbox);
+  const cityExp = (multiCity && curCity !== "all") ? cashExp.filter(x => (x.city || DEFAULT_CITY) === curCity) : cashExp; // город выбран — его расходы; «Все города» — все
   // Период — по строкам дат YYYY-MM-DD (без сдвигов часовых поясов)
   const today = TODAY(), ym = today.slice(0, 7);
   const shift = (days) => { const d = new Date(today + "T12:00:00"); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
@@ -5697,23 +5695,20 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
   const dmy = d => (d || "").split("-").reverse().join(".");
   const periodLabel = period === "all" ? "всё время" : `${dmy(range[0])} – ${dmy(range[1])}`;
   const periods = [["week", "Неделя"], ["month", "Этот месяц"], ["prev", "Прошлый месяц"], ["3month", "3 мес"], ["all", "Всё"], ["custom", "Свой"]];
-  const srcOf = x => x.fromCashbox ? "касса" : String(x.id).startsWith("texp_") ? "поставка" : x.driverId ? "зарплата" : "вручную";
-  // Excel (CSV с ; и BOM): список за период + итоги по категориям
+  // Excel (.xlsx): список за период + итоги по категориям
   const download = () => {
-    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const txt = v => /^[=+\-@]/.test(String(v || "")) ? "'" + v : (v || ""); // текст с «=», «-»… Excel не примет за формулу
     const where = multiCity ? (curCity === "all" ? "все города" : cityName(notes, curCity)) : "";
-    const rows = [[`Расходы за ${periodLabel}${where ? " — " + where : ""}`], [], ["Дата", "Категория", "Сумма, тг", "Примечание", ...(multiCity ? ["Город"] : []), "Откуда", "Кто внёс"]];
-    [...list].reverse().forEach(x => rows.push([dmy(x.date), catName(x.category), x.amount || 0, txt(x.note), ...(multiCity ? [cityName(notes, x.city || DEFAULT_CITY)] : []), srcOf(x), x.created_by_name || ""]));
+    const rows = [[`Расходы (траты из касс) за ${periodLabel}${where ? " — " + where : ""}`], [], ["Дата", "Категория", "Сумма, тг", "На что / чья касса", ...(multiCity ? ["Город"] : []), "Кто внёс"]];
+    [...list].reverse().forEach(x => rows.push([dmy(x.date), catName(x.category), x.amount || 0, x.note || "", ...(multiCity ? [cityName(notes, x.city || DEFAULT_CITY)] : []), x.created_by_name || ""]));
     rows.push([], ["ИТОГО", "", total], [], ["По категориям"]);
     Object.entries(byCat).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => rows.push(["", k, v]));
     const tag = period === "all" ? "всё" : `${range[0]}_${range[1]}`;
-    downloadFile(`Расходы_${tag}.csv`, "﻿" + rows.map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+    downloadXlsx(`Расходы_${tag}`, rows, { header: 2, sheet: "Расходы" }).catch(e => alert("⚠️ " + (e.message || e)));
   };
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800">Расходы</h3>{canEdit && <Btn onClick={openNew}>+ Расход</Btn>}</div>
+      <div><h3 className="font-bold text-gray-800">Расходы</h3><div className="text-xs text-gray-500 mt-0.5">Здесь все траты из касс. Вносятся в «Касса» → «− Трата» и попадают сюда сами.</div></div>
       <div className="flex flex-wrap gap-2">
         {periods.map(([v, l]) => <button key={v} onClick={() => setPeriod(v)} className={`px-3.5 py-1.5 rounded-xl text-sm font-medium transition-all ${period === v ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>)}
       </div>
@@ -5748,16 +5743,13 @@ function ExpensesTab({ expenses, reload, openSignal = 0, canEdit = true, cities 
         </Modal>
       )}
       <div className="space-y-2">
-        {list.length === 0 && <div className="text-center py-12 text-gray-400">{expenses.length ? "За этот период расходов нет." : "Расходов нет."}</div>}
+        {list.length === 0 && <div className="text-center py-12 text-gray-400">{cashExp.length ? "За этот период расходов нет." : "Расходов нет."}</div>}
         {list.map(x => (
           <div key={x.id} className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between text-sm">
             <div>
               <div className="font-medium text-gray-900">{catName(x.category)} — {fmt(x.amount)} тг{multiCity && <span className="ml-2 text-xs font-medium text-sky-700 bg-sky-100 px-2 py-0.5 rounded-full align-middle">{cityName(notes, x.city || DEFAULT_CITY)}</span>}</div>
               <div className="text-xs text-gray-400">{(x.date || "").split("-").reverse().join(".")}{x.note ? ` · ${x.note}` : ""}{x.created_by_name ? ` · ${x.created_by_name}` : ""}</div>
             </div>
-            {x.fromCashbox
-              ? <span className="text-xs text-amber-700 bg-amber-50 rounded-full px-2 py-0.5 whitespace-nowrap" title="Правится и удаляется в «Касса»">из кассы</span>
-              : canEdit && <div className="flex gap-1"><Btn size="sm" variant="secondary" onClick={() => openEdit(x)}><Icon name="pencil" size={15} /></Btn><Btn size="sm" variant="danger" onClick={() => del(x.id)}><Icon name="trash" size={15} /></Btn></div>}
           </div>
         ))}
       </div>
@@ -7259,6 +7251,7 @@ function PaymentsReport({ payments = [], orders = [], clients = [], inGroup = ()
   const [period, setPeriod] = useState("month"); // today | yesterday | week | month | prev | custom
   const [from, setFrom] = useState(TODAY().slice(0, 8) + "01");
   const [to, setTo] = useState(TODAY());
+  const [sel, setSel] = useState([]); // какие способы оплаты брать в отчёт; пусто = все
   const today = TODAY(), ym = today.slice(0, 7);
   const shift = days => { const d = new Date(today + "T12:00:00"); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
   const prevYm = (() => { const [y, m] = ym.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; })();
@@ -7269,7 +7262,8 @@ function PaymentsReport({ payments = [], orders = [], clients = [], inGroup = ()
   const periodLabel = range[0] === range[1] ? dmy(range[0]) : `${dmy(range[0])} – ${dmy(range[1])}`;
   const cliById = new Map(clients.map(c => [c.id, c]));
   const inR = d => (d || "") >= range[0] && (d || "") <= range[1];
-  const rows = [];
+  const allRows = [];
+  const rows = allRows; // наполняется ниже; после — фильтр по выбранным способам
   if (open) {
     (payments || []).filter(p => !p.adjust && (Number(p.amount) || 0) > 0 && inR(p.date) && inGroup(cliById.get(p.clientId)))
       .forEach(p => { const c = cliById.get(p.clientId); rows.push({ date: p.date, client: (c && c.name) || p.clientName || "?", org: (c && c.org_name) || "", amount: Number(p.amount) || 0, method: payMethodName(p.method), what: "пополнение", note: p.note || "", by: p.created_by_name || "" }); });
@@ -7285,24 +7279,31 @@ function PaymentsReport({ payments = [], orders = [], clients = [], inGroup = ()
     });
     Object.values(grp).forEach(g => rows.push({ ...g, what: g.n > 1 ? `оплата заявки (${g.n} поз.)` : "оплата заявки" }));
   }
-  rows.sort((a, b) => b.date.localeCompare(a.date) || b.amount - a.amount);
+  // Способы: стандартные + встретившиеся в периоде (напр. «Не указано»); счётчик — за период, без учёта выбора
+  const methodList = [...PAY_METHODS.map(([m]) => m), ...[...new Set([...allRows.map(r => r.method), ...sel])].filter(m => !PAY_METHODS.some(([x]) => x === m))]; // выбранный не пропадает при смене периода
+  const cntAll = {}; allRows.forEach(r => { cntAll[r.method] = (cntAll[r.method] || 0) + r.amount; });
+  const toggle = m => setSel(s => s.includes(m) ? s.filter(x => x !== m) : [...s, m]);
+  const shown = sel.length ? allRows.filter(r => sel.includes(r.method)) : allRows;
+  shown.sort((a, b) => b.date.localeCompare(a.date) || b.amount - a.amount);
+  return <PaymentsReportView {...{ open, setOpen, period, setPeriod, from, setFrom, to, setTo, sel, setSel, toggle, methodList, cntAll, rows: shown, range, dmy, periodLabel, label }} />;
+}
+function PaymentsReportView({ open, setOpen, period, setPeriod, from, setFrom, to, setTo, sel, setSel, toggle, methodList, cntAll, rows, range, dmy, periodLabel, label }) {
+  const selLabel = sel.length ? sel.join(", ") : "";
   const total = rows.reduce((s, r) => s + r.amount, 0);
   const byMethod = {}; rows.forEach(r => { const m = byMethod[r.method] = byMethod[r.method] || { sum: 0, n: 0 }; m.sum += r.amount; m.n++; });
   const methods = Object.entries(byMethod).sort((a, b) => b[1].sum - a[1].sum);
   const days = [...new Set(rows.map(r => r.date))];
   const download = () => {
-    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const txt = v => /^[=+\-@]/.test(String(v || "")) ? "'" + v : (v || "");
     const mNames = methods.map(([m]) => m);
-    const out = [[`Оплаты клиентов за ${periodLabel}${label ? " — " + label : ""}`], [], ["Дата", "Клиент", "Организация", "Сумма, тг", "Способ", "Что", "Примечание", "Кто внёс"]];
-    [...rows].reverse().forEach(r => out.push([dmy(r.date), txt(r.client), txt(r.org), r.amount, txt(r.method), r.what, txt(r.note), txt(r.by)]));
+    const out = [[`Оплаты клиентов за ${periodLabel}${label ? " — " + label : ""}${selLabel ? " — " + selLabel : ""}`], [], ["Дата", "Клиент", "Организация", "Сумма, тг", "Способ", "Что", "Примечание", "Кто внёс"]];
+    [...rows].reverse().forEach(r => out.push([dmy(r.date), r.client, r.org, r.amount, r.method, r.what, r.note, r.by]));
     out.push([], ["ИТОГО", "", "", total], [], ["По способам оплаты", "Сумма, тг", "Оплат"]);
     methods.forEach(([m, v]) => out.push([m, v.sum, v.n]));
     if (days.length > 1) {
       out.push([], ["По дням", ...mNames, "Итого"]);
       [...days].reverse().forEach(d => { const rs = rows.filter(r => r.date === d); out.push([dmy(d), ...mNames.map(m => rs.filter(r => r.method === m).reduce((s, r) => s + r.amount, 0)), rs.reduce((s, r) => s + r.amount, 0)]); });
     }
-    downloadFile(`Оплаты_${range[0]}${range[1] !== range[0] ? "_" + range[1] : ""}.csv`, "﻿" + out.map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+    downloadXlsx(`Оплаты_${range[0]}${range[1] !== range[0] ? "_" + range[1] : ""}${selLabel ? "_" + sel.join("+") : ""}`, out, { header: 2, sheet: "Оплаты" }).catch(e => alert("⚠️ " + (e.message || e)));
   };
   const periods = [["today", "Сегодня"], ["yesterday", "Вчера"], ["week", "Неделя"], ["month", "Этот месяц"], ["prev", "Прошлый месяц"], ["custom", "Свой"]];
   return (
@@ -7323,9 +7324,15 @@ function PaymentsReport({ payments = [], orders = [], clients = [], inGroup = ()
               <input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 flex-1" />
             </div>
           )}
+          {/* Какие способы оплаты брать: можно отметить несколько; ни одного — все */}
+          <div className="flex flex-wrap gap-1.5 items-center">
+            <span className="text-xs text-gray-500">Способ:</span>
+            <button onClick={() => setSel([])} className={`px-2.5 py-1 rounded-full text-xs font-medium border ${!sel.length ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-gray-200 text-gray-600"}`}>Все</button>
+            {methodList.map(m => <button key={m} onClick={() => toggle(m)} className={`px-2.5 py-1 rounded-full text-xs font-medium border ${sel.includes(m) ? "bg-emerald-600 border-emerald-600 text-white" : "bg-white border-gray-200 text-gray-600"}`}>{payMethodIcon(m)} {m}{cntAll[m] ? <span className={sel.includes(m) ? "text-emerald-100" : "text-gray-400"}> · {fmt(cntAll[m])}</span> : null}</button>)}
+          </div>
           <div className="bg-emerald-50 rounded-xl p-3">
             <div className="flex items-start justify-between gap-2">
-              <div><div className="text-xs text-emerald-800">Оплаты за {periodLabel}{label ? ` · ${label}` : ""}</div><div className="text-2xl font-bold text-emerald-700">{fmt(total)} тг</div><div className="text-xs text-emerald-800/70">{rows.length} оплат</div></div>
+              <div><div className="text-xs text-emerald-800">Оплаты за {periodLabel}{label ? ` · ${label}` : ""}{selLabel ? ` · ${selLabel}` : ""}</div><div className="text-2xl font-bold text-emerald-700">{fmt(total)} тг</div><div className="text-xs text-emerald-800/70">{rows.length} оплат</div></div>
               <Btn size="sm" variant="secondary" onClick={download} disabled={!rows.length}><Icon name="download" size={15} />Excel</Btn>
             </div>
             {methods.length > 0 && <div className="mt-2 pt-2 border-t border-emerald-100 space-y-0.5 text-sm">{methods.map(([m, v]) => <div key={m} className="flex justify-between"><span className="text-gray-700">{payMethodIcon(m)} {m} <span className="text-gray-400">· {v.n}</span></span><b className="text-gray-900">{fmt(v.sum)} тг</b></div>)}</div>}
@@ -8870,7 +8877,7 @@ export default function App() {
                   {isDirector && <button onClick={() => { setFabOpen(false); setAssistantOpen(true); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-semibold text-amber-700">ИИ-помощник</span><span className="w-12 h-12 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 text-white flex items-center justify-center shadow-lg ring-2 ring-amber-200"><Icon name="sparkle" size={22} /></span></button>}
                   <button onClick={() => goTab("today")} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Разобрать из WhatsApp</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="chat" size={20} /></span></button>
                   <button onClick={() => { goTab("today"); setOpenOrderSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Заявка вручную</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="pencil" size={20} /></span></button>
-                  {(isDirector || isCityMgr) && <button onClick={() => { goTab("expenses"); setOpenExpenseSignal(n => n + 1); }} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Расход</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="expense" size={20} /></span></button>}
+                  {(isDirector || isCityMgr) && <button onClick={() => goTab("cashbox") /* расходы вносятся тратой в кассе — оттуда сами попадают в «Расходы» */} className="flex items-center gap-2"><span className="bg-white shadow rounded-full px-3 py-1.5 text-sm font-medium text-gray-700">Трата (касса)</span><span className="w-11 h-11 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg"><Icon name="expense" size={20} /></span></button>}
                 </div>
               </div>
             </div>

@@ -403,17 +403,44 @@ export function loadExcelJS() {
 }
 
 const safeFile = s => String(s).replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+async function saveWorkbook(wb, fileName) {
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = safeFile(String(fileName).replace(/\.(xlsx|csv)$/i, "")) + ".xlsx";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
 // Сформировать и скачать. Возвращает false, если за период нечего показать.
 export async function downloadClientsReport(opts, fileName) {
   const ExcelJS = await loadExcelJS();
   const wb = buildClientsWorkbook(ExcelJS, opts);
   if (!wb) return false;
-  const buf = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = safeFile(fileName) + ".xlsx";
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  await saveWorkbook(wb, fileName);
   return true;
+}
+
+// 📗 Простая таблица → настоящий .xlsx. Владелец 18.11.2026: ВСЕ выгрузки в Excel — только .xlsx, не CSV (и новые тоже).
+// rows — строки (массивы ячеек); числа остаются числами (с разделителем тысяч), текст — текстом (формулой не станет).
+// header — номер строки заголовков (жирная, с заливкой, закреплена при прокрутке). Первая строка из одной ячейки —
+// название отчёта. Строки «Итого…», «По способам…», «По дням», «По категориям» — жирные. Ширина колонок — по содержимому.
+export async function downloadXlsx(fileName, rows, { header = -1, sheet = "Отчёт", bold = [] } = {}) {
+  const ExcelJS = await loadExcelJS();
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(String(sheet).replace(/[\\/?*[\]:]/g, " ").slice(0, 31) || "Отчёт");
+  const widths = [];
+  (rows || []).forEach((r, i) => {
+    const cells = (r || []).map(v => (v === undefined || v === null) ? "" : v);
+    const row = ws.addRow(cells);
+    const isTitle = i === 0 && cells.length === 1;
+    if (!isTitle) cells.forEach((v, j) => { widths[j] = Math.max(widths[j] || 0, Math.min(60, String(v).length)); });
+    row.eachCell(c => { if (typeof c.value === "number") c.numFmt = Number.isInteger(c.value) ? "#,##0" : "#,##0.00"; });
+    if (isTitle) row.font = { bold: true, size: 13 };
+    else if (i === header) { row.font = { bold: true }; row.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: FILL.total } }; c.border = { bottom: { style: "thin" } }; }); }
+    else if (bold.includes(i) || /^(итого|по способам|по дням|по категориям)/i.test(String(cells[0] || ""))) row.font = { bold: true };
+  });
+  widths.forEach((w, j) => { ws.getColumn(j + 1).width = Math.max(8, w + 2); });
+  if (header >= 0) ws.views = [{ state: "frozen", ySplit: header + 1 }];
+  await saveWorkbook(wb, fileName);
 }
