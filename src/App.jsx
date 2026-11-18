@@ -2760,7 +2760,7 @@ function ClientsTab({ clients, orders = [], payments = [], users = [], notes = [
   // Отметить поставку (все позиции за дату) оплаченной — с указанием способа (нал/безнал)
   const markPaid = async (clientId, date, paid, method = "") => {
     try {
-      await Promise.all(orders.filter(o => o.clientId === clientId && o.date === date).map(o => dbUpsert("orders", { ...o, paid, pay_method: paid ? method : "" })));
+      await Promise.all(orders.filter(o => o.clientId === clientId && o.date === date).map(o => dbUpsert("orders", { ...o, paid, pay_method: paid ? method : "", paid_at: paid ? (o.paid_at || TODAY()) : "" /* день оплаты — для отчёта по оплатам */ })));
       await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
@@ -5392,7 +5392,7 @@ function AssistantModal({ onClose, orders = [], clients = [], reload }) {
       } else if (a.action === "mark_paid") {
         const os = orders.filter(o => (p.clientId ? o.clientId === p.clientId : o.clientName === p.clientName) && o.date === p.date && o.status === "отгружена");
         if (!os.length) { setErr("Не нашёл отгрузок этого клиента за эту дату."); setPhase("result"); return; }
-        await Promise.all(os.map(o => dbUpsert("orders", { ...o, paid: true, pay_method: p.method || "Наличные" })));
+        await Promise.all(os.map(o => dbUpsert("orders", { ...o, paid: true, pay_method: p.method || "Наличные", paid_at: o.paid_at || TODAY() })));
         await reload("orders");
       } else { setErr("Неизвестное действие."); setPhase("result"); return; }
       setDoneMsg(a.summary || "Готово"); setPhase("done");
@@ -7249,6 +7249,109 @@ function GroupClientList({ clients = [], label = "" }) {
   );
 }
 
+// 💰 Отчёт по оплатам клиентов: кто, сколько и каким способом закинул — за день или период (+ Excel).
+// Деньги приходят двумя путями: «Клиент закинул сумму» (payments, без корректировок по актам сверки) и заявка,
+// отмеченная «оплачено» (orders.paid + pay_method; день — paid_at, у старых его нет — берём день заявки).
+const payMethodName = m => { const s = String(m || "").trim(); return !s ? "Не указано" : /^нал/i.test(s) ? "Наличные" : s; };
+const payMethodIcon = m => (PAY_METHODS.find(([x]) => x === m) || [])[1] || "•";
+function PaymentsReport({ payments = [], orders = [], clients = [], inGroup = () => true, label = "" }) {
+  const [open, setOpen] = useState(false);
+  const [period, setPeriod] = useState("month"); // today | yesterday | week | month | prev | custom
+  const [from, setFrom] = useState(TODAY().slice(0, 8) + "01");
+  const [to, setTo] = useState(TODAY());
+  const today = TODAY(), ym = today.slice(0, 7);
+  const shift = days => { const d = new Date(today + "T12:00:00"); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
+  const prevYm = (() => { const [y, m] = ym.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; })();
+  const prevEnd = `${prevYm}-${String(new Date(Number(prevYm.slice(0, 4)), Number(prevYm.slice(5, 7)), 0).getDate()).padStart(2, "0")}`;
+  const range = period === "today" ? [today, today] : period === "yesterday" ? [shift(-1), shift(-1)] : period === "week" ? [shift(-6), today]
+    : period === "month" ? [ym + "-01", today] : period === "prev" ? [prevYm + "-01", prevEnd] : [from, to];
+  const dmy = d => (d || "").split("-").reverse().join(".");
+  const periodLabel = range[0] === range[1] ? dmy(range[0]) : `${dmy(range[0])} – ${dmy(range[1])}`;
+  const cliById = new Map(clients.map(c => [c.id, c]));
+  const inR = d => (d || "") >= range[0] && (d || "") <= range[1];
+  const rows = [];
+  if (open) {
+    (payments || []).filter(p => !p.adjust && (Number(p.amount) || 0) > 0 && inR(p.date) && inGroup(cliById.get(p.clientId)))
+      .forEach(p => { const c = cliById.get(p.clientId); rows.push({ date: p.date, client: (c && c.name) || p.clientName || "?", org: (c && c.org_name) || "", amount: Number(p.amount) || 0, method: payMethodName(p.method), what: "пополнение", note: p.note || "", by: p.created_by_name || "" }); });
+    // оплаченные заявки: одна доставка (клиент + день + способ) — одной строкой
+    const grp = {};
+    (orders || []).filter(o => o.paid && o.status !== "отменена").forEach(o => {
+      const day = o.paid_at || o.date; const sum = (o.bags || 0) * (o.bag_kg || 0) * (o.price_per_kg || 0);
+      if (!sum || !inR(day) || !inGroup(cliById.get(o.clientId))) return;
+      const k = `${o.clientId || o.clientName}|${day}|${payMethodName(o.pay_method)}`;
+      const c = cliById.get(o.clientId);
+      const g = grp[k] = grp[k] || { date: day, client: (c && c.name) || o.clientName || "?", org: (c && c.org_name) || "", amount: 0, method: payMethodName(o.pay_method), what: "оплата заявки", n: 0, note: "", by: "" };
+      g.amount += sum; g.n++; if (o.date !== day) g.note = `заявка от ${dmy(o.date)}`;
+    });
+    Object.values(grp).forEach(g => rows.push({ ...g, what: g.n > 1 ? `оплата заявки (${g.n} поз.)` : "оплата заявки" }));
+  }
+  rows.sort((a, b) => b.date.localeCompare(a.date) || b.amount - a.amount);
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  const byMethod = {}; rows.forEach(r => { const m = byMethod[r.method] = byMethod[r.method] || { sum: 0, n: 0 }; m.sum += r.amount; m.n++; });
+  const methods = Object.entries(byMethod).sort((a, b) => b[1].sum - a[1].sum);
+  const days = [...new Set(rows.map(r => r.date))];
+  const download = () => {
+    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const txt = v => /^[=+\-@]/.test(String(v || "")) ? "'" + v : (v || "");
+    const mNames = methods.map(([m]) => m);
+    const out = [[`Оплаты клиентов за ${periodLabel}${label ? " — " + label : ""}`], [], ["Дата", "Клиент", "Организация", "Сумма, тг", "Способ", "Что", "Примечание", "Кто внёс"]];
+    [...rows].reverse().forEach(r => out.push([dmy(r.date), txt(r.client), txt(r.org), r.amount, txt(r.method), r.what, txt(r.note), txt(r.by)]));
+    out.push([], ["ИТОГО", "", "", total], [], ["По способам оплаты", "Сумма, тг", "Оплат"]);
+    methods.forEach(([m, v]) => out.push([m, v.sum, v.n]));
+    if (days.length > 1) {
+      out.push([], ["По дням", ...mNames, "Итого"]);
+      [...days].reverse().forEach(d => { const rs = rows.filter(r => r.date === d); out.push([dmy(d), ...mNames.map(m => rs.filter(r => r.method === m).reduce((s, r) => s + r.amount, 0)), rs.reduce((s, r) => s + r.amount, 0)]); });
+    }
+    downloadFile(`Оплаты_${range[0]}${range[1] !== range[0] ? "_" + range[1] : ""}.csv`, "﻿" + out.map(r => r.map(esc).join(";")).join("\r\n"), "text/csv;charset=utf-8");
+  };
+  const periods = [["today", "Сегодня"], ["yesterday", "Вчера"], ["week", "Неделя"], ["month", "Этот месяц"], ["prev", "Прошлый месяц"], ["custom", "Свой"]];
+  return (
+    <div className="bg-white border border-emerald-100 rounded-2xl p-3">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
+        <span className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="cash" size={16} />Оплаты клиентов — кто, сколько и чем</span>
+        <span className="text-xs text-gray-400">{open ? "скрыть" : "открыть"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 space-y-3">
+          <div className="flex flex-wrap gap-1.5">
+            {periods.map(([v, l]) => <button key={v} onClick={() => setPeriod(v)} className={`px-3 py-1.5 rounded-xl text-sm font-medium ${period === v ? "bg-emerald-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</button>)}
+          </div>
+          {period === "custom" && (
+            <div className="flex items-center gap-2 text-sm">
+              <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 flex-1" />
+              <span className="text-gray-400">—</span>
+              <input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 flex-1" />
+            </div>
+          )}
+          <div className="bg-emerald-50 rounded-xl p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div><div className="text-xs text-emerald-800">Оплаты за {periodLabel}{label ? ` · ${label}` : ""}</div><div className="text-2xl font-bold text-emerald-700">{fmt(total)} тг</div><div className="text-xs text-emerald-800/70">{rows.length} оплат</div></div>
+              <Btn size="sm" variant="secondary" onClick={download} disabled={!rows.length}><Icon name="download" size={15} />Excel</Btn>
+            </div>
+            {methods.length > 0 && <div className="mt-2 pt-2 border-t border-emerald-100 space-y-0.5 text-sm">{methods.map(([m, v]) => <div key={m} className="flex justify-between"><span className="text-gray-700">{payMethodIcon(m)} {m} <span className="text-gray-400">· {v.n}</span></span><b className="text-gray-900">{fmt(v.sum)} тг</b></div>)}</div>}
+          </div>
+          {rows.length === 0 && <div className="text-center py-6 text-gray-400 text-sm">За этот период оплат нет.</div>}
+          {days.slice(0, 62).map(d => {
+            const rs = rows.filter(r => r.date === d);
+            return (
+              <div key={d}>
+                <div className="flex justify-between text-xs font-semibold text-gray-500 px-1 mb-1"><span>{dmy(d)}</span><span>{fmt(rs.reduce((s, r) => s + r.amount, 0))} тг</span></div>
+                <div className="space-y-1">{rs.map((r, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 bg-gray-50 rounded-lg px-3 py-2 text-sm">
+                    <div className="min-w-0"><div className="font-medium text-gray-900 truncate">{r.client}</div><div className="text-xs text-gray-500">{payMethodIcon(r.method)} {r.method} · {r.what}{r.note ? ` · ${r.note}` : ""}</div></div>
+                    <b className="text-emerald-700 whitespace-nowrap">{fmt(r.amount)} тг</b>
+                  </div>))}</div>
+              </div>
+            );
+          })}
+          {days.length > 62 && <div className="text-xs text-gray-400">Показаны последние 62 дня — полный список в Excel.</div>}
+          <div className="text-xs text-gray-400">Сюда входят «Клиент закинул сумму» и заявки, отмеченные «оплачено». Корректировки по актам сверки — не деньги, их тут нет.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DebtsTab({ orders, clients, payments = [], users = [], notes = [], reload, canEdit = true, isDirector = false, canOsv = false, onOpenClient = () => {} }) {
   const [open, setOpen] = useState({});
   const [grp, setGrp] = useState("all"); // группа клиентов — строго как списки в «Клиентах»: all | "" (наши) | id торгпреда
@@ -7290,7 +7393,7 @@ function DebtsTab({ orders, clients, payments = [], users = [], notes = [], relo
 
   const markPaid = async (c, date, method) => {
     try {
-      await Promise.all(orders.filter(o => (o.clientId ? o.clientId === c.clientId : o.clientName === c.name) && o.date === date && o.status === "отгружена").map(o => dbUpsert("orders", { ...o, paid: true, pay_method: method })));
+      await Promise.all(orders.filter(o => (o.clientId ? o.clientId === c.clientId : o.clientName === c.name) && o.date === date && o.status === "отгружена").map(o => dbUpsert("orders", { ...o, paid: true, pay_method: method, paid_at: o.paid_at || TODAY() /* день оплаты — для отчёта по оплатам */ })));
       await reload("orders");
     } catch (e) { alert("⚠️ Не сохранилось: " + (e && e.message ? e.message : e) + "\nПроверь интернет и попробуй ещё раз."); }
   };
@@ -7345,6 +7448,7 @@ function DebtsTab({ orders, clients, payments = [], users = [], notes = [], relo
         <div className="font-display font-semibold text-gray-800 flex items-center gap-1.5"><Icon name="wallet" size={17} />{grp === "all" && rep === "all" ? "Общий долг клиентов" : `Долг · ${grpLabel}`}</div>
         <div className="text-2xl font-display font-semibold text-red-600">{fmt(grand)} тг</div>
       </div>
+      <PaymentsReport payments={payments} orders={orders} clients={clients} inGroup={inGroup} label={grp === "all" && rep === "all" ? "" : grpLabel} />
       <ActivityLog payments={payments} clients={clients} onOpenClient={onOpenClient} />
       {canEdit && (showRecon
         ? <ReconMonthTable clients={clients} orders={orders} payments={payments} reload={reload} onClose={() => setShowRecon(false)} />
