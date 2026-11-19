@@ -127,7 +127,8 @@ function nakladnayaText(g, client) {
   // объединяем одинаковые сорта с одной ценой
   const m = {};
   billable.forEach(o => { const k = `${o.brand}|${o.grade}|${o.bag_kg}|${o.price_per_kg || 0}`; if (!m[k]) m[k] = { brand: o.brand, grade: o.grade, bag_kg: o.bag_kg, price_per_kg: o.price_per_kg, bags: 0 }; m[k].bags += Number(o.bags) || 0; });
-  const lines = Object.values(m).map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
+  // фасовка (вес мешка) обязательна: 25 кг и 50 кг — разные позиции у бухгалтера (владелец, 19.11.2026)
+  const lines = Object.values(m).map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}, фасовка ${fmt(o.bag_kg)} кг (${fmt(o.bags)} меш.)${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
   return head + ":\n" + lines.join("\n");
 }
 function copyToClipboard(text) {
