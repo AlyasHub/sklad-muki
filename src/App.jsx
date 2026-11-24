@@ -516,6 +516,33 @@ const clientGroups = (users, notes) => [
   ...(users || []).filter(u => u.role === "rep").map(u => ({ id: u.id, label: u.group_name || u.name })),
 ];
 const clientOptions = list => [...(list || [])].sort((a, b) => (a.paused ? 1 : 0) - (b.paused ? 1 : 0)).map(c => ({ value: c.id, label: c.name + (c.org_name ? ` (${c.org_name})` : "") + (c.paused ? " · ⏸ приостановлен" : "") }));
+// Выбор клиента в формах: поиск по имени/ИП/контакту + обычный список. Листать 80+ клиентов неудобно (владелец 24.11.2026).
+const searchNorm = s => String(s || "").toLowerCase().replace(/ё/g, "е").replace(/["«»'.,()\-–—]+/g, " ").replace(/\s+/g, " ").trim();
+function ClientSel({ label = "Клиент", clients, value, onChange }) {
+  const [q, setQ] = useState("");
+  const nq = searchNorm(q);
+  const byId = new Map((clients || []).map(c => [c.id, c]));
+  const opts = clientOptions(clients);
+  const hits = nq ? opts.filter(o => { const c = byId.get(o.value) || {}; return searchNorm([c.name, c.org_name, c.bin, c.contact_name, c.contact, c.phone, c.address].filter(Boolean).join(" ")).includes(nq); }) : [];
+  const box = "border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400";
+  return (
+    <div className="flex flex-col gap-1">
+      {label && <label className="text-sm font-medium text-gray-700">{label}</label>}
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 Найти: начни печатать имя или ИП" className={box} />
+      {nq && (
+        <div className="border border-gray-200 rounded-lg bg-white divide-y divide-gray-100 max-h-60 overflow-y-auto">
+          {hits.length ? hits.slice(0, 40).map(o => (
+            <button type="button" key={o.value} onClick={() => { onChange(o.value); setQ(""); }}
+              className={`w-full text-left px-3 py-2.5 text-sm hover:bg-amber-50 ${o.value === value ? "bg-amber-50 font-semibold" : "text-gray-800"}`}>{o.label}</button>
+          )) : <div className="px-3 py-2.5 text-sm text-gray-400">Никого не нашёл — проверь написание</div>}
+        </div>
+      )}
+      <select value={value || ""} onChange={e => onChange(e.target.value)} className={box}>
+        {[{ value: "", label: "— или выбери из списка —" }, ...opts].map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+}
 // pointId только если такая точка есть у этого клиента (защита от «чужой» точки после смены клиента)
 const validPoint = (client, pid) => (pid && client && (client.points || []).some(p => p.id === pid)) ? pid : "";
 function Btn({ variant = "primary", size = "md", children, onClick, disabled, ...p }) {
@@ -7621,7 +7648,7 @@ function KaragandaTab({ orders, clients, reload, canEdit = true }) {
       {showAdd && (
         <Modal title="Отгрузка напрямую клиенту" onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
-            <Sel label="Клиент" value={form.clientId} onChange={e => setForm({ ...form, clientId: e.target.value })} options={[{ value: "", label: "— выбери клиента —" }, ...clientOptions(clients)]} />
+            <ClientSel label="Клиент" clients={clients} value={form.clientId} onChange={id => setForm(f => ({ ...f, clientId: id }))} />
             <div className="grid grid-cols-2 gap-3">
               <Inp label="Дата отправки" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
               <Inp label="Примечание (фура)" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} placeholder="напр. фура №2, Олжас" />
