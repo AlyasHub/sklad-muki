@@ -131,6 +131,17 @@ function nakladnayaText(g, client) {
   const lines = Object.values(m).map(o => `${fmt(o.bags * o.bag_kg)} кг ${o.grade} ${o.brand}, фасовка ${fmt(o.bag_kg)} кг${o.price_per_kg ? ` — ${fmt(o.price_per_kg)} тг/кг` : ""}`);
   return head + ":\n" + lines.join("\n");
 }
+// «Вставить»: текст из буфера телефона сразу в поле разбора заявки (владелец 26.11.2026). Телефон может
+// спросить разрешение; не дал или нет поддержки — подсказываем вставить вручную (подержать палец в поле).
+async function pasteFromClipboard(setText, setErr) {
+  setErr("");
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.readText) throw new Error("no clipboard");
+    const t = String((await navigator.clipboard.readText()) || "").trim();
+    if (!t) { setErr("Буфер пуст — сначала скопируй сообщение в WhatsApp."); return; }
+    setText(t);
+  } catch { setErr("Телефон не дал вставить кнопкой — нажми и подержи палец в поле выше → «Вставить»."); }
+}
 function copyToClipboard(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(() => alert("✓ Скопировано — вставь бухгалтеру (WhatsApp)")).catch(() => window.prompt("Скопируй вручную:", text));
@@ -1539,6 +1550,7 @@ function OrdersTab({ clients, drivers, orders, reload, openSignal = 0 }) {
           placeholder='Например: "Мамыр хотят 10 мешков по 50кг высший ДАРАД на завтра"' value={aiText} onChange={e => setAiText(e.target.value)} />
         {aiError && <p className="text-red-500 text-sm mt-1">{aiError}</p>}
         <div className="flex gap-2 mt-3">
+          <Btn variant="secondary" onClick={() => pasteFromClipboard(setAiText, setAiError)} disabled={aiLoading}><span className="inline-flex items-center gap-1.5"><Icon name="clipboard" size={15} />Вставить</span></Btn>
           <Btn onClick={handleAI} disabled={aiLoading}>{aiLoading ? "Разбираю..." : "Разобрать заявку"}</Btn>
           <Btn variant="secondary" onClick={() => setShowManual(true)}>Вручную</Btn>
         </div>
@@ -8172,6 +8184,7 @@ function TodayTab({ orders, clients, drivers = [], stock = [], notes = [], me = 
         <textarea value={aiText} onChange={e => setAiText(e.target.value)} rows={3} placeholder="Вставь сюда сообщение из WhatsApp, напр.: Сегафредо 500 кг высший сорт на завтра" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-300" />
         {aiError && <div className="text-sm text-red-500 mt-2">{aiError}</div>}
         <div className="mt-2 flex gap-2">
+          <button onClick={() => pasteFromClipboard(setAiText, setAiError)} disabled={aiLoading} style={{ flex: 1 }} className="bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-700 rounded-lg font-medium px-3 py-2.5 text-sm whitespace-nowrap inline-flex items-center justify-center gap-1.5"><Icon name="clipboard" size={15} />Вставить</button>
           <button onClick={handleAI} disabled={aiLoading || !aiText.trim()} style={{ flex: 2 }} className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg font-medium px-4 py-2.5 text-sm inline-flex items-center justify-center gap-1.5">{aiLoading ? "Разбираю..." : <><Icon name="chat" size={16} />Разобрать</>}</button>
           <button onClick={() => setShowManual(true)} style={{ flex: 1 }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium px-3 py-2.5 text-sm whitespace-nowrap inline-flex items-center justify-center gap-1.5"><Icon name="pencil" size={15} />Вручную</button>
         </div>
